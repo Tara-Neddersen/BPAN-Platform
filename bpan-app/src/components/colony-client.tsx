@@ -5,6 +5,7 @@ import {
   Plus, Edit, Trash2, Loader2, Check, X, Copy,
   ExternalLink, Eye, ChevronDown, ChevronUp,
   Calendar, AlertTriangle, Link2, Mouse,
+  MessageSquare, RefreshCw, FileText, CheckCircle2,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -23,8 +24,8 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import type {
   BreederCage, Cohort, Animal, AnimalExperiment,
-  ColonyTimepoint, AdvisorPortal,
-  AnimalSex, AnimalGenotype, AnimalStatus,
+  ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange,
+  AnimalSex, AnimalGenotype, AnimalStatus, ActionItem,
 } from "@/types";
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -39,21 +40,43 @@ const GENOTYPE_SORT: Record<string, number> = { hemi: 0, het: 1, wt: 2 };
 const SEX_SORT: Record<string, number> = { male: 0, female: 1 };
 
 const EXPERIMENT_LABELS: Record<string, string> = {
-  handling: "Handling",
-  y_maze: "Y Maze",
+  handling: "Handling (5 days)",
+  y_maze: "Y-Maze",
   ldb: "Light-Dark Box",
   marble: "Marble Burying",
-  nesting: "Nesting",
-  rotarod: "Rotarod",
-  catwalk: "CatWalk",
-  blood_draw: "Blood Draw",
-  eeg_implant: "EEG Implant",
+  nesting: "Overnight Nesting",
+  data_collection: "Data Collection → Core",
+  core_acclimation: "Core Acclimation (48hr)",
+  catwalk: "CatWalk Gait Analysis",
+  rotarod_hab: "Rotarod Habituation",
+  rotarod: "Rotarod Testing",
+  stamina: "Stamina Test (10 RPM)",
+  blood_draw: "Plasma Collection",
+  eeg_implant: "EEG Implant Surgery",
   eeg_recording: "EEG Recording",
 };
 
-const EXPERIMENT_TYPES = Object.keys(EXPERIMENT_LABELS).filter(
-  (t) => t !== "handling" && t !== "eeg_implant" && t !== "eeg_recording"
-);
+// Experiments the user can select for timepoints (excludes handling/EEG which are handled separately)
+const EXPERIMENT_TYPES = [
+  "y_maze", "marble", "ldb", "nesting", "data_collection",
+  "core_acclimation", "catwalk", "rotarod_hab", "rotarod",
+  "stamina", "blood_draw",
+];
+
+// Day labels for the protocol timeline
+const PROTOCOL_DAY_LABELS: Record<string, string> = {
+  y_maze: "Day 1 AM",
+  marble: "Day 1 PM",
+  ldb: "Day 2 AM",
+  nesting: "Day 2 PM",
+  data_collection: "Day 3",
+  core_acclimation: "Day 4–5",
+  catwalk: "Day 6",
+  rotarod_hab: "Day 6",
+  rotarod: "Day 7–8",
+  stamina: "Day 9",
+  blood_draw: "Day 10",
+};
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
@@ -70,6 +93,8 @@ interface ColonyClientProps {
   animalExperiments: AnimalExperiment[];
   timepoints: ColonyTimepoint[];
   advisorPortals: AdvisorPortal[];
+  meetingNotes: MeetingNote[];
+  cageChanges: CageChange[];
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -89,6 +114,12 @@ interface ColonyClientProps {
     scheduleExperimentsForAnimal: (animalId: string, birthDate: string) => Promise<{ success?: boolean; error?: string; count?: number }>;
     createAdvisorAccess: (fd: FormData) => Promise<{ success?: boolean; error?: string; token?: string }>;
     deleteAdvisorAccess: (id: string) => Promise<{ success?: boolean; error?: string }>;
+    createMeetingNote: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
+    updateMeetingNote: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
+    deleteMeetingNote: (id: string) => Promise<{ success?: boolean; error?: string }>;
+    generateCageChanges: (startDate: string, count: number) => Promise<{ success?: boolean; error?: string; count?: number }>;
+    toggleCageChange: (id: string, completed: boolean) => Promise<{ success?: boolean; error?: string }>;
+    deleteCageChange: (id: string) => Promise<{ success?: boolean; error?: string }>;
   };
 }
 
@@ -115,6 +146,8 @@ export function ColonyClient({
   animalExperiments: initExps,
   timepoints: initTPs,
   advisorPortals: initPortals,
+  meetingNotes: initMeetings,
+  cageChanges: initCageChanges,
   actions,
 }: ColonyClientProps) {
   const [cages] = useState(initCages);
@@ -123,13 +156,18 @@ export function ColonyClient({
   const [experiments] = useState(initExps);
   const [timepoints] = useState(initTPs);
   const [portals] = useState(initPortals);
+  const [meetings] = useState(initMeetings);
+  const [cageChanges] = useState(initCageChanges);
 
   const [showAddAnimal, setShowAddAnimal] = useState(false);
   const [showAddCohort, setShowAddCohort] = useState(false);
   const [showAddCage, setShowAddCage] = useState(false);
   const [showAddTP, setShowAddTP] = useState(false);
   const [showAddPI, setShowAddPI] = useState(false);
+  const [showAddMeeting, setShowAddMeeting] = useState(false);
+  const [showGenerateCageChanges, setShowGenerateCageChanges] = useState(false);
   const [editingTP, setEditingTP] = useState<ColonyTimepoint | null>(null);
+  const [editingMeeting, setEditingMeeting] = useState<MeetingNote | null>(null);
   const [selectedAnimal, setSelectedAnimal] = useState<Animal | null>(null);
   const [busy, setBusy] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
@@ -168,6 +206,12 @@ export function ColonyClient({
         .sort((a, b) => (a.scheduled_date || "").localeCompare(b.scheduled_date || ""))
         .slice(0, 10),
     [experiments]
+  );
+
+  // Upcoming cage changes
+  const upcomingCageChanges = useMemo(
+    () => cageChanges.filter((c) => !c.is_completed).sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)).slice(0, 5),
+    [cageChanges]
   );
 
   // Stats
@@ -252,15 +296,40 @@ export function ColonyClient({
       </div>
 
       {/* Upcoming alerts */}
-      {upcoming.length > 0 && (
+      {(upcoming.length > 0 || upcomingCageChanges.length > 0) && (
         <Card className="border-yellow-200 dark:border-yellow-800">
           <CardHeader className="py-3 px-4">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-yellow-500" />
-              Upcoming Experiments
+              Upcoming
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 pb-3">
+            {/* Cage change alerts */}
+            {upcomingCageChanges.map((cc) => {
+              const dLeft = daysUntil(cc.scheduled_date);
+              return (
+                <div key={cc.id} className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <Badge className={dLeft <= 1 ? "bg-orange-100 text-orange-700" : "bg-blue-100 text-blue-700"} variant="secondary">
+                      {dLeft <= 0 ? "TODAY" : `${dLeft}d`}
+                    </Badge>
+                    <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="font-medium">Cage Change</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">{cc.scheduled_date}</span>
+                    <Button
+                      variant="ghost" size="sm" className="h-6 text-xs px-2"
+                      onClick={() => actions.toggleCageChange(cc.id, true)}
+                    >
+                      <Check className="h-3 w-3 mr-0.5" /> Done
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+            {/* Experiment alerts */}
             {upcoming.map((exp) => {
               const animal = animals.find((a) => a.id === exp.animal_id);
               const dLeft = daysUntil(exp.scheduled_date!);
@@ -284,12 +353,14 @@ export function ColonyClient({
       )}
 
       <Tabs defaultValue="animals">
-        <TabsList className="w-full grid grid-cols-5">
-          <TabsTrigger value="animals">Animals</TabsTrigger>
-          <TabsTrigger value="cohorts">Cohorts</TabsTrigger>
-          <TabsTrigger value="timepoints">Timepoints</TabsTrigger>
-          <TabsTrigger value="breeders">Breeders</TabsTrigger>
-          <TabsTrigger value="pi">PI Access</TabsTrigger>
+        <TabsList className="w-full flex flex-wrap h-auto gap-1 p-1">
+          <TabsTrigger value="animals" className="flex-1 min-w-[80px]">Animals</TabsTrigger>
+          <TabsTrigger value="cohorts" className="flex-1 min-w-[80px]">Cohorts</TabsTrigger>
+          <TabsTrigger value="timepoints" className="flex-1 min-w-[80px]">Timepoints</TabsTrigger>
+          <TabsTrigger value="breeders" className="flex-1 min-w-[80px]">Breeders</TabsTrigger>
+          <TabsTrigger value="meetings" className="flex-1 min-w-[80px]">Meetings</TabsTrigger>
+          <TabsTrigger value="cages" className="flex-1 min-w-[80px]">Cage Changes</TabsTrigger>
+          <TabsTrigger value="pi" className="flex-1 min-w-[80px]">PI Access</TabsTrigger>
         </TabsList>
 
         {/* ─── Animals Tab ──────────────────────────────────────── */}
@@ -409,10 +480,15 @@ export function ColonyClient({
         {/* ─── Timepoints Tab ──────────────────────────────────── */}
         <TabsContent value="timepoints" className="space-y-4">
           <div className="flex justify-between items-center">
-            <p className="text-sm text-muted-foreground">
-              Define experiment timepoints. When you add an animal, you can auto-schedule all experiments.
-            </p>
-            <Button onClick={() => setShowAddTP(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Timepoint</Button>
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">
+                Define experiment timepoints (60d, 120d, 180d). The protocol follows your 2-week timeline:
+              </p>
+              <p className="text-xs text-muted-foreground italic">
+                Week 0: Handling → Day 1: Y-Maze + Marble → Day 2: LDB + Nesting → Day 3: Move to Core → Day 4–5: Acclimation → Day 6: CatWalk + RR Hab → Day 7–8: Rotarod → Day 9: Stamina → Day 10: Plasma
+              </p>
+            </div>
+            <Button onClick={() => setShowAddTP(true)} size="sm" className="flex-shrink-0"><Plus className="h-4 w-4 mr-1" /> Add Timepoint</Button>
           </div>
           {timepoints.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
@@ -432,12 +508,13 @@ export function ColonyClient({
                         </div>
                         <div className="flex flex-wrap gap-1 mt-1.5">
                           {tp.experiments.map((e) => (
-                            <Badge key={e} variant="secondary" className="text-xs">{EXPERIMENT_LABELS[e] || e}</Badge>
+                            <Badge key={e} variant="secondary" className="text-xs">
+                              {PROTOCOL_DAY_LABELS[e] ? `${PROTOCOL_DAY_LABELS[e]}: ` : ""}{EXPERIMENT_LABELS[e] || e}
+                            </Badge>
                           ))}
                         </div>
                         <div className="text-xs text-muted-foreground mt-1.5 flex flex-wrap gap-3">
                           <span>Handle {tp.handling_days_before}d before</span>
-                          <span>Window: {tp.duration_days}d</span>
                           {tp.includes_eeg_implant && (
                             <span className="text-purple-600">
                               + EEG implant → {tp.eeg_recovery_days}d recovery → {tp.eeg_recording_days}d recording
@@ -487,6 +564,129 @@ export function ColonyClient({
                           </div>
                         </div>
                         <Button variant="ghost" size="sm" onClick={() => actions.deleteBreederCage(c.id)}>
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ─── Meetings Tab ────────────────────────────────────── */}
+        <TabsContent value="meetings" className="space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-muted-foreground">
+              Keep notes from advisor meetings — track action items and decisions.
+            </p>
+            <Button onClick={() => setShowAddMeeting(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> New Meeting</Button>
+          </div>
+          {meetings.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <MessageSquare className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p>No meeting notes yet. Click &quot;New Meeting&quot; to start.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {meetings.map((m) => {
+                const actionCount = m.action_items?.length || 0;
+                const doneActions = m.action_items?.filter((a: ActionItem) => a.done).length || 0;
+                return (
+                  <Card key={m.id} className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => setEditingMeeting(m)}>
+                    <CardContent className="py-3">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-sm">{m.title}</span>
+                            <Badge variant="outline" className="text-xs">{m.meeting_date}</Badge>
+                            {actionCount > 0 && (
+                              <Badge variant="secondary" className="text-xs">
+                                {doneActions}/{actionCount} actions done
+                              </Badge>
+                            )}
+                          </div>
+                          {m.attendees.length > 0 && (
+                            <div className="text-xs text-muted-foreground mt-0.5">
+                              Attendees: {m.attendees.join(", ")}
+                            </div>
+                          )}
+                          {m.content && (
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{m.content}</p>
+                          )}
+                        </div>
+                        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); actions.deleteMeetingNote(m.id); }}>
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ─── Cage Changes Tab ────────────────────────────────── */}
+        <TabsContent value="cages" className="space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-muted-foreground">
+              Track bi-weekly cage changes for all animals. Generate upcoming dates and mark them done.
+            </p>
+            <Button onClick={() => setShowGenerateCageChanges(true)} size="sm">
+              <RefreshCw className="h-4 w-4 mr-1" /> Generate Schedule
+            </Button>
+          </div>
+          {cageChanges.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <RefreshCw className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p>No cage changes scheduled.</p>
+              <p className="text-xs mt-1">Click &quot;Generate Schedule&quot; to create bi-weekly cage change reminders.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {cageChanges.map((cc) => {
+                const dLeft = daysUntil(cc.scheduled_date);
+                const isPast = dLeft < 0;
+                return (
+                  <Card key={cc.id} className={cc.is_completed ? "opacity-60" : isPast && !cc.is_completed ? "border-red-300 dark:border-red-700" : ""}>
+                    <CardContent className="py-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <button
+                            className={`h-6 w-6 rounded-full border-2 flex items-center justify-center transition-colors ${
+                              cc.is_completed
+                                ? "bg-green-500 border-green-500 text-white"
+                                : "border-gray-300 hover:border-primary"
+                            }`}
+                            onClick={() => actions.toggleCageChange(cc.id, !cc.is_completed)}
+                          >
+                            {cc.is_completed && <Check className="h-3.5 w-3.5" />}
+                          </button>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className={`font-medium text-sm ${cc.is_completed ? "line-through" : ""}`}>
+                                Cage Change
+                              </span>
+                              <Badge variant="outline" className="text-xs">{cc.scheduled_date}</Badge>
+                              {!cc.is_completed && dLeft <= 1 && dLeft >= 0 && (
+                                <Badge className="bg-orange-100 text-orange-700 text-xs" variant="secondary">
+                                  {dLeft === 0 ? "TODAY" : "TOMORROW"}
+                                </Badge>
+                              )}
+                              {isPast && !cc.is_completed && (
+                                <Badge variant="destructive" className="text-xs">
+                                  {Math.abs(dLeft)} days overdue
+                                </Badge>
+                              )}
+                            </div>
+                            {cc.completed_date && (
+                              <div className="text-xs text-muted-foreground">Completed: {cc.completed_date}</div>
+                            )}
+                          </div>
+                        </div>
+                        <Button variant="ghost" size="sm" onClick={() => actions.deleteCageChange(cc.id)}>
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -701,11 +901,7 @@ export function ColonyClient({
               </div>
               <div>
                 <Label className="text-xs">Handling Days Before</Label>
-                <Input name="handling_days_before" type="number" defaultValue={editingTP?.handling_days_before ?? 3} />
-              </div>
-              <div>
-                <Label className="text-xs">Experiment Window (days)</Label>
-                <Input name="duration_days" type="number" defaultValue={editingTP?.duration_days ?? 21} />
+                <Input name="handling_days_before" type="number" defaultValue={editingTP?.handling_days_before ?? 5} />
               </div>
               <div>
                 <Label className="text-xs">Sort Order</Label>
@@ -713,7 +909,7 @@ export function ColonyClient({
               </div>
             </div>
             <div>
-              <Label className="text-xs mb-1 block">Experiments</Label>
+              <Label className="text-xs mb-1 block">Experiments (protocol auto-assigns days)</Label>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                 {EXPERIMENT_TYPES.map((t) => (
                   <label key={t} className="flex items-center gap-1.5 text-xs cursor-pointer">
@@ -721,10 +917,10 @@ export function ColonyClient({
                       type="checkbox"
                       name="experiments"
                       value={t}
-                      defaultChecked={editingTP?.experiments.includes(t)}
+                      defaultChecked={editingTP?.experiments.includes(t) ?? true}
                       className="h-3.5 w-3.5"
                     />
-                    {EXPERIMENT_LABELS[t]}
+                    <span className="text-muted-foreground">{PROTOCOL_DAY_LABELS[t] || ""}</span> {EXPERIMENT_LABELS[t]}
                   </label>
                 ))}
               </div>
@@ -759,6 +955,93 @@ export function ColonyClient({
             <DialogFooter>
               <Button variant="outline" type="button" onClick={() => { setShowAddTP(false); setEditingTP(null); }}>Cancel</Button>
               <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}{editingTP ? "Save Changes" : "Add Timepoint"}</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Meeting Note */}
+      <Dialog open={showAddMeeting} onOpenChange={setShowAddMeeting}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>New Meeting Note</DialogTitle></DialogHeader>
+          <form onSubmit={(e) => handleFormAction(actions.createMeetingNote, e, () => setShowAddMeeting(false))} className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label className="text-xs">Title *</Label>
+                <Input name="title" required placeholder="e.g. Weekly check-in with Dr. Smith" />
+              </div>
+              <div>
+                <Label className="text-xs">Date *</Label>
+                <Input name="meeting_date" type="date" defaultValue={new Date().toISOString().split("T")[0]} required />
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Attendees (comma-separated)</Label>
+              <Input name="attendees" placeholder="e.g. Dr. Smith, Self" />
+            </div>
+            <div>
+              <Label className="text-xs">Notes</Label>
+              <Textarea name="content" placeholder="Meeting notes, decisions, topics discussed..." rows={6} />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setShowAddMeeting(false)}>Cancel</Button>
+              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Save Meeting</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Meeting Note */}
+      <Dialog open={!!editingMeeting} onOpenChange={(v) => { if (!v) setEditingMeeting(null); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          {editingMeeting && (
+            <MeetingDetail
+              meeting={editingMeeting}
+              onSave={async (fd: FormData) => {
+                setBusy(true);
+                const result = await actions.updateMeetingNote(editingMeeting.id, fd);
+                setBusy(false);
+                if (result.error) toast.error(result.error);
+                else { toast.success("Saved!"); setEditingMeeting(null); }
+              }}
+              onClose={() => setEditingMeeting(null)}
+              busy={busy}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Generate Cage Changes */}
+      <Dialog open={showGenerateCageChanges} onOpenChange={setShowGenerateCageChanges}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Generate Cage Change Schedule</DialogTitle></DialogHeader>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setBusy(true);
+              const fd = new FormData(e.currentTarget);
+              const result = await actions.generateCageChanges(
+                fd.get("start_date") as string,
+                parseInt(fd.get("count") as string) || 12
+              );
+              setBusy(false);
+              if (result.error) toast.error(result.error);
+              else { toast.success(`Generated ${result.count} cage change reminders!`); setShowGenerateCageChanges(false); }
+            }}
+            className="space-y-3"
+          >
+            <div>
+              <Label className="text-xs">First Cage Change Date</Label>
+              <Input name="start_date" type="date" defaultValue={new Date().toISOString().split("T")[0]} required />
+            </div>
+            <div>
+              <Label className="text-xs">Number of cage changes to generate (every 2 weeks)</Label>
+              <Input name="count" type="number" defaultValue="12" min="1" max="52" />
+            </div>
+            <p className="text-xs text-muted-foreground">This will create cage change reminders every 14 days starting from the date above.</p>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setShowGenerateCageChanges(false)}>Cancel</Button>
+              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Generate</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -831,6 +1114,128 @@ export function ColonyClient({
           )}
         </DialogContent>
       </Dialog>
+    </>
+  );
+}
+
+// ─── Meeting Detail Sub-component ───────────────────────────────────────
+
+function MeetingDetail({
+  meeting,
+  onSave,
+  onClose,
+  busy,
+}: {
+  meeting: MeetingNote;
+  onSave: (fd: FormData) => void;
+  onClose: () => void;
+  busy: boolean;
+}) {
+  const [content, setContent] = useState(meeting.content);
+  const [actionItems, setActionItems] = useState<ActionItem[]>(meeting.action_items || []);
+  const [newAction, setNewAction] = useState("");
+
+  function addAction() {
+    if (!newAction.trim()) return;
+    setActionItems([...actionItems, { text: newAction.trim(), done: false }]);
+    setNewAction("");
+  }
+
+  function toggleAction(idx: number) {
+    setActionItems(actionItems.map((a, i) => i === idx ? { ...a, done: !a.done } : a));
+  }
+
+  function removeAction(idx: number) {
+    setActionItems(actionItems.filter((_, i) => i !== idx));
+  }
+
+  function handleSave() {
+    const fd = new FormData();
+    fd.set("content", content);
+    fd.set("action_items", JSON.stringify(actionItems));
+    onSave(fd);
+  }
+
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <MessageSquare className="h-5 w-5" />
+          {meeting.title}
+          <Badge variant="outline" className="text-xs">{meeting.meeting_date}</Badge>
+        </DialogTitle>
+      </DialogHeader>
+
+      {meeting.attendees.length > 0 && (
+        <div className="text-sm text-muted-foreground">Attendees: {meeting.attendees.join(", ")}</div>
+      )}
+
+      <div>
+        <Label className="text-xs mb-1 block">Meeting Notes</Label>
+        <Textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          rows={10}
+          placeholder="Type your meeting notes here..."
+          className="font-mono text-sm"
+        />
+      </div>
+
+      <Separator />
+
+      <div>
+        <Label className="text-xs mb-2 block">Action Items</Label>
+        {actionItems.length > 0 && (
+          <div className="space-y-1.5 mb-3">
+            {actionItems.map((item, idx) => (
+              <div key={idx} className="flex items-center gap-2 text-sm">
+                <button
+                  className={`h-5 w-5 rounded border flex items-center justify-center flex-shrink-0 ${
+                    item.done ? "bg-green-500 border-green-500 text-white" : "border-gray-300 hover:border-primary"
+                  }`}
+                  onClick={() => toggleAction(idx)}
+                >
+                  {item.done && <Check className="h-3 w-3" />}
+                </button>
+                <span className={`flex-1 ${item.done ? "line-through text-muted-foreground" : ""}`}>{item.text}</span>
+                <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => removeAction(idx)}>
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Input
+            value={newAction}
+            onChange={(e) => setNewAction(e.target.value)}
+            placeholder="Add an action item..."
+            className="text-sm"
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAction(); } }}
+          />
+          <Button variant="outline" size="sm" onClick={addAction} type="button">
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {meeting.ai_summary && (
+        <>
+          <Separator />
+          <div>
+            <Label className="text-xs mb-1 block">AI Summary</Label>
+            <p className="text-sm text-muted-foreground bg-muted p-3 rounded-md">{meeting.ai_summary}</p>
+          </div>
+        </>
+      )}
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Close</Button>
+        <Button onClick={handleSave} disabled={busy}>
+          {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+          Save Changes
+        </Button>
+      </DialogFooter>
     </>
   );
 }
@@ -923,11 +1328,11 @@ function AnimalDetail({
                 {exps.map((exp) => {
                   const dLeft = exp.scheduled_date ? daysUntil(exp.scheduled_date) : null;
                   return (
-                    <div key={exp.id} className="flex items-center gap-2 text-sm rounded-md border p-2">
+                    <div key={exp.id} className="flex items-center gap-2 text-sm rounded-md border p-2 flex-wrap">
                       <Badge className={`${STATUS_COLORS[exp.status]} text-xs`} variant="secondary">
                         {exp.status}
                       </Badge>
-                      <span className="font-medium flex-1 min-w-0 truncate">
+                      <span className="font-medium min-w-0">
                         {EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}
                       </span>
                       {exp.scheduled_date && (
@@ -938,42 +1343,44 @@ function AnimalDetail({
                         </span>
                       )}
 
-                      {/* Status quick-actions */}
-                      {exp.status === "scheduled" && (
-                        <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "completed")}>
-                          <Check className="h-3 w-3 mr-0.5" /> Done
-                        </Button>
-                      )}
-                      {exp.status === "scheduled" && (
-                        <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "skipped")}>
-                          <X className="h-3 w-3 mr-0.5" /> Skip
-                        </Button>
-                      )}
-
-                      {/* Results link */}
-                      {exp.status === "completed" && !exp.results_drive_url && (
-                        <div className="flex items-center gap-1">
-                          <Input
-                            className="h-6 text-xs w-40"
-                            placeholder="Google Drive link"
-                            value={resultUrls[exp.id] || ""}
-                            onChange={(e) => setResultUrls((prev) => ({ ...prev, [exp.id]: e.target.value }))}
-                          />
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 text-xs px-2"
-                            onClick={() => { if (resultUrls[exp.id]) onSaveResultUrl(exp.id, resultUrls[exp.id]); }}
-                          >
-                            <Link2 className="h-3 w-3" />
+                      <div className="ml-auto flex items-center gap-1">
+                        {/* Status quick-actions */}
+                        {exp.status === "scheduled" && (
+                          <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "completed")}>
+                            <Check className="h-3 w-3 mr-0.5" /> Done
                           </Button>
-                        </div>
-                      )}
-                      {exp.results_drive_url && (
-                        <a href={exp.results_drive_url} target="_blank" rel="noopener noreferrer" className="text-primary">
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                      )}
+                        )}
+                        {exp.status === "scheduled" && (
+                          <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "skipped")}>
+                            <X className="h-3 w-3 mr-0.5" /> Skip
+                          </Button>
+                        )}
+
+                        {/* Results link */}
+                        {exp.status === "completed" && !exp.results_drive_url && (
+                          <div className="flex items-center gap-1">
+                            <Input
+                              className="h-6 text-xs w-40"
+                              placeholder="Google Drive link"
+                              value={resultUrls[exp.id] || ""}
+                              onChange={(e) => setResultUrls((prev) => ({ ...prev, [exp.id]: e.target.value }))}
+                            />
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 text-xs px-2"
+                              onClick={() => { if (resultUrls[exp.id]) onSaveResultUrl(exp.id, resultUrls[exp.id]); }}
+                            >
+                              <Link2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        )}
+                        {exp.results_drive_url && (
+                          <a href={exp.results_drive_url} target="_blank" rel="noopener noreferrer" className="text-primary">
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -992,4 +1399,3 @@ function AnimalDetail({
     </>
   );
 }
-

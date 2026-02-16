@@ -111,6 +111,20 @@
 - [x] PI / Advisor live portal — persistent read-only link, no account needed, live data (animals, experiments, timeline, results)
 - [x] PI visibility controls — choose what advisor can see (animals, experiments, results, timeline)
 - [x] Quick stats — active animals, cohorts, scheduled experiments, completed experiments
+- [x] Meeting note taker — take notes during PI/advisor meetings, track action items with check-off
+- [x] Bi-weekly cage change reminders — generate schedule, mark done, overdue alerts
+- [x] Accurate 2-week experiment protocol scheduling:
+  - Week 0: 5-day handling
+  - Day 1: Y-Maze (AM) + Marble Burying (PM)
+  - Day 2: Light-Dark Box (AM) + Overnight Nesting
+  - Day 3: Data Collection & Move to Core
+  - Day 4–5: 48hr Core Acclimation
+  - Day 6: CatWalk + Rotarod Habituation
+  - Day 7–8: Rotarod Testing (Acceleration)
+  - Day 9: Stamina Test (10 RPM / 60m)
+  - Day 10: Plasma Collection
+- [x] New experiment types: Stamina Test, Rotarod Hab, Core Acclimation, Data Collection
+- [x] Mark experiments done/skipped per animal per timepoint with one-click buttons
 
 ---
 

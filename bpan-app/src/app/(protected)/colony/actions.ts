@@ -296,6 +296,33 @@ export async function deleteAnimalExperiment(id: string) {
 }
 
 // ─── Schedule Experiments for an Animal ─────────────────────────────────
+//
+// Matches the Stanford "2-Week Mouse Behavior Experiment" protocol:
+//   Week 0   : 5 days handling (Mon–Fri before Day 1)
+//   Day 1    : Y-Maze (AM) + Marble Burying (PM)
+//   Day 2    : Light-Dark Box (AM) + Overnight Nesting
+//   Day 3    : Data Collection & Move to Core
+//   Day 4–5  : 48hr Core Acclimation (no testing)
+//   Day 6    : CatWalk Gait Analysis + Rotarod Habituation
+//   Day 7–8  : Rotarod Testing (Acceleration)
+//   Day 9    : Stamina Test (10 RPM / 60m cap)
+//   Day 10   : Plasma Collection (Blood Draw)
+// Then optionally: EEG implant → recovery → recording
+
+const PROTOCOL_SCHEDULE: { type: string; dayOffset: number; notes?: string }[] = [
+  { type: "handling",          dayOffset: -5, notes: "5 days: Transport → 1hr rest → 2 min handling" },
+  { type: "y_maze",            dayOffset: 0,  notes: "Day 1 AM — Anxiety Baseline (Group Housed)" },
+  { type: "marble",            dayOffset: 0,  notes: "Day 1 PM — Marble Burying" },
+  { type: "ldb",               dayOffset: 1,  notes: "Day 2 AM — Light-Dark Box" },
+  { type: "nesting",           dayOffset: 1,  notes: "Day 2 PM — Overnight Nesting (Isolation)" },
+  { type: "data_collection",   dayOffset: 2,  notes: "Day 3 — Data Collection & Move to Core" },
+  { type: "core_acclimation",  dayOffset: 3,  notes: "Day 4–5 — 48hr Mandatory Core Acclimation" },
+  { type: "catwalk",           dayOffset: 5,  notes: "Day 6 — CatWalk Gait Analysis" },
+  { type: "rotarod_hab",       dayOffset: 5,  notes: "Day 6 — Rotarod Habituation" },
+  { type: "rotarod",           dayOffset: 6,  notes: "Day 7–8 — Rotarod Testing (Acceleration)" },
+  { type: "stamina",           dayOffset: 8,  notes: "Day 9 — Stamina Test (10 RPM / 60m Cap)" },
+  { type: "blood_draw",        dayOffset: 9,  notes: "Day 10 — Plasma Collection (10:00–13:00)" },
+];
 
 export async function scheduleExperimentsForAnimal(animalId: string, birthDate: string) {
   const supabase = await createClient();
@@ -314,45 +341,50 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
   }
 
   const birth = new Date(birthDate);
+  const DAY = 24 * 60 * 60 * 1000;
   const records: Record<string, unknown>[] = [];
 
   for (const tp of timepoints) {
-    const ageMs = tp.age_days * 24 * 60 * 60 * 1000;
-    const experimentStart = new Date(birth.getTime() + ageMs);
+    const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
+    const selectedExps = new Set((tp.experiments as string[]) || []);
 
-    // Handling
-    if (tp.handling_days_before > 0) {
-      const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * 24 * 60 * 60 * 1000);
+    // Schedule each experiment in the protocol that the user selected
+    for (const step of PROTOCOL_SCHEDULE) {
+      // "handling" is always included if handling_days_before > 0
+      if (step.type === "handling") {
+        if (tp.handling_days_before > 0) {
+          const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * DAY);
+          records.push({
+            user_id: user.id,
+            animal_id: animalId,
+            experiment_type: "handling",
+            timepoint_age_days: tp.age_days,
+            scheduled_date: handlingStart.toISOString().split("T")[0],
+            status: "scheduled",
+            notes: step.notes,
+          });
+        }
+        continue;
+      }
+
+      // Only schedule experiments the user selected in their timepoint config
+      if (!selectedExps.has(step.type)) continue;
+
+      const expDate = new Date(experimentStart.getTime() + step.dayOffset * DAY);
       records.push({
         user_id: user.id,
         animal_id: animalId,
-        experiment_type: "handling",
-        timepoint_age_days: tp.age_days,
-        scheduled_date: handlingStart.toISOString().split("T")[0],
-        status: "scheduled",
-      });
-    }
-
-    // Each experiment in the timepoint
-    const experiments = (tp.experiments as string[]) || [];
-    let dayOffset = 0;
-    for (const exp of experiments) {
-      const expDate = new Date(experimentStart.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-      records.push({
-        user_id: user.id,
-        animal_id: animalId,
-        experiment_type: exp,
+        experiment_type: step.type,
         timepoint_age_days: tp.age_days,
         scheduled_date: expDate.toISOString().split("T")[0],
         status: "scheduled",
+        notes: step.notes,
       });
-      // Space experiments ~2–3 days apart within the window
-      dayOffset += Math.max(1, Math.floor(tp.duration_days / Math.max(experiments.length, 1)));
     }
 
-    // EEG implant + recovery + recording
+    // EEG implant + recovery + recording (after experiment window)
     if (tp.includes_eeg_implant) {
-      const implantDate = new Date(experimentStart.getTime() + tp.duration_days * 24 * 60 * 60 * 1000);
+      const implantDate = new Date(experimentStart.getTime() + 10 * DAY); // after Day 10
       records.push({
         user_id: user.id,
         animal_id: animalId,
@@ -360,9 +392,10 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
         timepoint_age_days: tp.age_days,
         scheduled_date: implantDate.toISOString().split("T")[0],
         status: "scheduled",
+        notes: "EEG implant surgery",
       });
 
-      const recordingStart = new Date(implantDate.getTime() + tp.eeg_recovery_days * 24 * 60 * 60 * 1000);
+      const recordingStart = new Date(implantDate.getTime() + tp.eeg_recovery_days * DAY);
       records.push({
         user_id: user.id,
         animal_id: animalId,
@@ -370,6 +403,7 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
         timepoint_age_days: tp.age_days,
         scheduled_date: recordingStart.toISOString().split("T")[0],
         status: "scheduled",
+        notes: `EEG recording (${tp.eeg_recording_days} days) after ${tp.eeg_recovery_days}d recovery`,
       });
     }
   }
@@ -413,6 +447,119 @@ export async function deleteAdvisorAccess(id: string) {
   if (!user) redirect("/auth/login");
 
   const { error } = await supabase.from("advisor_portal").delete().eq("id", id).eq("user_id", user.id);
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
+// ─── Meeting Notes ──────────────────────────────────────────────────────
+
+export async function createMeetingNote(formData: FormData) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const attendeesRaw = (formData.get("attendees") as string) || "";
+  const attendees = attendeesRaw.split(",").map((s) => s.trim()).filter(Boolean);
+
+  const { error } = await supabase.from("meeting_notes").insert({
+    user_id: user.id,
+    title: formData.get("title") as string,
+    meeting_date: formData.get("meeting_date") as string,
+    attendees,
+    content: (formData.get("content") as string) || "",
+    tags: [],
+  });
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
+export async function updateMeetingNote(id: string, formData: FormData) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const update: Record<string, unknown> = {};
+  if (formData.has("title")) update.title = formData.get("title");
+  if (formData.has("content")) update.content = formData.get("content");
+  if (formData.has("meeting_date")) update.meeting_date = formData.get("meeting_date");
+  if (formData.has("attendees")) {
+    const raw = (formData.get("attendees") as string) || "";
+    update.attendees = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  if (formData.has("action_items")) {
+    try { update.action_items = JSON.parse(formData.get("action_items") as string); } catch { /* ignore */ }
+  }
+  if (formData.has("ai_summary")) update.ai_summary = formData.get("ai_summary");
+
+  const { error } = await supabase.from("meeting_notes").update(update).eq("id", id).eq("user_id", user.id);
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
+export async function deleteMeetingNote(id: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase.from("meeting_notes").delete().eq("id", id).eq("user_id", user.id);
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
+// ─── Cage Changes ───────────────────────────────────────────────────────
+
+export async function generateCageChanges(startDateStr: string, count: number) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const start = new Date(startDateStr);
+  const records = [];
+
+  for (let i = 0; i < count; i++) {
+    const scheduledDate = new Date(start.getTime() + i * 14 * DAY);
+    records.push({
+      user_id: user.id,
+      scheduled_date: scheduledDate.toISOString().split("T")[0],
+      is_completed: false,
+    });
+  }
+
+  const { error } = await supabase.from("cage_changes").insert(records);
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true, count: records.length };
+}
+
+export async function toggleCageChange(id: string, completed: boolean) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase
+    .from("cage_changes")
+    .update({
+      is_completed: completed,
+      completed_date: completed ? new Date().toISOString().split("T")[0] : null,
+    })
+    .eq("id", id)
+    .eq("user_id", user.id);
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
+export async function deleteCageChange(id: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase.from("cage_changes").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
   return { success: true };

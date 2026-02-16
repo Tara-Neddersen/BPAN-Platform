@@ -320,8 +320,12 @@ export type ExperimentType =
   | "marble"
   | "nesting"
   | "rotarod"
+  | "rotarod_hab"
+  | "stamina"
   | "catwalk"
   | "blood_draw"
+  | "data_collection"
+  | "core_acclimation"
   | "eeg_implant"
   | "eeg_recording"
   | "handling";
@@ -369,5 +373,39 @@ export interface AdvisorPortal {
   token: string;
   can_see: string[];
   last_viewed_at: string | null;
+  created_at: string;
+}
+
+// ─── Meeting Notes ──────────────────────────────────────────────────────────
+
+export interface ActionItem {
+  text: string;
+  done: boolean;
+  due_date?: string;
+}
+
+export interface MeetingNote {
+  id: string;
+  user_id: string;
+  title: string;
+  meeting_date: string;
+  attendees: string[];
+  content: string;
+  action_items: ActionItem[];
+  ai_summary: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Cage Changes ───────────────────────────────────────────────────────────
+
+export interface CageChange {
+  id: string;
+  user_id: string;
+  scheduled_date: string;
+  completed_date: string | null;
+  is_completed: boolean;
+  notes: string | null;
   created_at: string;
 }

@@ -7,6 +7,8 @@ import type {
   AnimalExperiment,
   ColonyTimepoint,
   AdvisorPortal,
+  MeetingNote,
+  CageChange,
 } from "@/types";
 import {
   createBreederCage,
@@ -27,6 +29,12 @@ import {
   scheduleExperimentsForAnimal,
   createAdvisorAccess,
   deleteAdvisorAccess,
+  createMeetingNote,
+  updateMeetingNote,
+  deleteMeetingNote,
+  generateCageChanges,
+  toggleCageChange,
+  deleteCageChange,
 } from "./actions";
 
 export default async function ColonyPage() {
@@ -41,6 +49,8 @@ export default async function ColonyPage() {
     { data: animalExperiments },
     { data: timepoints },
     { data: advisorPortals },
+    { data: meetingNotes },
+    { data: cageChanges },
   ] = await Promise.all([
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
@@ -48,6 +58,8 @@ export default async function ColonyPage() {
     supabase.from("animal_experiments").select("*").eq("user_id", user.id).order("scheduled_date"),
     supabase.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
+    supabase.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
+    supabase.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
   ]);
 
   return (
@@ -55,7 +67,7 @@ export default async function ColonyPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Mouse Colony</h1>
         <p className="text-muted-foreground">
-          Manage breeder cages, cohorts, animals, experiment schedules, and PI access.
+          Manage breeder cages, cohorts, animals, experiment schedules, meetings, and PI access.
         </p>
       </div>
 
@@ -66,6 +78,8 @@ export default async function ColonyPage() {
         animalExperiments={(animalExperiments || []) as AnimalExperiment[]}
         timepoints={(timepoints || []) as ColonyTimepoint[]}
         advisorPortals={(advisorPortals || []) as AdvisorPortal[]}
+        meetingNotes={(meetingNotes || []) as MeetingNote[]}
+        cageChanges={(cageChanges || []) as CageChange[]}
         actions={{
           createBreederCage,
           updateBreederCage,
@@ -85,9 +99,14 @@ export default async function ColonyPage() {
           scheduleExperimentsForAnimal,
           createAdvisorAccess,
           deleteAdvisorAccess,
+          createMeetingNote,
+          updateMeetingNote,
+          deleteMeetingNote,
+          generateCageChanges,
+          toggleCageChange,
+          deleteCageChange,
         }}
       />
     </div>
   );
 }
-
