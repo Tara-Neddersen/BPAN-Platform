@@ -565,3 +565,35 @@ export async function deleteCageChange(id: string) {
   return { success: true };
 }
 
+// ─── Colony Photos ──────────────────────────────────────────────────────
+
+export async function addColonyPhoto(formData: FormData) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase.from("colony_photos").insert({
+    user_id: user.id,
+    image_url: formData.get("image_url") as string,
+    caption: (formData.get("caption") as string) || null,
+    animal_id: (formData.get("animal_id") as string) || null,
+    experiment_type: (formData.get("experiment_type") as string) || null,
+    taken_date: (formData.get("taken_date") as string) || null,
+    show_in_portal: formData.get("show_in_portal") !== "false",
+  });
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
+export async function deleteColonyPhoto(id: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase.from("colony_photos").delete().eq("id", id).eq("user_id", user.id);
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+

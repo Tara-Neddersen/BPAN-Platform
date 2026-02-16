@@ -1,17 +1,20 @@
 "use client";
 
-import { useState, useEffect, use, useMemo } from "react";
+import { useState, useEffect, use, useMemo, useCallback } from "react";
 import {
   Loader2, AlertCircle, Mouse, Calendar, Check, Clock,
-  FlaskConical, BarChart3,
+  FlaskConical, BarChart3, ChevronLeft, ChevronRight, ImageIcon,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 const EXPERIMENT_LABELS: Record<string, string> = {
-  handling: "Handling", y_maze: "Y Maze", ldb: "Light-Dark Box",
+  handling: "Handling", y_maze: "Y-Maze", ldb: "Light-Dark Box",
   marble: "Marble Burying", nesting: "Nesting", rotarod: "Rotarod",
-  catwalk: "CatWalk", blood_draw: "Blood Draw",
+  rotarod_hab: "Rotarod Hab", stamina: "Stamina Test",
+  catwalk: "CatWalk", blood_draw: "Plasma Collection",
+  data_collection: "Data Collection", core_acclimation: "Core Acclimation",
   eeg_implant: "EEG Implant", eeg_recording: "EEG Recording",
 };
 
@@ -26,6 +29,13 @@ const STATUS_COLORS: Record<string, string> = {
   completed: "bg-green-100 text-green-700",
   skipped: "bg-red-100 text-red-700",
 };
+
+interface PortalPhoto {
+  image_url: string;
+  caption: string | null;
+  experiment_type: string | null;
+  taken_date: string | null;
+}
 
 interface PortalData {
   advisor_name: string;
@@ -42,11 +52,133 @@ interface PortalData {
     completed_date: string | null; status: string;
     results_drive_url: string | null;
   }>;
+  photos: PortalPhoto[];
   stats: {
     total_animals: number; active_animals: number;
     pending_experiments: number; completed_experiments: number;
   };
 }
+
+/** Convert Google Drive share links to direct image URLs */
+function convertDriveUrl(url: string): string {
+  const match = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+  if (match) return `https://lh3.googleusercontent.com/d/${match[1]}`;
+  const match2 = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
+  if (match2) return `https://lh3.googleusercontent.com/d/${match2[1]}`;
+  return url;
+}
+
+// ─── Photo Gallery Slideshow ────────────────────────────────────────────
+
+function PhotoGallery({ photos }: { photos: PortalPhoto[] }) {
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [fade, setFade] = useState(true);
+
+  const next = useCallback(() => {
+    setFade(false);
+    setTimeout(() => {
+      setCurrentIdx((prev) => (prev + 1) % photos.length);
+      setFade(true);
+    }, 300);
+  }, [photos.length]);
+
+  const prev = useCallback(() => {
+    setFade(false);
+    setTimeout(() => {
+      setCurrentIdx((prev) => (prev - 1 + photos.length) % photos.length);
+      setFade(true);
+    }, 300);
+  }, [photos.length]);
+
+  // Auto-rotate every 5 seconds
+  useEffect(() => {
+    if (photos.length <= 1) return;
+    const interval = setInterval(next, 5000);
+    return () => clearInterval(interval);
+  }, [photos.length, next]);
+
+  if (photos.length === 0) return null;
+
+  const photo = photos[currentIdx];
+  const displayUrl = convertDriveUrl(photo.image_url);
+
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader className="py-3 px-4">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <ImageIcon className="h-4 w-4" /> Lab Gallery
+          <Badge variant="outline" className="text-xs ml-auto">{currentIdx + 1} / {photos.length}</Badge>
+        </CardTitle>
+      </CardHeader>
+      <div className="relative">
+        <div className="aspect-video bg-black flex items-center justify-center overflow-hidden">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={displayUrl}
+            alt={photo.caption || "Lab photo"}
+            className={`max-w-full max-h-full object-contain transition-opacity duration-300 ${fade ? "opacity-100" : "opacity-0"}`}
+            referrerPolicy="no-referrer"
+          />
+        </div>
+
+        {/* Navigation arrows */}
+        {photos.length > 1 && (
+          <>
+            <Button
+              variant="ghost" size="sm"
+              className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white h-8 w-8 p-0 rounded-full"
+              onClick={prev}
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </Button>
+            <Button
+              variant="ghost" size="sm"
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white h-8 w-8 p-0 rounded-full"
+              onClick={next}
+            >
+              <ChevronRight className="h-5 w-5" />
+            </Button>
+          </>
+        )}
+
+        {/* Caption overlay */}
+        {(photo.caption || photo.experiment_type) && (
+          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-4 pt-8">
+            <p className="text-white text-sm font-medium">{photo.caption || ""}</p>
+            <div className="flex items-center gap-2 mt-1">
+              {photo.experiment_type && (
+                <Badge className="bg-white/20 text-white border-0 text-xs" variant="secondary">
+                  {EXPERIMENT_LABELS[photo.experiment_type] || photo.experiment_type}
+                </Badge>
+              )}
+              {photo.taken_date && (
+                <span className="text-white/70 text-xs">{photo.taken_date}</span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Dot indicators */}
+      {photos.length > 1 && (
+        <div className="flex justify-center gap-1.5 py-2">
+          {photos.map((_, idx) => (
+            <button
+              key={idx}
+              className={`h-1.5 rounded-full transition-all ${idx === currentIdx ? "w-4 bg-primary" : "w-1.5 bg-muted-foreground/30"}`}
+              onClick={() => {
+                setFade(false);
+                setTimeout(() => { setCurrentIdx(idx); setFade(true); }, 300);
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ─── Main Portal Page ───────────────────────────────────────────────────
 
 export default function PIPortalPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
@@ -111,6 +243,11 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
           <p className="text-xs text-muted-foreground">Completed</p>
         </CardContent></Card>
       </div>
+
+      {/* Photo Gallery Slideshow */}
+      {data.photos && data.photos.length > 0 && (
+        <PhotoGallery photos={data.photos} />
+      )}
 
       {/* Upcoming */}
       {data.can_see.includes("timeline") && upcoming.length > 0 && (
@@ -192,4 +329,3 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
     </div>
   );
 }
-

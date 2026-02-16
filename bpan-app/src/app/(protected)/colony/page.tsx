@@ -9,6 +9,7 @@ import type {
   AdvisorPortal,
   MeetingNote,
   CageChange,
+  ColonyPhoto,
 } from "@/types";
 import {
   createBreederCage,
@@ -35,6 +36,8 @@ import {
   generateCageChanges,
   toggleCageChange,
   deleteCageChange,
+  addColonyPhoto,
+  deleteColonyPhoto,
 } from "./actions";
 
 export default async function ColonyPage() {
@@ -51,6 +54,7 @@ export default async function ColonyPage() {
     { data: advisorPortals },
     { data: meetingNotes },
     { data: cageChanges },
+    { data: colonyPhotos },
   ] = await Promise.all([
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
@@ -60,6 +64,7 @@ export default async function ColonyPage() {
     supabase.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
     supabase.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
     supabase.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
+    supabase.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
   ]);
 
   return (
@@ -80,6 +85,7 @@ export default async function ColonyPage() {
         advisorPortals={(advisorPortals || []) as AdvisorPortal[]}
         meetingNotes={(meetingNotes || []) as MeetingNote[]}
         cageChanges={(cageChanges || []) as CageChange[]}
+        colonyPhotos={(colonyPhotos || []) as ColonyPhoto[]}
         actions={{
           createBreederCage,
           updateBreederCage,
@@ -105,6 +111,8 @@ export default async function ColonyPage() {
           generateCageChanges,
           toggleCageChange,
           deleteCageChange,
+          addColonyPhoto,
+          deleteColonyPhoto,
         }}
       />
     </div>

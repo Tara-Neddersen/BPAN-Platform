@@ -6,6 +6,7 @@ import {
   ExternalLink, Eye, ChevronDown, ChevronUp,
   Calendar, AlertTriangle, Link2, Mouse,
   MessageSquare, RefreshCw, FileText, CheckCircle2,
+  ImageIcon,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import type {
   BreederCage, Cohort, Animal, AnimalExperiment,
-  ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange,
+  ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange, ColonyPhoto,
   AnimalSex, AnimalGenotype, AnimalStatus, ActionItem,
 } from "@/types";
 
@@ -95,6 +96,7 @@ interface ColonyClientProps {
   advisorPortals: AdvisorPortal[];
   meetingNotes: MeetingNote[];
   cageChanges: CageChange[];
+  colonyPhotos: ColonyPhoto[];
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -120,6 +122,8 @@ interface ColonyClientProps {
     generateCageChanges: (startDate: string, count: number) => Promise<{ success?: boolean; error?: string; count?: number }>;
     toggleCageChange: (id: string, completed: boolean) => Promise<{ success?: boolean; error?: string }>;
     deleteCageChange: (id: string) => Promise<{ success?: boolean; error?: string }>;
+    addColonyPhoto: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
+    deleteColonyPhoto: (id: string) => Promise<{ success?: boolean; error?: string }>;
   };
 }
 
@@ -137,6 +141,17 @@ function genotypeLabel(sex: AnimalSex, genotype: AnimalGenotype) {
   return `${GENOTYPE_LABELS[genotype]} ${sex === "male" ? "Male" : "Female"}`;
 }
 
+/** Convert Google Drive share links to direct image URLs */
+function convertDriveUrl(url: string): string {
+  // https://drive.google.com/file/d/FILE_ID/view...
+  const match = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+  if (match) return `https://lh3.googleusercontent.com/d/${match[1]}`;
+  // https://drive.google.com/open?id=FILE_ID
+  const match2 = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
+  if (match2) return `https://lh3.googleusercontent.com/d/${match2[1]}`;
+  return url; // already a direct URL
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────
 
 export function ColonyClient({
@@ -148,6 +163,7 @@ export function ColonyClient({
   advisorPortals: initPortals,
   meetingNotes: initMeetings,
   cageChanges: initCageChanges,
+  colonyPhotos: initPhotos,
   actions,
 }: ColonyClientProps) {
   const [cages] = useState(initCages);
@@ -158,6 +174,7 @@ export function ColonyClient({
   const [portals] = useState(initPortals);
   const [meetings] = useState(initMeetings);
   const [cageChanges] = useState(initCageChanges);
+  const [photos] = useState(initPhotos);
 
   const [showAddAnimal, setShowAddAnimal] = useState(false);
   const [showAddCohort, setShowAddCohort] = useState(false);
@@ -166,6 +183,7 @@ export function ColonyClient({
   const [showAddPI, setShowAddPI] = useState(false);
   const [showAddMeeting, setShowAddMeeting] = useState(false);
   const [showGenerateCageChanges, setShowGenerateCageChanges] = useState(false);
+  const [showAddPhoto, setShowAddPhoto] = useState(false);
   const [editingTP, setEditingTP] = useState<ColonyTimepoint | null>(null);
   const [editingMeeting, setEditingMeeting] = useState<MeetingNote | null>(null);
   const [selectedAnimal, setSelectedAnimal] = useState<Animal | null>(null);
@@ -360,6 +378,7 @@ export function ColonyClient({
           <TabsTrigger value="breeders" className="flex-1 min-w-[80px]">Breeders</TabsTrigger>
           <TabsTrigger value="meetings" className="flex-1 min-w-[80px]">Meetings</TabsTrigger>
           <TabsTrigger value="cages" className="flex-1 min-w-[80px]">Cage Changes</TabsTrigger>
+          <TabsTrigger value="photos" className="flex-1 min-w-[80px]">Photos</TabsTrigger>
           <TabsTrigger value="pi" className="flex-1 min-w-[80px]">PI Access</TabsTrigger>
         </TabsList>
 
@@ -690,6 +709,61 @@ export function ColonyClient({
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ─── Photos Tab ──────────────────────────────────────── */}
+        <TabsContent value="photos" className="space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-muted-foreground">
+              Add experiment photos — they&apos;ll show as a rotating gallery on your PI&apos;s portal. 📸
+            </p>
+            <Button onClick={() => setShowAddPhoto(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Photo</Button>
+          </div>
+          {photos.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <ImageIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p>No photos yet.</p>
+              <p className="text-xs mt-1">Add photos of your experiments — paste a direct image URL or Google Drive link.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {photos.map((p) => {
+                const displayUrl = convertDriveUrl(p.image_url);
+                const animal = animals.find((a) => a.id === p.animal_id);
+                return (
+                  <Card key={p.id} className="overflow-hidden group relative">
+                    <div className="aspect-square bg-muted relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={displayUrl}
+                        alt={p.caption || "Experiment photo"}
+                        className="object-cover w-full h-full"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+                        <Button
+                          variant="destructive" size="sm"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => actions.deleteColonyPhoto(p.id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      {!p.show_in_portal && (
+                        <Badge className="absolute top-1 right-1 text-[10px] bg-gray-700 text-white" variant="secondary">Hidden from PI</Badge>
+                      )}
+                    </div>
+                    <CardContent className="py-2 px-3">
+                      <p className="text-xs font-medium truncate">{p.caption || "Untitled"}</p>
+                      <p className="text-[10px] text-muted-foreground truncate">
+                        {animal ? animal.identifier : ""}{p.experiment_type ? ` · ${EXPERIMENT_LABELS[p.experiment_type] || p.experiment_type}` : ""}
+                      </p>
                     </CardContent>
                   </Card>
                 );
@@ -1091,6 +1165,58 @@ export function ColonyClient({
             <DialogFooter>
               <Button variant="outline" type="button" onClick={() => setShowAddPI(false)}>Cancel</Button>
               <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Create & Copy Link</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Photo */}
+      <Dialog open={showAddPhoto} onOpenChange={setShowAddPhoto}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add Experiment Photo</DialogTitle></DialogHeader>
+          <form onSubmit={(e) => handleFormAction(actions.addColonyPhoto, e, () => setShowAddPhoto(false))} className="space-y-3">
+            <div>
+              <Label className="text-xs">Image URL *</Label>
+              <Input name="image_url" required placeholder="Paste direct image URL or Google Drive share link" />
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Google Drive: right-click image → &quot;Get link&quot; → paste here. We&apos;ll auto-convert it.
+              </p>
+            </div>
+            <div>
+              <Label className="text-xs">Caption</Label>
+              <Input name="caption" placeholder="e.g. BPAN1-HM-1 — Rotarod Day 7" />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label className="text-xs">Animal (optional)</Label>
+                <Select name="animal_id">
+                  <SelectTrigger><SelectValue placeholder="Any animal" /></SelectTrigger>
+                  <SelectContent>
+                    {animals.map((a) => <SelectItem key={a.id} value={a.id}>{a.identifier}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Experiment (optional)</Label>
+                <Select name="experiment_type">
+                  <SelectTrigger><SelectValue placeholder="Any experiment" /></SelectTrigger>
+                  <SelectContent>
+                    {EXPERIMENT_TYPES.map((t) => <SelectItem key={t} value={t}>{EXPERIMENT_LABELS[t]}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Date Taken</Label>
+                <Input name="taken_date" type="date" />
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" name="show_in_portal" value="true" defaultChecked className="h-4 w-4" />
+              Show in PI portal gallery
+            </label>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setShowAddPhoto(false)}>Cancel</Button>
+              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Add Photo</Button>
             </DialogFooter>
           </form>
         </DialogContent>

@@ -409,3 +409,18 @@ export interface CageChange {
   notes: string | null;
   created_at: string;
 }
+
+// ─── Colony Photos ──────────────────────────────────────────────────────────
+
+export interface ColonyPhoto {
+  id: string;
+  user_id: string;
+  image_url: string;
+  caption: string | null;
+  animal_id: string | null;
+  experiment_type: string | null;
+  taken_date: string | null;
+  sort_order: number;
+  show_in_portal: boolean;
+  created_at: string;
+}

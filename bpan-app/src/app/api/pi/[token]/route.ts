@@ -32,6 +32,7 @@ export async function GET(
     // Fetch live data based on permissions
     let animals: unknown[] = [];
     let animalExperiments: unknown[] = [];
+    let photos: unknown[] = [];
 
     if (canSee.includes("animals") || canSee.includes("experiments") || canSee.includes("timeline")) {
       const { data: animalsData } = await supabase
@@ -71,6 +72,21 @@ export async function GET(
       }));
     }
 
+    // Fetch photos for gallery (always included if they exist)
+    const { data: photosData } = await supabase
+      .from("colony_photos")
+      .select("image_url, caption, experiment_type, taken_date")
+      .eq("user_id", userId)
+      .eq("show_in_portal", true)
+      .order("sort_order");
+
+    photos = (photosData || []).map((p: Record<string, unknown>) => ({
+      image_url: p.image_url,
+      caption: p.caption,
+      experiment_type: p.experiment_type,
+      taken_date: p.taken_date,
+    }));
+
     // Stats
     const totalAnimals = animals.length;
     const activeAnimals = (animals as Array<{ status: string }>).filter((a) => a.status === "active").length;
@@ -82,6 +98,7 @@ export async function GET(
       can_see: canSee,
       animals,
       experiments: animalExperiments,
+      photos,
       stats: {
         total_animals: totalAnimals,
         active_animals: activeAnimals,
