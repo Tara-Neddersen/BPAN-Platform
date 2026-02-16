@@ -1396,20 +1396,21 @@ export function ColonyClient({
 function useSpeechToText(onTranscript: (text: string) => void) {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
+  const [debugInfo, setDebugInfo] = useState("");
   const wantRef = useRef(false);
   const cbRef = useRef(onTranscript);
-  const committedRef = useRef("");
+  const transcriptRef = useRef("");
   const recRef = useRef<SpeechRecognition | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Always point to the latest callback
   cbRef.current = onTranscript;
 
-  // Detect browser support
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
-    setIsSupported(!!(w.SpeechRecognition || w.webkitSpeechRecognition));
+    const has = !!(w.SpeechRecognition || w.webkitSpeechRecognition);
+    setIsSupported(has);
+    setDebugInfo(has ? "Speech API available" : "Speech API NOT available in this browser");
     return () => {
       wantRef.current = false;
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -1423,46 +1424,54 @@ function useSpeechToText(onTranscript: (text: string) => void) {
     const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
     if (!SR || !wantRef.current) return;
 
+    // Stop any existing instance
+    if (recRef.current) {
+      try { recRef.current.abort(); } catch { /* */ }
+      recRef.current = null;
+    }
+
     const rec = new SR();
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = "en-US";
     rec.maxAlternatives = 1;
+    recRef.current = rec;
+
+    setDebugInfo("Starting recognition...");
+
+    rec.onaudiostart = () => {
+      setDebugInfo("🎤 Microphone active — speak now!");
+    };
+
+    rec.onspeechstart = () => {
+      setDebugInfo("🗣️ Speech detected!");
+    };
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
-      // Build the full transcript: committed text + current session results
-      let sessionFinal = "";
-      let sessionInterim = "";
+      let text = "";
       for (let i = 0; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          sessionFinal += e.results[i][0].transcript;
-        } else {
-          sessionInterim += e.results[i][0].transcript;
-        }
+        text += e.results[i][0].transcript;
       }
-      // Combine: previously committed + this session's final + interim
-      const full = committedRef.current + sessionFinal + sessionInterim;
-      cbRef.current(full);
+      transcriptRef.current = text;
+      setDebugInfo("📝 Heard: " + text.substring(0, 60) + (text.length > 60 ? "..." : ""));
+      cbRef.current(text);
     };
 
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
-      if (e.error === "not-allowed" || e.error === "service-not-available") {
+      setDebugInfo("❌ Error: " + e.error);
+      if (e.error === "not-allowed") {
         wantRef.current = false;
         setIsListening(false);
-        toast.error(e.error === "not-allowed"
-          ? "Microphone access was denied. Please allow it in your browser settings."
-          : "Speech service unavailable. Try Chrome for best results.");
+        toast.error("Microphone access denied. Check browser permissions.");
+      } else if (e.error === "service-not-available") {
+        wantRef.current = false;
+        setIsListening(false);
+        toast.error("Speech service unavailable. Use Chrome for best results.");
       }
-      // Other errors (no-speech, aborted, network) → let onend restart
     };
 
     rec.onend = () => {
-      // Commit any final results from this session before restarting
-      if (rec._lastResults) {
-        committedRef.current += rec._lastResults;
-        rec._lastResults = "";
-      }
-      // Auto-restart if we still want to listen
+      setDebugInfo("⏸️ Recognition ended. " + (wantRef.current ? "Restarting..." : "Stopped."));
       if (wantRef.current) {
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => {
@@ -1471,22 +1480,11 @@ function useSpeechToText(onTranscript: (text: string) => void) {
       }
     };
 
-    // Track final results so we can commit them on restart
-    const origOnResult = rec.onresult;
-    rec.onresult = (e: SpeechRecognitionEvent) => {
-      let sf = "";
-      for (let i = 0; i < e.results.length; i++) {
-        if (e.results[i].isFinal) sf += e.results[i][0].transcript;
-      }
-      rec._lastResults = sf;
-      origOnResult.call(rec, e);
-    };
-
-    recRef.current = rec;
     try {
       rec.start();
-    } catch {
-      // If start fails, retry after a delay
+      setDebugInfo("✅ rec.start() called successfully");
+    } catch (err) {
+      setDebugInfo("❌ rec.start() threw: " + String(err));
       if (wantRef.current) {
         timerRef.current = setTimeout(() => { if (wantRef.current) startRec(); }, 500);
       }
@@ -1495,14 +1493,13 @@ function useSpeechToText(onTranscript: (text: string) => void) {
 
   function toggle() {
     if (wantRef.current) {
-      // Stop
       wantRef.current = false;
       setIsListening(false);
       if (timerRef.current) clearTimeout(timerRef.current);
       if (recRef.current) try { recRef.current.stop(); } catch { /* */ }
+      setDebugInfo("Stopped.");
     } else {
-      // Start
-      committedRef.current = "";
+      transcriptRef.current = "";
       wantRef.current = true;
       setIsListening(true);
       startRec();
@@ -1516,7 +1513,7 @@ function useSpeechToText(onTranscript: (text: string) => void) {
     if (recRef.current) try { recRef.current.stop(); } catch { /* */ }
   }
 
-  return { isListening, isSupported, toggle, stop };
+  return { isListening, isSupported, toggle, stop, debugInfo };
 }
 
 // ─── Meeting Detail Sub-component ───────────────────────────────────────
@@ -1540,7 +1537,7 @@ function MeetingDetail({
 
   // Speech-to-text: live transcript replaces content below the base
   const baseContentRef = useRef(content);
-  const { isListening, isSupported, toggle: toggleMic, stop: stopMic } = useSpeechToText((text) => {
+  const { isListening, isSupported, toggle: toggleMic, stop: stopMic, debugInfo } = useSpeechToText((text) => {
     const base = baseContentRef.current;
     setContent(base ? base + "\n\n" + text : text);
   });
@@ -1655,6 +1652,11 @@ function MeetingDetail({
           placeholder={isListening ? "Listening... speak now 🎙️" : "Type your meeting notes here, or click Dictate to speak..."}
           className={`font-mono text-sm ${isListening ? "border-red-300 dark:border-red-700" : ""}`}
         />
+        {debugInfo && (
+          <div className="mt-1 px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded text-[11px] font-mono text-muted-foreground">
+            {debugInfo}
+          </div>
+        )}
       </div>
 
       <Separator />
