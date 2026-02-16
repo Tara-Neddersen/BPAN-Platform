@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import {
   Plus, Edit, Trash2, Loader2, Check, X, Copy,
   ExternalLink, Eye, ChevronDown, ChevronUp,
@@ -167,18 +167,45 @@ export function ColonyClient({
   colonyPhotos: initPhotos,
   actions,
 }: ColonyClientProps) {
-  const router = useRouter();
+  const supabaseRef = useRef(createBrowserClient());
 
-  // Use props directly — they update when the server re-renders after mutations
-  const cages = initCages;
-  const cohorts = initCohorts;
-  const animals = initAnimals;
-  const experiments = initExps;
-  const timepoints = initTPs;
-  const portals = initPortals;
-  const meetings = initMeetings;
-  const cageChanges = initCageChanges;
-  const photos = initPhotos;
+  // Local state — updated via refetch after each action
+  const [cages, setCages] = useState(initCages);
+  const [cohorts, setCohorts] = useState(initCohorts);
+  const [animals, setAnimals] = useState(initAnimals);
+  const [experiments, setExperiments] = useState(initExps);
+  const [timepoints, setTimepoints] = useState(initTPs);
+  const [portals, setPortals] = useState(initPortals);
+  const [meetings, setMeetings] = useState(initMeetings);
+  const [cageChanges, setCageChanges] = useState(initCageChanges);
+  const [photos, setPhotos] = useState(initPhotos);
+
+  // Refetch all colony data directly from Supabase (bypasses all caching)
+  const refetchAll = useCallback(async () => {
+    const sb = supabaseRef.current;
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return;
+    const [r1, r2, r3, r4, r5, r6, r7, r8, r9] = await Promise.all([
+      sb.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
+      sb.from("cohorts").select("*").eq("user_id", user.id).order("name"),
+      sb.from("animals").select("*").eq("user_id", user.id).order("identifier"),
+      sb.from("animal_experiments").select("*").eq("user_id", user.id).order("scheduled_date"),
+      sb.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
+      sb.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
+      sb.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
+      sb.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
+      sb.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
+    ]);
+    if (r1.data) setCages(r1.data as BreederCage[]);
+    if (r2.data) setCohorts(r2.data as Cohort[]);
+    if (r3.data) setAnimals(r3.data as Animal[]);
+    if (r4.data) setExperiments(r4.data as AnimalExperiment[]);
+    if (r5.data) setTimepoints(r5.data as ColonyTimepoint[]);
+    if (r6.data) setPortals(r6.data as AdvisorPortal[]);
+    if (r7.data) setMeetings(r7.data as MeetingNote[]);
+    if (r8.data) setCageChanges(r8.data as CageChange[]);
+    if (r9.data) setPhotos(r9.data as ColonyPhoto[]);
+  }, []);
 
   const [showAddAnimal, setShowAddAnimal] = useState(false);
   const [showAddCohort, setShowAddCohort] = useState(false);
@@ -306,7 +333,7 @@ export function ColonyClient({
     } else {
       toast.success("Saved!");
       closeDialog?.();
-      router.refresh();
+      refetchAll();
     }
   }
 
@@ -314,7 +341,7 @@ export function ColonyClient({
   async function act(fn: Promise<{ success?: boolean; error?: string }>) {
     const result = await fn;
     if (result.error) toast.error(result.error);
-    else router.refresh();
+    else refetchAll();
     return result;
   }
 
@@ -326,7 +353,7 @@ export function ColonyClient({
       toast.error(result.error);
     } else {
       toast.success(`Scheduled ${result.count} experiments for ${animal.identifier}!`);
-      router.refresh();
+      refetchAll();
     }
   }
 
@@ -336,7 +363,7 @@ export function ColonyClient({
     if (status === "completed") fd.set("completed_date", new Date().toISOString().split("T")[0]);
     const result = await actions.updateAnimalExperiment(expId, fd);
     if (result.error) toast.error(result.error);
-    else { toast.success("Updated!"); router.refresh(); }
+    else { toast.success("Updated!"); refetchAll(); }
   }
 
   async function handleSaveResultUrl(expId: string, url: string) {
@@ -344,7 +371,7 @@ export function ColonyClient({
     fd.set("results_drive_url", url);
     const result = await actions.updateAnimalExperiment(expId, fd);
     if (result.error) toast.error(result.error);
-    else { toast.success("Results link saved!"); router.refresh(); }
+    else { toast.success("Results link saved!"); refetchAll(); }
   }
 
   function copyPILink(token: string) {
@@ -1178,7 +1205,7 @@ export function ColonyClient({
                 const result = await actions.updateMeetingNote(editingMeeting.id, fd);
                 setBusy(false);
                 if (result.error) toast.error(result.error);
-                else { toast.success("Saved!"); setEditingMeeting(null); router.refresh(); }
+                else { toast.success("Saved!"); setEditingMeeting(null); refetchAll(); }
               }}
               onClose={() => setEditingMeeting(null)}
               busy={busy}
@@ -1202,7 +1229,7 @@ export function ColonyClient({
               );
               setBusy(false);
               if (result.error) toast.error(result.error);
-              else { toast.success(`Generated ${result.count} cage change reminders!`); setShowGenerateCageChanges(false); router.refresh(); }
+              else { toast.success(`Generated ${result.count} cage change reminders!`); setShowGenerateCageChanges(false); refetchAll(); }
             }}
             className="space-y-3"
           >
@@ -1241,7 +1268,7 @@ export function ColonyClient({
                 navigator.clipboard.writeText(url);
                 toast.success("Access created! Link copied to clipboard.");
                 setShowAddPI(false);
-                router.refresh();
+                refetchAll();
               }
             }}
             className="space-y-3"
