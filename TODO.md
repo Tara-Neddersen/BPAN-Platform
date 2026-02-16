@@ -47,15 +47,18 @@
 - [x] Conversation history — save, resume, and manage past advisor conversations
 - [x] Auto-titled conversations — AI generates titles from first message
 
-## Phase 4: Experiment Planner & Calendar
+## Phase 4: Experiment Planner & Calendar ✅
 
-- [ ] Experiment calendar — visual timeline (planned, in-progress, completed)
-- [ ] Protocol templates — reusable templates for common procedures
-- [ ] Reminders & notifications — upcoming experiments, timepoints
-- [ ] Dependencies — "Experiment B can't start until Experiment A results are in"
-- [ ] Gantt chart view — full research timeline with milestones
-- [ ] Reagent/resource tracker — expiration dates, stock levels
-- [ ] Protocol version history
+- [x] Experiment calendar — month grid with color-coded status, click to edit
+- [x] Protocol templates — create, edit, step-by-step with durations, categorized
+- [x] Timepoints & reminders — add timepoints to experiments, mark complete, upcoming alerts
+- [x] Dependencies — "Experiment B blocked until A is completed" with visual warnings
+- [x] Gantt chart view — horizontal timeline bars, today line, dependency arrows, timepoint dots
+- [x] Reagent/resource tracker — stock levels, supplier, lot #, expiration alerts (expired + 30-day warning)
+- [x] Protocol version tracking — version numbers, linked to experiments
+- [x] Quick stats dashboard — planned/in-progress/completed/upcoming counts
+- [x] Full CRUD — create, edit, delete for experiments, protocols, reagents, timepoints
+- [x] Tab-based UI — Calendar, Timeline, Protocols, Reagents views
 
 ## Phase 5: Results Analyzer
 

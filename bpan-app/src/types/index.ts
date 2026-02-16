@@ -117,3 +117,69 @@ export interface Hypothesis {
   created_at: string;
   updated_at: string;
 }
+
+// ─── Phase 4: Experiment Planner & Calendar ──────────────────────────────────
+
+export interface ProtocolStep {
+  id: string;
+  text: string;
+  duration?: string;
+}
+
+export interface Protocol {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  category: string | null;
+  steps: ProtocolStep[];
+  version: number;
+  parent_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Experiment {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  status: "planned" | "in_progress" | "completed" | "cancelled";
+  priority: "low" | "medium" | "high";
+  protocol_id: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  depends_on: string[];
+  tags: string[];
+  notes: string | null;
+  aim: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExperimentTimepoint {
+  id: string;
+  experiment_id: string;
+  user_id: string;
+  label: string;
+  scheduled_at: string;
+  completed_at: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface Reagent {
+  id: string;
+  user_id: string;
+  name: string;
+  catalog_number: string | null;
+  supplier: string | null;
+  lot_number: string | null;
+  quantity: number | null;
+  unit: string | null;
+  expiration_date: string | null;
+  storage_location: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
