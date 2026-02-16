@@ -182,29 +182,40 @@ export function ColonyClient({
 
   // Refetch all colony data directly from Supabase (bypasses all caching)
   const refetchAll = useCallback(async () => {
-    const sb = supabaseRef.current;
-    const { data: { user } } = await sb.auth.getUser();
-    if (!user) return;
-    const [r1, r2, r3, r4, r5, r6, r7, r8, r9] = await Promise.all([
-      sb.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
-      sb.from("cohorts").select("*").eq("user_id", user.id).order("name"),
-      sb.from("animals").select("*").eq("user_id", user.id).order("identifier"),
-      sb.from("animal_experiments").select("*").eq("user_id", user.id).order("scheduled_date"),
-      sb.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
-      sb.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
-      sb.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
-      sb.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
-      sb.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
-    ]);
-    if (r1.data) setCages(r1.data as BreederCage[]);
-    if (r2.data) setCohorts(r2.data as Cohort[]);
-    if (r3.data) setAnimals(r3.data as Animal[]);
-    if (r4.data) setExperiments(r4.data as AnimalExperiment[]);
-    if (r5.data) setTimepoints(r5.data as ColonyTimepoint[]);
-    if (r6.data) setPortals(r6.data as AdvisorPortal[]);
-    if (r7.data) setMeetings(r7.data as MeetingNote[]);
-    if (r8.data) setCageChanges(r8.data as CageChange[]);
-    if (r9.data) setPhotos(r9.data as ColonyPhoto[]);
+    try {
+      const sb = supabaseRef.current;
+      const { data: { user }, error: authError } = await sb.auth.getUser();
+      if (authError || !user) {
+        console.error("refetchAll: auth failed", authError);
+        // Fallback: force full page reload
+        window.location.reload();
+        return;
+      }
+      const [r1, r2, r3, r4, r5, r6, r7, r8, r9] = await Promise.all([
+        sb.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
+        sb.from("cohorts").select("*").eq("user_id", user.id).order("name"),
+        sb.from("animals").select("*").eq("user_id", user.id).order("identifier"),
+        sb.from("animal_experiments").select("*").eq("user_id", user.id).order("scheduled_date"),
+        sb.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
+        sb.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
+        sb.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
+        sb.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
+        sb.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
+      ]);
+      setCages((r1.data || []) as BreederCage[]);
+      setCohorts((r2.data || []) as Cohort[]);
+      setAnimals((r3.data || []) as Animal[]);
+      setExperiments((r4.data || []) as AnimalExperiment[]);
+      setTimepoints((r5.data || []) as ColonyTimepoint[]);
+      setPortals((r6.data || []) as AdvisorPortal[]);
+      setMeetings((r7.data || []) as MeetingNote[]);
+      setCageChanges((r8.data || []) as CageChange[]);
+      setPhotos((r9.data || []) as ColonyPhoto[]);
+    } catch (err) {
+      console.error("refetchAll error:", err);
+      // Fallback: force full page reload
+      window.location.reload();
+    }
   }, []);
 
   const [showAddAnimal, setShowAddAnimal] = useState(false);
@@ -333,7 +344,7 @@ export function ColonyClient({
     } else {
       toast.success("Saved!");
       closeDialog?.();
-      refetchAll();
+      await refetchAll();
     }
   }
 
@@ -341,7 +352,7 @@ export function ColonyClient({
   async function act(fn: Promise<{ success?: boolean; error?: string }>) {
     const result = await fn;
     if (result.error) toast.error(result.error);
-    else refetchAll();
+    else await refetchAll();
     return result;
   }
 
@@ -1386,6 +1397,13 @@ function useSpeechToText(onTranscript: (text: string) => void) {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // Use refs so event handlers always see the latest values (no stale closures)
+  const isListeningRef = useRef(false);
+  const onTranscriptRef = useRef(onTranscript);
+  const finalTranscriptRef = useRef("");
+
+  // Keep the callback ref up to date
+  useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
 
   useEffect(() => {
     const SpeechRecognition = (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition }).SpeechRecognition
@@ -1398,32 +1416,34 @@ function useSpeechToText(onTranscript: (text: string) => void) {
       recognition.interimResults = true;
       recognition.lang = "en-US";
 
-      let finalTranscript = "";
-
       recognition.onresult = (event: SpeechRecognitionEvent) => {
-        let interim = "";
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const transcript = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
-            finalTranscript += transcript + " ";
-            onTranscript(finalTranscript.trim());
-          } else {
-            interim += transcript;
+            finalTranscriptRef.current += transcript + " ";
+            onTranscriptRef.current(finalTranscriptRef.current.trim());
           }
         }
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("Speech recognition error:", event.error);
-        if (event.error !== "no-speech") {
+        if (event.error !== "no-speech" && event.error !== "aborted") {
+          isListeningRef.current = false;
           setIsListening(false);
         }
       };
 
       recognition.onend = () => {
-        // Auto-restart if still supposed to be listening
-        if (recognitionRef.current && isListening) {
-          try { recognition.start(); } catch { /* already started */ }
+        // Auto-restart if still supposed to be listening (browser stops after pauses)
+        if (isListeningRef.current) {
+          try {
+            setTimeout(() => {
+              if (isListeningRef.current && recognitionRef.current) {
+                recognitionRef.current.start();
+              }
+            }, 100);
+          } catch { /* already started */ }
         }
       };
 
@@ -1431,22 +1451,25 @@ function useSpeechToText(onTranscript: (text: string) => void) {
     }
 
     return () => {
+      isListeningRef.current = false;
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch { /* ignore */ }
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function toggle() {
     if (!recognitionRef.current) return;
 
-    if (isListening) {
-      recognitionRef.current.stop();
+    if (isListeningRef.current) {
+      isListeningRef.current = false;
       setIsListening(false);
+      recognitionRef.current.stop();
     } else {
       try {
+        finalTranscriptRef.current = "";
         recognitionRef.current.start();
+        isListeningRef.current = true;
         setIsListening(true);
       } catch {
         toast.error("Could not start speech recognition. Make sure you've allowed microphone access.");
@@ -1455,10 +1478,11 @@ function useSpeechToText(onTranscript: (text: string) => void) {
   }
 
   function stop() {
+    isListeningRef.current = false;
+    setIsListening(false);
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch { /* ignore */ }
     }
-    setIsListening(false);
   }
 
   return { isListening, isSupported, toggle, stop };
