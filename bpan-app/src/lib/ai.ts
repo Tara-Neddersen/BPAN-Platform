@@ -348,6 +348,51 @@ Highlighted text to extract methods from: "${highlight}"`;
   );
 }
 
+// ─── Extract Action Items from Meeting Notes ────────────────────────────────
+
+export async function extractActionItems(notes: string): Promise<string[]> {
+  const systemInstruction =
+    "You are a research assistant helping a biomedical PhD student extract action items from advisor meeting notes.";
+
+  const prompt = `Read the following meeting notes and extract ALL action items, tasks, to-dos, follow-ups, and things that need to be done. Each action item should be a short, clear, actionable sentence.
+
+Return ONLY a JSON array of strings, nothing else. Example: ["Order more antibodies", "Email Dr. Smith about timeline", "Run Western blot on sample 3"]
+
+If there are no action items, return an empty array: []
+
+MEETING NOTES:
+${notes}`;
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  let raw = "";
+  if (apiKey) {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    raw = await callGeminiWithFallback(genAI, systemInstruction, prompt);
+  } else {
+    const orKey = process.env.OPENROUTER_API_KEY;
+    if (orKey) {
+      raw = await callOpenRouterWithFallback(orKey, systemInstruction, prompt, 600);
+    } else {
+      throw new Error("AI unavailable — no API keys configured.");
+    }
+  }
+
+  // Parse the JSON array from the AI response
+  try {
+    // Strip markdown code fences if present
+    const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed)) return parsed.map(String);
+  } catch {
+    // Fallback: split by newlines and clean up
+    return raw
+      .split("\n")
+      .map((l) => l.replace(/^[-•*\d.)\]]+\s*/, "").trim())
+      .filter((l) => l.length > 3);
+  }
+  return [];
+}
+
 // ─── Meeting Notes Summary ──────────────────────────────────────────────────
 
 export async function summarizeMeetingNotes(

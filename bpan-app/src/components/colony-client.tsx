@@ -1587,6 +1587,7 @@ function MeetingDetail({
   const [newAction, setNewAction] = useState("");
   const [aiSummary, setAiSummary] = useState(meeting.ai_summary || "");
   const [summarizing, setSummarizing] = useState(false);
+  const [extracting, setExtracting] = useState(false);
 
   // Speech-to-text: live transcript replaces content below the base
   const baseContentRef = useRef(content);
@@ -1633,6 +1634,38 @@ function MeetingDetail({
       toast.error(err instanceof Error ? err.message : "Failed to summarize");
     }
     setSummarizing(false);
+  }
+
+  async function handleExtractActions() {
+    if (!content?.trim()) {
+      toast.error("Write or dictate some notes first, then extract action items.");
+      return;
+    }
+    setExtracting(true);
+    try {
+      const res = await fetch("/api/note-assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "extract_actions", text: content }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      const items: string[] = data.items || [];
+      if (items.length === 0) {
+        toast.info("No action items found in the notes.");
+      } else {
+        // Merge with existing — don't duplicate
+        const existingTexts = new Set(actionItems.map((a) => a.text.toLowerCase().trim()));
+        const newItems = items
+          .filter((t) => !existingTexts.has(t.toLowerCase().trim()))
+          .map((t) => ({ text: t, done: false }));
+        setActionItems([...actionItems, ...newItems]);
+        toast.success(`Found ${newItems.length} new action item${newItems.length !== 1 ? "s" : ""}!`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to extract action items");
+    }
+    setExtracting(false);
   }
 
   function addAction() {
@@ -1715,7 +1748,20 @@ function MeetingDetail({
       <Separator />
 
       <div>
-        <Label className="text-xs mb-2 block">Action Items</Label>
+        <div className="flex items-center justify-between mb-2">
+          <Label className="text-xs">Action Items</Label>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs gap-1"
+            onClick={handleExtractActions}
+            disabled={extracting}
+            type="button"
+          >
+            {extracting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            {extracting ? "Extracting..." : "Extract from Notes"}
+          </Button>
+        </div>
         {actionItems.length > 0 && (
           <div className="space-y-1.5 mb-3">
             {actionItems.map((item, idx) => (
