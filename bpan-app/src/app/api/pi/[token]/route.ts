@@ -1,0 +1,97 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createServiceClient } from "@/lib/supabase/service";
+
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ token: string }> }
+) {
+  try {
+    const { token } = await params;
+    const supabase = createServiceClient();
+
+    // Look up the portal access
+    const { data: portal, error: portalError } = await supabase
+      .from("advisor_portal")
+      .select("*")
+      .eq("token", token)
+      .single();
+
+    if (portalError || !portal) {
+      return NextResponse.json({ error: "Access denied" }, { status: 404 });
+    }
+
+    const userId = portal.user_id;
+    const canSee = portal.can_see || [];
+
+    // Update last_viewed_at
+    await supabase
+      .from("advisor_portal")
+      .update({ last_viewed_at: new Date().toISOString() })
+      .eq("id", portal.id);
+
+    // Fetch live data based on permissions
+    let animals: unknown[] = [];
+    let animalExperiments: unknown[] = [];
+
+    if (canSee.includes("animals") || canSee.includes("experiments") || canSee.includes("timeline")) {
+      const { data: animalsData } = await supabase
+        .from("animals")
+        .select("*, cohorts(name)")
+        .eq("user_id", userId)
+        .order("identifier");
+
+      animals = (animalsData || []).map((a: Record<string, unknown>) => ({
+        identifier: a.identifier,
+        sex: a.sex,
+        genotype: a.genotype,
+        birth_date: a.birth_date,
+        status: a.status,
+        cohort_name: (a.cohorts as { name: string } | null)?.name || "Unknown",
+        ear_tag: a.ear_tag,
+        cage_number: a.cage_number,
+        eeg_implanted: a.eeg_implanted,
+      }));
+    }
+
+    if (canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("results")) {
+      const { data: expsData } = await supabase
+        .from("animal_experiments")
+        .select("*, animals(identifier)")
+        .eq("user_id", userId)
+        .order("scheduled_date");
+
+      animalExperiments = (expsData || []).map((e: Record<string, unknown>) => ({
+        animal_identifier: (e.animals as { identifier: string } | null)?.identifier || "?",
+        experiment_type: e.experiment_type,
+        timepoint_age_days: e.timepoint_age_days,
+        scheduled_date: e.scheduled_date,
+        completed_date: e.completed_date,
+        status: e.status,
+        results_drive_url: canSee.includes("results") ? e.results_drive_url : null,
+      }));
+    }
+
+    // Stats
+    const totalAnimals = animals.length;
+    const activeAnimals = (animals as Array<{ status: string }>).filter((a) => a.status === "active").length;
+    const pendingExps = (animalExperiments as Array<{ status: string }>).filter((e) => e.status === "scheduled").length;
+    const completedExps = (animalExperiments as Array<{ status: string }>).filter((e) => e.status === "completed").length;
+
+    return NextResponse.json({
+      advisor_name: portal.advisor_name,
+      can_see: canSee,
+      animals,
+      experiments: animalExperiments,
+      stats: {
+        total_animals: totalAnimals,
+        active_animals: activeAnimals,
+        pending_experiments: pendingExps,
+        completed_experiments: completedExps,
+      },
+    });
+  } catch (err) {
+    console.error("PI portal error:", err);
+    return NextResponse.json({ error: "Failed to load" }, { status: 500 });
+  }
+}
+

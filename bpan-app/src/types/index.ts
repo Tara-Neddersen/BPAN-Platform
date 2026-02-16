@@ -265,3 +265,109 @@ export interface Figure {
   created_at: string;
   updated_at: string;
 }
+
+// ─── Mouse Colony Manager ────────────────────────────────────────────────────
+
+export interface BreederCage {
+  id: string;
+  user_id: string;
+  name: string;
+  strain: string | null;
+  location: string | null;
+  breeding_start: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Cohort {
+  id: string;
+  user_id: string;
+  breeder_cage_id: string | null;
+  name: string;
+  birth_date: string;
+  litter_size: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AnimalSex = "male" | "female";
+export type AnimalGenotype = "hemi" | "wt" | "het";
+export type AnimalStatus = "active" | "sacrificed" | "transferred" | "deceased";
+
+export interface Animal {
+  id: string;
+  user_id: string;
+  cohort_id: string;
+  identifier: string;
+  sex: AnimalSex;
+  genotype: AnimalGenotype;
+  ear_tag: string | null;
+  birth_date: string;
+  cage_number: string | null;
+  status: AnimalStatus;
+  eeg_implanted: boolean;
+  eeg_implant_date: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ExperimentType =
+  | "y_maze"
+  | "ldb"
+  | "marble"
+  | "nesting"
+  | "rotarod"
+  | "catwalk"
+  | "blood_draw"
+  | "eeg_implant"
+  | "eeg_recording"
+  | "handling";
+
+export type AnimalExperimentStatus = "pending" | "scheduled" | "in_progress" | "completed" | "skipped";
+
+export interface AnimalExperiment {
+  id: string;
+  animal_id: string;
+  user_id: string;
+  experiment_type: ExperimentType;
+  timepoint_age_days: number | null;
+  scheduled_date: string | null;
+  completed_date: string | null;
+  status: AnimalExperimentStatus;
+  results_drive_url: string | null;
+  results_notes: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ColonyTimepoint {
+  id: string;
+  user_id: string;
+  name: string;
+  age_days: number;
+  experiments: string[];
+  handling_days_before: number;
+  duration_days: number;
+  includes_eeg_implant: boolean;
+  eeg_recovery_days: number;
+  eeg_recording_days: number;
+  sort_order: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdvisorPortal {
+  id: string;
+  user_id: string;
+  advisor_name: string;
+  advisor_email: string | null;
+  token: string;
+  can_see: string[];
+  last_viewed_at: string | null;
+  created_at: string;
+}

@@ -25,6 +25,7 @@ const NAV_LINKS = [
   { href: "/notes", label: "Notes" },
   { href: "/experiments", label: "Experiments" },
   { href: "/results", label: "Results" },
+  { href: "/colony", label: "Colony" },
   { href: "/ideas", label: "Ideas" },
   { href: "/writing", label: "Writing" },
 ];

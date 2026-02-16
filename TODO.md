@@ -94,6 +94,24 @@
 - [x] Collaboration/sharing — create read-only snapshot links to share papers, notes, experiments, results, ideas, and hypotheses with PI or collaborators (no account needed)
 - [x] Performance optimization — dynamic imports for heavy client components, responsive grids throughout
 
+## Mouse Colony Manager ✅
+
+- [x] Breeder cage tracking — name, strain, location, breeding start date
+- [x] Cohort management — BPAN 1, 2, 3... linked to breeder cages, birth dates, litter sizes
+- [x] Individual animal records — identifier, sex, genotype (hemi/wt/het), ear tag, cage number, status
+- [x] Sorting — by cohort → sex → genotype (hemi male, wt male, het female, wt female)
+- [x] Filtering — by cohort, by genotype group
+- [x] Experiment timepoints — editable templates (60d, 120d, 180d) with configurable experiments per timepoint
+- [x] Auto-scheduling — one click to generate all experiments for an animal from timepoints + birth date
+- [x] Handling reminders — auto-scheduled X days before experiment start
+- [x] EEG workflow — implant surgery → recovery period → recording days, all auto-scheduled
+- [x] Per-animal experiment cards — grouped by timepoint, quick complete/skip buttons
+- [x] Google Drive results linking — paste Drive URL per experiment per animal
+- [x] Upcoming experiment alerts — countdown badges, "TODAY" warnings
+- [x] PI / Advisor live portal — persistent read-only link, no account needed, live data (animals, experiments, timeline, results)
+- [x] PI visibility controls — choose what advisor can see (animals, experiments, results, timeline)
+- [x] Quick stats — active animals, cohorts, scheduled experiments, completed experiments
+
 ---
 
 ## Infrastructure ✅
