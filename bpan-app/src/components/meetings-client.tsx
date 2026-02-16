@@ -17,6 +17,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import type { MeetingNote, ActionItem } from "@/types";
+import { syncMeetingActionsToTasks } from "@/app/(protected)/tasks/actions";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -581,8 +582,29 @@ export function MeetingsClient({ meetings: initMeetings, actions }: MeetingsClie
               meeting={editingMeeting}
               onSave={async (fd) => {
                 const result = await actions.updateMeetingNote(editingMeeting.id, fd);
-                if (result.error) toast.error(result.error);
-                else { toast.success("Saved!"); setEditingMeeting(null); }
+                if (result.error) {
+                  toast.error(result.error);
+                } else {
+                  toast.success("Saved!");
+                  // Auto-sync action items to Tasks
+                  try {
+                    const aiRaw = fd.get("action_items") as string;
+                    if (aiRaw) {
+                      const actionItems = JSON.parse(aiRaw) as ActionItem[];
+                      if (actionItems.length > 0) {
+                        const syncResult = await syncMeetingActionsToTasks(
+                          editingMeeting.id,
+                          editingMeeting.title,
+                          actionItems
+                        );
+                        if (syncResult.synced && syncResult.synced > 0) {
+                          toast.success(`${syncResult.synced} action item${syncResult.synced > 1 ? "s" : ""} synced to Tasks`);
+                        }
+                      }
+                    }
+                  } catch { /* sync is best-effort */ }
+                  setEditingMeeting(null);
+                }
               }}
               onClose={() => setEditingMeeting(null)}
               busy={busy}

@@ -3,9 +3,9 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import {
-  Plus, Edit, Trash2, Loader2, Check, X, Copy,
+  Plus, Edit, Trash2, Loader2, Check, X, Copy, Pencil,
   ExternalLink, Eye, ChevronDown, ChevronUp,
-  Calendar, AlertTriangle, Link2, Mouse,
+  Calendar, AlertTriangle, Link2, Mouse, Home,
   RefreshCw, FileText, CheckCircle2,
   Upload, CloudOff, Cloud,
 } from "lucide-react";
@@ -27,7 +27,7 @@ import { toast } from "sonner";
 import type {
   BreederCage, Cohort, Animal, AnimalExperiment,
   ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange, ColonyPhoto,
-  AnimalSex, AnimalGenotype, AnimalStatus,
+  HousingCage, AnimalSex, AnimalGenotype, AnimalStatus,
 } from "@/types";
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -98,6 +98,7 @@ interface ColonyClientProps {
   meetingNotes: MeetingNote[];
   cageChanges: CageChange[];
   colonyPhotos: ColonyPhoto[];
+  housingCages: HousingCage[];
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -125,6 +126,10 @@ interface ColonyClientProps {
     deleteCageChange: (id: string) => Promise<{ success?: boolean; error?: string }>;
     addColonyPhoto: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     deleteColonyPhoto: (id: string) => Promise<{ success?: boolean; error?: string }>;
+    createHousingCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
+    updateHousingCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
+    deleteHousingCage: (id: string) => Promise<{ success?: boolean; error?: string }>;
+    assignAnimalToCage: (animalId: string, housingCageId: string | null) => Promise<{ success?: boolean; error?: string }>;
   };
 }
 
@@ -165,6 +170,7 @@ export function ColonyClient({
   meetingNotes: initMeetings,
   cageChanges: initCageChanges,
   colonyPhotos: initPhotos,
+  housingCages: initHousingCages,
   actions,
 }: ColonyClientProps) {
   const supabaseRef = useRef(createBrowserClient());
@@ -179,6 +185,7 @@ export function ColonyClient({
   const [meetings, setMeetings] = useState(initMeetings);
   const [cageChanges, setCageChanges] = useState(initCageChanges);
   const [photos, setPhotos] = useState(initPhotos);
+  const [housingCages, setHousingCages] = useState(initHousingCages);
 
   // Refetch all colony data directly from Supabase (bypasses all caching)
   const refetchAll = useCallback(async () => {
@@ -191,7 +198,7 @@ export function ColonyClient({
         window.location.reload();
         return;
       }
-      const [r1, r2, r3, r4, r5, r6, r7, r8, r9] = await Promise.all([
+      const [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] = await Promise.all([
         sb.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
         sb.from("cohorts").select("*").eq("user_id", user.id).order("name"),
         sb.from("animals").select("*").eq("user_id", user.id).order("identifier"),
@@ -201,6 +208,7 @@ export function ColonyClient({
         sb.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
         sb.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
         sb.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
+        sb.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
       ]);
       setCages((r1.data || []) as BreederCage[]);
       setCohorts((r2.data || []) as Cohort[]);
@@ -211,6 +219,7 @@ export function ColonyClient({
       setMeetings((r7.data || []) as MeetingNote[]);
       setCageChanges((r8.data || []) as CageChange[]);
       setPhotos((r9.data || []) as ColonyPhoto[]);
+      setHousingCages((r10.data || []) as HousingCage[]);
     } catch (err) {
       console.error("refetchAll error:", err);
       // Fallback: force full page reload
@@ -224,10 +233,12 @@ export function ColonyClient({
   const [showAddTP, setShowAddTP] = useState(false);
   const [showAddPI, setShowAddPI] = useState(false);
   const [showGenerateCageChanges, setShowGenerateCageChanges] = useState(false);
+  const [showAddHousingCage, setShowAddHousingCage] = useState(false);
   const [editingCage, setEditingCage] = useState<BreederCage | null>(null);
   const [editingCohort, setEditingCohort] = useState<Cohort | null>(null);
   const [editingAnimal, setEditingAnimal] = useState<Animal | null>(null);
   const [editingTP, setEditingTP] = useState<ColonyTimepoint | null>(null);
+  const [editingHousingCage, setEditingHousingCage] = useState<HousingCage | null>(null);
   const [selectedAnimal, setSelectedAnimal] = useState<Animal | null>(null);
   const [busy, setBusy] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
@@ -516,6 +527,7 @@ export function ColonyClient({
           <TabsTrigger value="cohorts" className="flex-1 min-w-[80px]">Cohorts</TabsTrigger>
           <TabsTrigger value="timepoints" className="flex-1 min-w-[80px]">Timepoints</TabsTrigger>
           <TabsTrigger value="breeders" className="flex-1 min-w-[80px]">Breeders</TabsTrigger>
+          <TabsTrigger value="housing" className="flex-1 min-w-[80px]">Housing</TabsTrigger>
           <TabsTrigger value="cages" className="flex-1 min-w-[80px]">Cage Changes</TabsTrigger>
           <TabsTrigger value="pi" className="flex-1 min-w-[80px]">PI Access</TabsTrigger>
         </TabsList>
@@ -740,6 +752,120 @@ export function ColonyClient({
               })}
             </div>
           )}
+        </TabsContent>
+
+        {/* ─── Housing Cages Tab ──────────────────────────────── */}
+        <TabsContent value="housing" className="space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-muted-foreground">
+              Track which mice are in which cage (max 5 per cage).
+            </p>
+            <Button onClick={() => setShowAddHousingCage(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Cage</Button>
+          </div>
+
+          {housingCages.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <Home className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p>No housing cages yet. Create one to start assigning animals.</p>
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {housingCages.filter(hc => hc.is_active).map((hc) => {
+                const occupants = animals.filter(a => a.housing_cage_id === hc.id && a.status === "active");
+                const isFull = occupants.length >= hc.max_occupancy;
+                return (
+                  <Card key={hc.id} className={isFull ? "border-orange-300" : ""}>
+                    <CardHeader className="py-3">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                          <Home className="h-4 w-4" />
+                          {hc.cage_label}
+                          <Badge variant="outline" className="text-[10px]">{hc.cage_type}</Badge>
+                        </CardTitle>
+                        <div className="flex items-center gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => setEditingHousingCage(hc)}>
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => act(actions.deleteHousingCage(hc.id))}>
+                            <Trash2 className="h-3 w-3 text-destructive" />
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="py-2 space-y-2">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>{hc.location || "No location"}</span>
+                        <Badge className={`text-[10px] ${isFull ? "bg-orange-100 text-orange-700" : "bg-green-100 text-green-700"}`}>
+                          {occupants.length}/{hc.max_occupancy}
+                        </Badge>
+                      </div>
+                      {occupants.length > 0 ? (
+                        <div className="space-y-1">
+                          {occupants.map(a => (
+                            <div key={a.id} className="flex items-center justify-between text-xs bg-muted/50 rounded px-2 py-1">
+                              <div className="flex items-center gap-1.5">
+                                <Mouse className="h-3 w-3" />
+                                <span className="font-medium">{a.identifier}</span>
+                                <span className="text-muted-foreground">{genotypeLabel(a.sex, a.genotype)}</span>
+                              </div>
+                              <Button variant="ghost" size="sm" className="h-5 px-1 text-[10px]"
+                                onClick={() => act(actions.assignAnimalToCage(a.id, null))}>
+                                Remove
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground italic">Empty cage</p>
+                      )}
+                      {!isFull && (
+                        <Select onValueChange={(animalId) => act(actions.assignAnimalToCage(animalId, hc.id))}>
+                          <SelectTrigger className="h-7 text-xs">
+                            <SelectValue placeholder="+ Assign animal..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {animals
+                              .filter(a => a.status === "active" && !a.housing_cage_id)
+                              .map(a => (
+                                <SelectItem key={a.id} value={a.id}>
+                                  {a.identifier} ({genotypeLabel(a.sex, a.genotype)})
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      {hc.notes && <p className="text-xs text-muted-foreground">{hc.notes}</p>}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Unhoused animals */}
+          {(() => {
+            const unhoused = animals.filter(a => a.status === "active" && !a.housing_cage_id);
+            if (unhoused.length === 0) return null;
+            return (
+              <Card className="border-dashed">
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm text-muted-foreground">
+                    Unhoused Animals ({unhoused.length})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="py-2">
+                  <div className="flex flex-wrap gap-2">
+                    {unhoused.map(a => (
+                      <Badge key={a.id} variant="outline" className="text-xs gap-1">
+                        <Mouse className="h-3 w-3" />
+                        {a.identifier}
+                      </Badge>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
         </TabsContent>
 
         {/* ─── Cage Changes Tab ────────────────────────────────── */}
@@ -1184,6 +1310,65 @@ export function ColonyClient({
             <DialogFooter>
               <Button variant="outline" type="button" onClick={() => setShowAddPI(false)}>Cancel</Button>
               <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Create & Copy Link</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Add/Edit Housing Cage Dialog ──────────────────────── */}
+      <Dialog open={showAddHousingCage || !!editingHousingCage} onOpenChange={(v) => { if (!v) { setShowAddHousingCage(false); setEditingHousingCage(null); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{editingHousingCage ? "Edit" : "Add"} Housing Cage</DialogTitle></DialogHeader>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const fd = new FormData(e.currentTarget);
+              act(editingHousingCage
+                ? actions.updateHousingCage(editingHousingCage.id, fd)
+                : actions.createHousingCage(fd)
+              ).then(() => { setShowAddHousingCage(false); setEditingHousingCage(null); });
+            }}
+          >
+            <div>
+              <Label className="text-xs">Cage Label *</Label>
+              <Input name="cage_label" required defaultValue={editingHousingCage?.cage_label || ""} placeholder="e.g. HC-01" />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label className="text-xs">Location</Label>
+                <Input name="location" defaultValue={editingHousingCage?.location || ""} placeholder="Room, Rack, Shelf" />
+              </div>
+              <div>
+                <Label className="text-xs">Max Mice</Label>
+                <Input name="max_occupancy" type="number" min="1" max="10" defaultValue={editingHousingCage?.max_occupancy || 5} />
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Cage Type</Label>
+              <Select name="cage_type" defaultValue={editingHousingCage?.cage_type || "standard"}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="standard">Standard</SelectItem>
+                  <SelectItem value="eeg">EEG</SelectItem>
+                  <SelectItem value="recovery">Recovery</SelectItem>
+                  <SelectItem value="quarantine">Quarantine</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Notes</Label>
+              <Textarea name="notes" defaultValue={editingHousingCage?.notes || ""} rows={2} />
+            </div>
+            {editingHousingCage && (
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" name="is_active" value="true" defaultChecked={editingHousingCage.is_active} />
+                Active
+              </label>
+            )}
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => { setShowAddHousingCage(false); setEditingHousingCage(null); }}>Cancel</Button>
+              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}{editingHousingCage ? "Save" : "Add Cage"}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

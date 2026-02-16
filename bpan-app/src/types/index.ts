@@ -306,6 +306,7 @@ export interface Animal {
   ear_tag: string | null;
   birth_date: string;
   cage_number: string | null;
+  housing_cage_id: string | null;
   status: AnimalStatus;
   eeg_implanted: boolean;
   eeg_implant_date: string | null;
@@ -423,4 +424,46 @@ export interface ColonyPhoto {
   sort_order: number;
   show_in_portal: boolean;
   created_at: string;
+}
+
+// ─── Housing Cages ──────────────────────────────────────────────────────────
+
+export interface HousingCage {
+  id: string;
+  user_id: string;
+  cage_label: string;
+  location: string | null;
+  max_occupancy: number;
+  cage_type: "standard" | "eeg" | "recovery" | "quarantine";
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Unified Tasks ──────────────────────────────────────────────────────────
+
+export type TaskPriority = "low" | "medium" | "high" | "urgent";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "skipped";
+export type TaskSource = "manual" | "meeting_action" | "experiment" | "cage_change" | "animal_care" | "reminder";
+
+export interface Task {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  due_date: string | null;
+  due_time: string | null;
+  priority: TaskPriority;
+  status: TaskStatus;
+  completed_at: string | null;
+  source_type: TaskSource | null;
+  source_id: string | null;
+  source_label: string | null;
+  is_recurring: boolean;
+  recurrence_rule: string | null;
+  tags: string[];
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
 }

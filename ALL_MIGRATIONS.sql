@@ -864,5 +864,63 @@ CREATE TRIGGER on_drive_tokens_updated
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 -- ============================================================
+-- 015: Housing Cages (where animals currently live)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.housing_cages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  cage_label text NOT NULL,
+  location text,
+  max_occupancy int DEFAULT 5,
+  cage_type text DEFAULT 'standard',
+  notes text,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+ALTER TABLE public.housing_cages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own housing cages" ON public.housing_cages;
+CREATE POLICY "Users manage own housing cages" ON public.housing_cages FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+CREATE OR REPLACE TRIGGER on_housing_cages_updated BEFORE UPDATE ON public.housing_cages FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'animals' AND column_name = 'housing_cage_id') THEN
+    ALTER TABLE public.animals ADD COLUMN housing_cage_id uuid REFERENCES public.housing_cages(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- ============================================================
+-- 016: Unified Tasks
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.tasks (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  title text NOT NULL,
+  description text,
+  due_date date,
+  due_time time,
+  priority text DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+  status text DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'skipped')),
+  completed_at timestamptz,
+  source_type text CHECK (source_type IN ('manual', 'meeting_action', 'experiment', 'cage_change', 'animal_care', 'reminder')),
+  source_id text,
+  source_label text,
+  is_recurring boolean DEFAULT false,
+  recurrence_rule text,
+  tags text[] DEFAULT '{}',
+  notes text,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+ALTER TABLE public.tasks ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own tasks" ON public.tasks;
+CREATE POLICY "Users manage own tasks" ON public.tasks FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+CREATE OR REPLACE TRIGGER on_tasks_updated BEFORE UPDATE ON public.tasks FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+-- ============================================================
 -- DONE! All tables created successfully.
 -- ============================================================

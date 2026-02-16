@@ -1,0 +1,66 @@
+import { createClient } from "@/lib/supabase/server";
+import { TasksClient } from "@/components/tasks-client";
+import type { Task } from "@/types";
+import {
+  createTask,
+  updateTask,
+  toggleTask,
+  deleteTask,
+} from "./actions";
+
+export default async function TasksPage() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data: tasks } = await supabase
+    .from("tasks")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("due_date", { ascending: true, nullsFirst: false });
+
+  // Also get upcoming experiments & cage changes for the overview
+  const { data: upcomingExps } = await supabase
+    .from("animal_experiments")
+    .select("*, animals(identifier)")
+    .eq("user_id", user.id)
+    .in("status", ["pending", "scheduled"])
+    .not("scheduled_date", "is", null)
+    .order("scheduled_date")
+    .limit(20);
+
+  const { data: upcomingCageChanges } = await supabase
+    .from("cage_changes")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("is_completed", false)
+    .order("scheduled_date")
+    .limit(10);
+
+  const { data: meetings } = await supabase
+    .from("meeting_notes")
+    .select("id, title, action_items")
+    .eq("user_id", user.id)
+    .order("meeting_date", { ascending: false })
+    .limit(5);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Tasks & Schedule</h1>
+        <p className="text-muted-foreground">
+          Everything you need to do — meetings, experiments, cage changes, and custom tasks in one place.
+        </p>
+      </div>
+
+      <TasksClient
+        tasks={(tasks || []) as Task[]}
+        upcomingExperiments={upcomingExps || []}
+        upcomingCageChanges={upcomingCageChanges || []}
+        recentMeetings={meetings || []}
+        actions={{ createTask, updateTask, toggleTask, deleteTask }}
+      />
+    </div>
+  );
+}
+

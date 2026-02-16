@@ -600,3 +600,93 @@ export async function deleteColonyPhoto(id: string) {
   return { success: true };
 }
 
+// ─── Housing Cages ──────────────────────────────────────────────────────
+
+export async function createHousingCage(formData: FormData) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase.from("housing_cages").insert({
+    user_id: user.id,
+    cage_label: formData.get("cage_label") as string,
+    location: (formData.get("location") as string) || null,
+    max_occupancy: parseInt(formData.get("max_occupancy") as string) || 5,
+    cage_type: (formData.get("cage_type") as string) || "standard",
+    notes: (formData.get("notes") as string) || null,
+  });
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
+export async function updateHousingCage(id: string, formData: FormData) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase
+    .from("housing_cages")
+    .update({
+      cage_label: formData.get("cage_label") as string,
+      location: (formData.get("location") as string) || null,
+      max_occupancy: parseInt(formData.get("max_occupancy") as string) || 5,
+      cage_type: (formData.get("cage_type") as string) || "standard",
+      notes: (formData.get("notes") as string) || null,
+      is_active: formData.get("is_active") === "true",
+    })
+    .eq("id", id)
+    .eq("user_id", user.id);
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
+export async function deleteHousingCage(id: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase.from("housing_cages").delete().eq("id", id).eq("user_id", user.id);
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
+export async function assignAnimalToCage(animalId: string, housingCageId: string | null) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  // If assigning to a cage, check occupancy
+  if (housingCageId) {
+    const { data: cage } = await supabase
+      .from("housing_cages")
+      .select("max_occupancy")
+      .eq("id", housingCageId)
+      .eq("user_id", user.id)
+      .single();
+
+    const { count } = await supabase
+      .from("animals")
+      .select("*", { count: "exact", head: true })
+      .eq("housing_cage_id", housingCageId)
+      .eq("user_id", user.id)
+      .neq("id", animalId);
+
+    if (cage && count !== null && count >= cage.max_occupancy) {
+      return { error: `Cage is full (${count}/${cage.max_occupancy} mice). Remove an animal first.` };
+    }
+  }
+
+  const { error } = await supabase
+    .from("animals")
+    .update({ housing_cage_id: housingCageId })
+    .eq("id", animalId)
+    .eq("user_id", user.id);
+
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true };
+}
+
