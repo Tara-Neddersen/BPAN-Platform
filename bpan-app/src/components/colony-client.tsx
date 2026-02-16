@@ -1393,120 +1393,127 @@ export function ColonyClient({
  * 100% free, no API calls, no limits.
  * Works in Chrome, Edge, Safari (most browsers).
  */
-function useSpeechToText(onTranscript: (text: string, isFinal: boolean) => void) {
+function useSpeechToText(onTranscript: (text: string) => void) {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
-  const wantListeningRef = useRef(false);
-  const onTranscriptRef = useRef(onTranscript);
-  const finalTranscriptRef = useRef("");
-  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const SpeechRecognitionRef = useRef<typeof SpeechRecognition | null>(null);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const wantRef = useRef(false);
+  const cbRef = useRef(onTranscript);
+  const committedRef = useRef("");
+  const recRef = useRef<SpeechRecognition | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
+  // Always point to the latest callback
+  cbRef.current = onTranscript;
 
+  // Detect browser support
   useEffect(() => {
-    const SR = (window as unknown as { SpeechRecognition?: typeof SpeechRecognition; webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition
-      || (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
-    SpeechRecognitionRef.current = SR || null;
-    setIsSupported(!!SR);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    setIsSupported(!!(w.SpeechRecognition || w.webkitSpeechRecognition));
     return () => {
-      wantListeningRef.current = false;
-      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch { /* ignore */ }
-      }
+      wantRef.current = false;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (recRef.current) try { recRef.current.abort(); } catch { /* */ }
     };
   }, []);
 
-  function createRecognition() {
-    const SR = SpeechRecognitionRef.current;
-    if (!SR) return null;
-    const r = new SR();
-    r.continuous = true;
-    r.interimResults = true;
-    r.lang = "en-US";
+  function startRec() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!SR || !wantRef.current) return;
 
-    r.onresult = (event: SpeechRecognitionEvent) => {
-      let interim = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const t = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscriptRef.current += t + " ";
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    rec.maxAlternatives = 1;
+
+    rec.onresult = (e: SpeechRecognitionEvent) => {
+      // Build the full transcript: committed text + current session results
+      let sessionFinal = "";
+      let sessionInterim = "";
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          sessionFinal += e.results[i][0].transcript;
         } else {
-          interim += t;
+          sessionInterim += e.results[i][0].transcript;
         }
       }
-      // Send full text (committed + in-progress) to the callback
-      const fullText = (finalTranscriptRef.current + interim).trim();
-      if (fullText) {
-        onTranscriptRef.current(fullText, !interim);
-      }
+      // Combine: previously committed + this session's final + interim
+      const full = committedRef.current + sessionFinal + sessionInterim;
+      cbRef.current(full);
     };
 
-    r.onerror = (event: SpeechRecognitionErrorEvent) => {
-      console.warn("Speech error:", event.error);
-      if (event.error === "not-allowed" || event.error === "service-not-available") {
-        wantListeningRef.current = false;
+    rec.onerror = (e: SpeechRecognitionErrorEvent) => {
+      if (e.error === "not-allowed" || e.error === "service-not-available") {
+        wantRef.current = false;
         setIsListening(false);
-        toast.error("Microphone access denied or speech service unavailable.");
+        toast.error(e.error === "not-allowed"
+          ? "Microphone access was denied. Please allow it in your browser settings."
+          : "Speech service unavailable. Try Chrome for best results.");
       }
+      // Other errors (no-speech, aborted, network) → let onend restart
     };
 
-    r.onend = () => {
-      if (wantListeningRef.current) {
-        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        restartTimerRef.current = setTimeout(() => {
-          if (!wantListeningRef.current) return;
-          try {
-            const fresh = createRecognition();
-            if (fresh) {
-              recognitionRef.current = fresh;
-              fresh.start();
-            }
-          } catch (err) {
-            console.warn("Restart failed:", err);
-            wantListeningRef.current = false;
-            setIsListening(false);
-          }
+    rec.onend = () => {
+      // Commit any final results from this session before restarting
+      if (rec._lastResults) {
+        committedRef.current += rec._lastResults;
+        rec._lastResults = "";
+      }
+      // Auto-restart if we still want to listen
+      if (wantRef.current) {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => {
+          if (wantRef.current) startRec();
         }, 300);
       }
     };
 
-    return r;
+    // Track final results so we can commit them on restart
+    const origOnResult = rec.onresult;
+    rec.onresult = (e: SpeechRecognitionEvent) => {
+      let sf = "";
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) sf += e.results[i][0].transcript;
+      }
+      rec._lastResults = sf;
+      origOnResult.call(rec, e);
+    };
+
+    recRef.current = rec;
+    try {
+      rec.start();
+    } catch {
+      // If start fails, retry after a delay
+      if (wantRef.current) {
+        timerRef.current = setTimeout(() => { if (wantRef.current) startRec(); }, 500);
+      }
+    }
   }
 
   function toggle() {
-    if (!SpeechRecognitionRef.current) return;
-    if (wantListeningRef.current) {
-      wantListeningRef.current = false;
+    if (wantRef.current) {
+      // Stop
+      wantRef.current = false;
       setIsListening(false);
-      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch { /* ignore */ }
-      }
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (recRef.current) try { recRef.current.stop(); } catch { /* */ }
     } else {
-      try {
-        finalTranscriptRef.current = "";
-        const r = createRecognition();
-        if (!r) return;
-        recognitionRef.current = r;
-        r.start();
-        wantListeningRef.current = true;
-        setIsListening(true);
-      } catch {
-        toast.error("Could not start speech recognition. Allow microphone access and try again.");
-      }
+      // Start
+      committedRef.current = "";
+      wantRef.current = true;
+      setIsListening(true);
+      startRec();
     }
   }
 
   function stop() {
-    wantListeningRef.current = false;
+    wantRef.current = false;
     setIsListening(false);
-    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch { /* ignore */ }
-    }
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (recRef.current) try { recRef.current.stop(); } catch { /* */ }
   }
 
   return { isListening, isSupported, toggle, stop };
@@ -1531,21 +1538,17 @@ function MeetingDetail({
   const [aiSummary, setAiSummary] = useState(meeting.ai_summary || "");
   const [summarizing, setSummarizing] = useState(false);
 
-  // Speech-to-text: appends transcribed text to content
+  // Speech-to-text: live transcript replaces content below the base
   const baseContentRef = useRef(content);
-  const { isListening, isSupported, toggle: toggleMic, stop: stopMic } = useSpeechToText((text, isFinal) => {
+  const { isListening, isSupported, toggle: toggleMic, stop: stopMic } = useSpeechToText((text) => {
     const base = baseContentRef.current;
-    const prefix = isFinal ? "" : "🎙️ ";
-    setContent(base ? base + "\n\n" + prefix + text : prefix + text);
+    setContent(base ? base + "\n\n" + text : text);
   });
 
-  // When mic starts, snapshot the current content as the "base"
+  // Snapshot current content when mic starts
   function handleToggleMic() {
     if (!isListening) {
       baseContentRef.current = content;
-    } else {
-      // When stopping, clean up the emoji prefix
-      setContent((prev) => prev.replace(/🎙️ /g, ""));
     }
     toggleMic();
   }
