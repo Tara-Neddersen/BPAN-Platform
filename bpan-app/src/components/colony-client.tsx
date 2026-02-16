@@ -6,7 +6,7 @@ import {
   ExternalLink, Eye, ChevronDown, ChevronUp,
   Calendar, AlertTriangle, Link2, Mouse,
   MessageSquare, RefreshCw, FileText, CheckCircle2,
-  ImageIcon, Upload, CloudOff, Cloud,
+  ImageIcon, Upload, CloudOff, Cloud, Mic, MicOff, Sparkles,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -1333,6 +1333,95 @@ export function ColonyClient({
   );
 }
 
+// ─── Speech-to-Text Hook ────────────────────────────────────────────────
+
+/**
+ * Uses the browser's built-in Web Speech API.
+ * 100% free, no API calls, no limits.
+ * Works in Chrome, Edge, Safari (most browsers).
+ */
+function useSpeechToText(onTranscript: (text: string) => void) {
+  const [isListening, setIsListening] = useState(false);
+  const [isSupported, setIsSupported] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  useEffect(() => {
+    const SpeechRecognition = (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition }).SpeechRecognition
+      || (window as unknown as { webkitSpeechRecognition?: typeof window.SpeechRecognition }).webkitSpeechRecognition;
+    setIsSupported(!!SpeechRecognition);
+
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      let finalTranscript = "";
+
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + " ";
+            onTranscript(finalTranscript.trim());
+          } else {
+            interim += transcript;
+          }
+        }
+      };
+
+      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        console.error("Speech recognition error:", event.error);
+        if (event.error !== "no-speech") {
+          setIsListening(false);
+        }
+      };
+
+      recognition.onend = () => {
+        // Auto-restart if still supposed to be listening
+        if (recognitionRef.current && isListening) {
+          try { recognition.start(); } catch { /* already started */ }
+        }
+      };
+
+      recognitionRef.current = recognition;
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch { /* ignore */ }
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function toggle() {
+    if (!recognitionRef.current) return;
+
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+      } catch {
+        toast.error("Could not start speech recognition. Make sure you've allowed microphone access.");
+      }
+    }
+  }
+
+  function stop() {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch { /* ignore */ }
+    }
+    setIsListening(false);
+  }
+
+  return { isListening, isSupported, toggle, stop };
+}
+
 // ─── Meeting Detail Sub-component ───────────────────────────────────────
 
 function MeetingDetail({
@@ -1349,6 +1438,60 @@ function MeetingDetail({
   const [content, setContent] = useState(meeting.content);
   const [actionItems, setActionItems] = useState<ActionItem[]>(meeting.action_items || []);
   const [newAction, setNewAction] = useState("");
+  const [aiSummary, setAiSummary] = useState(meeting.ai_summary || "");
+  const [summarizing, setSummarizing] = useState(false);
+
+  // Speech-to-text: appends transcribed text to content
+  const transcriptRef = useRef("");
+  const baseContentRef = useRef(content);
+  const { isListening, isSupported, toggle: toggleMic, stop: stopMic } = useSpeechToText((text) => {
+    transcriptRef.current = text;
+    setContent(baseContentRef.current ? baseContentRef.current + "\n\n🎙️ " + text : "🎙️ " + text);
+  });
+
+  // When mic starts, snapshot the current content as the "base"
+  function handleToggleMic() {
+    if (!isListening) {
+      baseContentRef.current = content;
+      transcriptRef.current = "";
+    } else {
+      // When stopping, remove the emoji prefix and make it clean
+      setContent((prev) => prev.replace(/🎙️ /g, ""));
+    }
+    toggleMic();
+  }
+
+  // Stop mic when dialog closes
+  useEffect(() => {
+    return () => { stopMic(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleSummarize() {
+    if (!content?.trim()) {
+      toast.error("Write some notes first, then summarize.");
+      return;
+    }
+    setSummarizing(true);
+    try {
+      const res = await fetch("/api/note-assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "meeting_summary",
+          text: content,
+          actionItems: actionItems.map((a) => `${a.done ? "[DONE]" : "[ ]"} ${a.text}`).join("\n"),
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setAiSummary(data.result || data.text || "");
+      toast.success("Summary generated!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to summarize");
+    }
+    setSummarizing(false);
+  }
 
   function addAction() {
     if (!newAction.trim()) return;
@@ -1365,9 +1508,11 @@ function MeetingDetail({
   }
 
   function handleSave() {
+    stopMic(); // Stop recording if still going
     const fd = new FormData();
     fd.set("content", content);
     fd.set("action_items", JSON.stringify(actionItems));
+    if (aiSummary) fd.set("ai_summary", aiSummary);
     onSave(fd);
   }
 
@@ -1386,13 +1531,37 @@ function MeetingDetail({
       )}
 
       <div>
-        <Label className="text-xs mb-1 block">Meeting Notes</Label>
+        <div className="flex items-center justify-between mb-1">
+          <Label className="text-xs">Meeting Notes</Label>
+          <div className="flex items-center gap-2">
+            {isListening && (
+              <div className="flex items-center gap-1.5 text-xs text-red-500 animate-pulse">
+                <div className="h-2 w-2 rounded-full bg-red-500" />
+                Recording...
+              </div>
+            )}
+            {isSupported ? (
+              <Button
+                variant={isListening ? "destructive" : "outline"}
+                size="sm"
+                className="h-7 text-xs gap-1"
+                onClick={handleToggleMic}
+                type="button"
+              >
+                {isListening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+                {isListening ? "Stop" : "Dictate"}
+              </Button>
+            ) : (
+              <span className="text-[10px] text-muted-foreground">Speech not supported in this browser</span>
+            )}
+          </div>
+        </div>
         <Textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
           rows={10}
-          placeholder="Type your meeting notes here..."
-          className="font-mono text-sm"
+          placeholder={isListening ? "Listening... speak now 🎙️" : "Type your meeting notes here, or click Dictate to speak..."}
+          className={`font-mono text-sm ${isListening ? "border-red-300 dark:border-red-700" : ""}`}
         />
       </div>
 
@@ -1434,18 +1603,34 @@ function MeetingDetail({
         </div>
       </div>
 
-      {meeting.ai_summary && (
-        <>
-          <Separator />
-          <div>
-            <Label className="text-xs mb-1 block">AI Summary</Label>
-            <p className="text-sm text-muted-foreground bg-muted p-3 rounded-md">{meeting.ai_summary}</p>
-          </div>
-        </>
-      )}
+      <Separator />
+
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <Label className="text-xs">AI Summary</Label>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs gap-1"
+            onClick={handleSummarize}
+            disabled={summarizing}
+            type="button"
+          >
+            {summarizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            {summarizing ? "Summarizing..." : aiSummary ? "Re-summarize" : "Summarize Notes"}
+          </Button>
+        </div>
+        {aiSummary ? (
+          <div className="text-sm bg-muted p-3 rounded-md whitespace-pre-wrap">{aiSummary}</div>
+        ) : (
+          <p className="text-xs text-muted-foreground italic">
+            Click &quot;Summarize Notes&quot; to generate an AI summary of your meeting notes. Uses your free Gemini API.
+          </p>
+        )}
+      </div>
 
       <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Close</Button>
+        <Button variant="outline" onClick={() => { stopMic(); onClose(); }}>Close</Button>
         <Button onClick={handleSave} disabled={busy}>
           {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
           Save Changes

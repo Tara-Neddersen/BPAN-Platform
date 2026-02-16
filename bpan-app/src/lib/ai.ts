@@ -348,3 +348,49 @@ Highlighted text to extract methods from: "${highlight}"`;
   );
 }
 
+// ─── Meeting Notes Summary ──────────────────────────────────────────────────
+
+export async function summarizeMeetingNotes(
+  notes: string,
+  actionItems: string
+): Promise<string> {
+  const systemInstruction =
+    "You are a research assistant helping a biomedical PhD student. Summarize their advisor meeting notes into a clear, concise summary.";
+
+  const prompt = `Summarize the following meeting notes into a structured summary with these sections:
+
+## Key Discussion Points
+- (bullet points of what was discussed)
+
+## Decisions Made
+- (any decisions or agreements reached)
+
+## Action Items
+- (list of things to do, who's responsible if mentioned)
+
+## Notes for Next Meeting
+- (topics to follow up on)
+
+Keep it concise but don't miss important details. Use the action items list to inform the summary.
+
+MEETING NOTES:
+${notes}
+
+${actionItems ? `ACTION ITEMS:\n${actionItems}` : ""}`;
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (apiKey) {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    return callGeminiWithFallback(genAI, systemInstruction, prompt);
+  }
+
+  const orKey = process.env.OPENROUTER_API_KEY;
+  if (orKey) {
+    return callOpenRouterWithFallback(orKey, systemInstruction, prompt, 800);
+  }
+
+  throw new Error(
+    "AI unavailable — no API keys configured."
+  );
+}
+

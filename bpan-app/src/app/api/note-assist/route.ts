@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { structureNote } from "@/lib/ai";
+import { structureNote, summarizeMeetingNotes } from "@/lib/ai";
 import { corsHeaders, corsOptionsResponse } from "@/lib/cors";
 
 export async function OPTIONS() {
@@ -8,6 +8,22 @@ export async function OPTIONS() {
 
 export async function POST(request: Request) {
   try {
+    const body = await request.json();
+
+    // ─── Meeting Summary ────────────────────────────────────
+    if (body.action === "meeting_summary") {
+      const { text, actionItems } = body;
+      if (!text) {
+        return NextResponse.json(
+          { error: "Meeting notes text is required" },
+          { status: 400, headers: corsHeaders() }
+        );
+      }
+      const result = await summarizeMeetingNotes(text, actionItems || "");
+      return NextResponse.json({ result }, { headers: corsHeaders() });
+    }
+
+    // ─── Original: Structure Note ───────────────────────────
     const {
       highlight,
       paperTitle,
@@ -15,7 +31,7 @@ export async function POST(request: Request) {
       authors,
       journal,
       pubDate,
-    } = await request.json();
+    } = body;
 
     if (!highlight) {
       return NextResponse.json(
