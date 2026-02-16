@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build
+.next/
+out/
+build/
+
+# Environment
+.env*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads (local dev only, prod uses Supabase Storage)
+public/uploads/
+
+# IDE
+.vscode/
+.idea/
+
+# Debug
+*.log
+npm-debug.log*
