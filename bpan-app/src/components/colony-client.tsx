@@ -6,8 +6,8 @@ import {
   Plus, Edit, Trash2, Loader2, Check, X, Copy,
   ExternalLink, Eye, ChevronDown, ChevronUp,
   Calendar, AlertTriangle, Link2, Mouse,
-  MessageSquare, RefreshCw, FileText, CheckCircle2,
-  ImageIcon, Upload, CloudOff, Cloud, Mic, MicOff, Sparkles,
+  RefreshCw, FileText, CheckCircle2,
+  Upload, CloudOff, Cloud,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,7 @@ import { toast } from "sonner";
 import type {
   BreederCage, Cohort, Animal, AnimalExperiment,
   ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange, ColonyPhoto,
-  AnimalSex, AnimalGenotype, AnimalStatus, ActionItem,
+  AnimalSex, AnimalGenotype, AnimalStatus,
 } from "@/types";
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -223,11 +223,11 @@ export function ColonyClient({
   const [showAddCage, setShowAddCage] = useState(false);
   const [showAddTP, setShowAddTP] = useState(false);
   const [showAddPI, setShowAddPI] = useState(false);
-  const [showAddMeeting, setShowAddMeeting] = useState(false);
   const [showGenerateCageChanges, setShowGenerateCageChanges] = useState(false);
-  const [showAddPhoto, setShowAddPhoto] = useState(false);
+  const [editingCage, setEditingCage] = useState<BreederCage | null>(null);
+  const [editingCohort, setEditingCohort] = useState<Cohort | null>(null);
+  const [editingAnimal, setEditingAnimal] = useState<Animal | null>(null);
   const [editingTP, setEditingTP] = useState<ColonyTimepoint | null>(null);
-  const [editingMeeting, setEditingMeeting] = useState<MeetingNote | null>(null);
   const [selectedAnimal, setSelectedAnimal] = useState<Animal | null>(null);
   const [busy, setBusy] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
@@ -516,9 +516,7 @@ export function ColonyClient({
           <TabsTrigger value="cohorts" className="flex-1 min-w-[80px]">Cohorts</TabsTrigger>
           <TabsTrigger value="timepoints" className="flex-1 min-w-[80px]">Timepoints</TabsTrigger>
           <TabsTrigger value="breeders" className="flex-1 min-w-[80px]">Breeders</TabsTrigger>
-          <TabsTrigger value="meetings" className="flex-1 min-w-[80px]">Meetings</TabsTrigger>
           <TabsTrigger value="cages" className="flex-1 min-w-[80px]">Cage Changes</TabsTrigger>
-          <TabsTrigger value="photos" className="flex-1 min-w-[80px]">Photos</TabsTrigger>
           <TabsTrigger value="pi" className="flex-1 min-w-[80px]">PI Access</TabsTrigger>
         </TabsList>
 
@@ -624,9 +622,14 @@ export function ColonyClient({
                             {c.litter_size ? ` · Litter: ${c.litter_size}` : ""}
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteCohort(c.id))}>
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </Button>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => setEditingCohort(c)}>
+                            <Edit className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => act(actions.deleteCohort(c.id))}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -722,62 +725,14 @@ export function ColonyClient({
                             {c.location || "No location"}{c.breeding_start ? ` · Since: ${c.breeding_start}` : ""}
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteBreederCage(c.id))}>
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
-        </TabsContent>
-
-        {/* ─── Meetings Tab ────────────────────────────────────── */}
-        <TabsContent value="meetings" className="space-y-4">
-          <div className="flex justify-between items-center">
-            <p className="text-sm text-muted-foreground">
-              Keep notes from advisor meetings — track action items and decisions.
-            </p>
-            <Button onClick={() => setShowAddMeeting(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> New Meeting</Button>
-          </div>
-          {meetings.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <MessageSquare className="h-10 w-10 mx-auto mb-3 opacity-30" />
-              <p>No meeting notes yet. Click &quot;New Meeting&quot; to start.</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {meetings.map((m) => {
-                const actionCount = m.action_items?.length || 0;
-                const doneActions = m.action_items?.filter((a: ActionItem) => a.done).length || 0;
-                return (
-                  <Card key={m.id} className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => setEditingMeeting(m)}>
-                    <CardContent className="py-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-semibold text-sm">{m.title}</span>
-                            <Badge variant="outline" className="text-xs">{m.meeting_date}</Badge>
-                            {actionCount > 0 && (
-                              <Badge variant="secondary" className="text-xs">
-                                {doneActions}/{actionCount} actions done
-                              </Badge>
-                            )}
-                          </div>
-                          {m.attendees.length > 0 && (
-                            <div className="text-xs text-muted-foreground mt-0.5">
-                              Attendees: {m.attendees.join(", ")}
-                            </div>
-                          )}
-                          {m.content && (
-                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{m.content}</p>
-                          )}
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => setEditingCage(c)}>
+                            <Edit className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => act(actions.deleteBreederCage(c.id))}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); act(actions.deleteMeetingNote(m.id)); }}>
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </Button>
                       </div>
                     </CardContent>
                   </Card>
@@ -857,61 +812,6 @@ export function ColonyClient({
           )}
         </TabsContent>
 
-        {/* ─── Photos Tab ──────────────────────────────────────── */}
-        <TabsContent value="photos" className="space-y-4">
-          <div className="flex justify-between items-center">
-            <p className="text-sm text-muted-foreground">
-              Add experiment photos — they&apos;ll show as a rotating gallery on your PI&apos;s portal. 📸
-            </p>
-            <Button onClick={() => setShowAddPhoto(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Photo</Button>
-          </div>
-          {photos.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <ImageIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
-              <p>No photos yet.</p>
-              <p className="text-xs mt-1">Add photos of your experiments — paste a direct image URL or Google Drive link.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-              {photos.map((p) => {
-                const displayUrl = convertDriveUrl(p.image_url);
-                const animal = animals.find((a) => a.id === p.animal_id);
-                return (
-                  <Card key={p.id} className="overflow-hidden group relative">
-                    <div className="aspect-square bg-muted relative">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={displayUrl}
-                        alt={p.caption || "Experiment photo"}
-                        className="object-cover w-full h-full"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                        <Button
-                          variant="destructive" size="sm"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={() => act(actions.deleteColonyPhoto(p.id))}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                      {!p.show_in_portal && (
-                        <Badge className="absolute top-1 right-1 text-[10px] bg-gray-700 text-white" variant="secondary">Hidden from PI</Badge>
-                      )}
-                    </div>
-                    <CardContent className="py-2 px-3">
-                      <p className="text-xs font-medium truncate">{p.caption || "Untitled"}</p>
-                      <p className="text-[10px] text-muted-foreground truncate">
-                        {animal ? animal.identifier : ""}{p.experiment_type ? ` · ${EXPERIMENT_LABELS[p.experiment_type] || p.experiment_type}` : ""}
-                      </p>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
-        </TabsContent>
-
         {/* ─── PI Access Tab ────────────────────────────────────── */}
         <TabsContent value="pi" className="space-y-4">
           <div className="flex justify-between items-center">
@@ -962,15 +862,21 @@ export function ColonyClient({
 
       {/* ─── Dialogs ────────────────────────────────────────────── */}
 
-      {/* Add Animal */}
-      <Dialog open={showAddAnimal} onOpenChange={setShowAddAnimal}>
+      {/* Add / Edit Animal */}
+      <Dialog open={showAddAnimal || !!editingAnimal} onOpenChange={(v) => { if (!v) { setShowAddAnimal(false); setEditingAnimal(null); } }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Add Animal</DialogTitle></DialogHeader>
-          <form onSubmit={(e) => handleFormAction(actions.createAnimal, e, () => setShowAddAnimal(false))} className="space-y-3">
+          <DialogHeader><DialogTitle>{editingAnimal ? "Edit Animal" : "Add Animal"}</DialogTitle></DialogHeader>
+          <form onSubmit={(e) => {
+            if (editingAnimal) {
+              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => setEditingAnimal(null));
+            } else {
+              handleFormAction(actions.createAnimal, e, () => setShowAddAnimal(false));
+            }
+          }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="text-xs">Cohort *</Label>
-                <Select name="cohort_id" required>
+                <Select name="cohort_id" required defaultValue={editingAnimal?.cohort_id || ""}>
                   <SelectTrigger><SelectValue placeholder="Select cohort" /></SelectTrigger>
                   <SelectContent>
                     {cohorts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -979,11 +885,11 @@ export function ColonyClient({
               </div>
               <div>
                 <Label className="text-xs">Identifier *</Label>
-                <Input name="identifier" placeholder="e.g. BPAN1-HM-1" required />
+                <Input name="identifier" placeholder="e.g. BPAN1-HM-1" required defaultValue={editingAnimal?.identifier || ""} />
               </div>
               <div>
                 <Label className="text-xs">Sex *</Label>
-                <Select name="sex" required>
+                <Select name="sex" required defaultValue={editingAnimal?.sex || ""}>
                   <SelectTrigger><SelectValue placeholder="Sex" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="male">Male</SelectItem>
@@ -993,7 +899,7 @@ export function ColonyClient({
               </div>
               <div>
                 <Label className="text-xs">Genotype *</Label>
-                <Select name="genotype" required>
+                <Select name="genotype" required defaultValue={editingAnimal?.genotype || ""}>
                   <SelectTrigger><SelectValue placeholder="Genotype" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="hemi">Hemizygous (Hemi)</SelectItem>
@@ -1004,49 +910,66 @@ export function ColonyClient({
               </div>
               <div>
                 <Label className="text-xs">Birth Date *</Label>
-                <Input name="birth_date" type="date" required />
+                <Input name="birth_date" type="date" required defaultValue={editingAnimal?.birth_date || ""} />
               </div>
               <div>
                 <Label className="text-xs">Ear Tag</Label>
-                <Input name="ear_tag" placeholder="Optional" />
+                <Input name="ear_tag" placeholder="Optional" defaultValue={editingAnimal?.ear_tag || ""} />
               </div>
               <div>
                 <Label className="text-xs">Cage #</Label>
-                <Input name="cage_number" placeholder="Optional" />
+                <Input name="cage_number" placeholder="Optional" defaultValue={editingAnimal?.cage_number || ""} />
+              </div>
+              <div>
+                <Label className="text-xs">Status</Label>
+                <Select name="status" defaultValue={editingAnimal?.status || "active"}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="deceased">Deceased</SelectItem>
+                    <SelectItem value="retired">Retired</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div>
               <Label className="text-xs">Notes</Label>
-              <Textarea name="notes" placeholder="Optional notes" rows={2} />
+              <Textarea name="notes" placeholder="Optional notes" rows={2} defaultValue={editingAnimal?.notes || ""} />
             </div>
             <DialogFooter>
-              <Button variant="outline" type="button" onClick={() => setShowAddAnimal(false)}>Cancel</Button>
+              <Button variant="outline" type="button" onClick={() => { setShowAddAnimal(false); setEditingAnimal(null); }}>Cancel</Button>
               <Button type="submit" disabled={busy}>
-                {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Plus className="h-4 w-4 mr-1" />}
-                Add Animal
+                {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                {editingAnimal ? "Save Changes" : "Add Animal"}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* Add Cohort */}
-      <Dialog open={showAddCohort} onOpenChange={setShowAddCohort}>
+      {/* Add / Edit Cohort */}
+      <Dialog open={showAddCohort || !!editingCohort} onOpenChange={(v) => { if (!v) { setShowAddCohort(false); setEditingCohort(null); } }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Add Cohort</DialogTitle></DialogHeader>
-          <form onSubmit={(e) => handleFormAction(actions.createCohort, e, () => setShowAddCohort(false))} className="space-y-3">
+          <DialogHeader><DialogTitle>{editingCohort ? "Edit Cohort" : "Add Cohort"}</DialogTitle></DialogHeader>
+          <form onSubmit={(e) => {
+            if (editingCohort) {
+              handleFormAction((fd) => actions.updateCohort(editingCohort.id, fd), e, () => setEditingCohort(null));
+            } else {
+              handleFormAction(actions.createCohort, e, () => setShowAddCohort(false));
+            }
+          }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="text-xs">Cohort Name *</Label>
-                <Input name="name" placeholder="e.g. BPAN 1" required />
+                <Input name="name" placeholder="e.g. BPAN 1" required defaultValue={editingCohort?.name || ""} />
               </div>
               <div>
                 <Label className="text-xs">Birth Date *</Label>
-                <Input name="birth_date" type="date" required />
+                <Input name="birth_date" type="date" required defaultValue={editingCohort?.birth_date || ""} />
               </div>
               <div>
                 <Label className="text-xs">Breeder Cage</Label>
-                <Select name="breeder_cage_id">
+                <Select name="breeder_cage_id" defaultValue={editingCohort?.breeder_cage_id || ""}>
                   <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
                   <SelectContent>
                     {cages.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -1055,36 +978,42 @@ export function ColonyClient({
               </div>
               <div>
                 <Label className="text-xs">Litter Size</Label>
-                <Input name="litter_size" type="number" placeholder="Optional" />
+                <Input name="litter_size" type="number" placeholder="Optional" defaultValue={editingCohort?.litter_size ?? ""} />
               </div>
             </div>
             <div>
               <Label className="text-xs">Notes</Label>
-              <Textarea name="notes" placeholder="Optional" rows={2} />
+              <Textarea name="notes" placeholder="Optional" rows={2} defaultValue={editingCohort?.notes || ""} />
             </div>
             <DialogFooter>
-              <Button variant="outline" type="button" onClick={() => setShowAddCohort(false)}>Cancel</Button>
-              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Add Cohort</Button>
+              <Button variant="outline" type="button" onClick={() => { setShowAddCohort(false); setEditingCohort(null); }}>Cancel</Button>
+              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}{editingCohort ? "Save Changes" : "Add Cohort"}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* Add Breeder Cage */}
-      <Dialog open={showAddCage} onOpenChange={setShowAddCage}>
+      {/* Add / Edit Breeder Cage */}
+      <Dialog open={showAddCage || !!editingCage} onOpenChange={(v) => { if (!v) { setShowAddCage(false); setEditingCage(null); } }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Add Breeder Cage</DialogTitle></DialogHeader>
-          <form onSubmit={(e) => handleFormAction(actions.createBreederCage, e, () => setShowAddCage(false))} className="space-y-3">
+          <DialogHeader><DialogTitle>{editingCage ? "Edit Breeder Cage" : "Add Breeder Cage"}</DialogTitle></DialogHeader>
+          <form onSubmit={(e) => {
+            if (editingCage) {
+              handleFormAction((fd) => actions.updateBreederCage(editingCage.id, fd), e, () => setEditingCage(null));
+            } else {
+              handleFormAction(actions.createBreederCage, e, () => setShowAddCage(false));
+            }
+          }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
-              <div><Label className="text-xs">Cage Name *</Label><Input name="name" required placeholder="e.g. Breeder A" /></div>
-              <div><Label className="text-xs">Strain</Label><Input name="strain" placeholder="e.g. BPAN / ATP13A2" /></div>
-              <div><Label className="text-xs">Location</Label><Input name="location" placeholder="Room, rack" /></div>
-              <div><Label className="text-xs">Breeding Start</Label><Input name="breeding_start" type="date" /></div>
+              <div><Label className="text-xs">Cage Name *</Label><Input name="name" required placeholder="e.g. Breeder A" defaultValue={editingCage?.name || ""} /></div>
+              <div><Label className="text-xs">Strain</Label><Input name="strain" placeholder="e.g. BPAN / ATP13A2" defaultValue={editingCage?.strain || ""} /></div>
+              <div><Label className="text-xs">Location</Label><Input name="location" placeholder="Room, rack" defaultValue={editingCage?.location || ""} /></div>
+              <div><Label className="text-xs">Breeding Start</Label><Input name="breeding_start" type="date" defaultValue={editingCage?.breeding_start || ""} /></div>
             </div>
-            <div><Label className="text-xs">Notes</Label><Textarea name="notes" rows={2} /></div>
+            <div><Label className="text-xs">Notes</Label><Textarea name="notes" rows={2} defaultValue={editingCage?.notes || ""} /></div>
             <DialogFooter>
-              <Button variant="outline" type="button" onClick={() => setShowAddCage(false)}>Cancel</Button>
-              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Add Cage</Button>
+              <Button variant="outline" type="button" onClick={() => { setShowAddCage(false); setEditingCage(null); }}>Cancel</Button>
+              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}{editingCage ? "Save Changes" : "Add Cage"}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -1174,57 +1103,6 @@ export function ColonyClient({
         </DialogContent>
       </Dialog>
 
-      {/* New Meeting Note */}
-      <Dialog open={showAddMeeting} onOpenChange={setShowAddMeeting}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>New Meeting Note</DialogTitle></DialogHeader>
-          <form onSubmit={(e) => handleFormAction(actions.createMeetingNote, e, () => setShowAddMeeting(false))} className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <Label className="text-xs">Title *</Label>
-                <Input name="title" required placeholder="e.g. Weekly check-in with Dr. Smith" />
-              </div>
-              <div>
-                <Label className="text-xs">Date *</Label>
-                <Input name="meeting_date" type="date" defaultValue={new Date().toISOString().split("T")[0]} required />
-              </div>
-            </div>
-            <div>
-              <Label className="text-xs">Attendees (comma-separated)</Label>
-              <Input name="attendees" placeholder="e.g. Dr. Smith, Self" />
-            </div>
-            <div>
-              <Label className="text-xs">Notes</Label>
-              <Textarea name="content" placeholder="Meeting notes, decisions, topics discussed..." rows={6} />
-            </div>
-            <DialogFooter>
-              <Button variant="outline" type="button" onClick={() => setShowAddMeeting(false)}>Cancel</Button>
-              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Save Meeting</Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit Meeting Note */}
-      <Dialog open={!!editingMeeting} onOpenChange={(v) => { if (!v) setEditingMeeting(null); }}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          {editingMeeting && (
-            <MeetingDetail
-              meeting={editingMeeting}
-              onSave={async (fd: FormData) => {
-                setBusy(true);
-                const result = await actions.updateMeetingNote(editingMeeting.id, fd);
-                setBusy(false);
-                if (result.error) toast.error(result.error);
-                else { toast.success("Saved!"); setEditingMeeting(null); refetchAll(); }
-              }}
-              onClose={() => setEditingMeeting(null)}
-              busy={busy}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-
       {/* Generate Cage Changes */}
       <Dialog open={showGenerateCageChanges} onOpenChange={setShowGenerateCageChanges}>
         <DialogContent>
@@ -1311,58 +1189,6 @@ export function ColonyClient({
         </DialogContent>
       </Dialog>
 
-      {/* Add Photo */}
-      <Dialog open={showAddPhoto} onOpenChange={setShowAddPhoto}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Add Experiment Photo</DialogTitle></DialogHeader>
-          <form onSubmit={(e) => handleFormAction(actions.addColonyPhoto, e, () => setShowAddPhoto(false))} className="space-y-3">
-            <div>
-              <Label className="text-xs">Image URL *</Label>
-              <Input name="image_url" required placeholder="Paste direct image URL or Google Drive share link" />
-              <p className="text-[10px] text-muted-foreground mt-0.5">
-                Google Drive: right-click image → &quot;Get link&quot; → paste here. We&apos;ll auto-convert it.
-              </p>
-            </div>
-            <div>
-              <Label className="text-xs">Caption</Label>
-              <Input name="caption" placeholder="e.g. BPAN1-HM-1 — Rotarod Day 7" />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <Label className="text-xs">Animal (optional)</Label>
-                <Select name="animal_id">
-                  <SelectTrigger><SelectValue placeholder="Any animal" /></SelectTrigger>
-                  <SelectContent>
-                    {animals.map((a) => <SelectItem key={a.id} value={a.id}>{a.identifier}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs">Experiment (optional)</Label>
-                <Select name="experiment_type">
-                  <SelectTrigger><SelectValue placeholder="Any experiment" /></SelectTrigger>
-                  <SelectContent>
-                    {EXPERIMENT_TYPES.map((t) => <SelectItem key={t} value={t}>{EXPERIMENT_LABELS[t]}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs">Date Taken</Label>
-                <Input name="taken_date" type="date" />
-              </div>
-            </div>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" name="show_in_portal" value="true" defaultChecked className="h-4 w-4" />
-              Show in PI portal gallery
-            </label>
-            <DialogFooter>
-              <Button variant="outline" type="button" onClick={() => setShowAddPhoto(false)}>Cancel</Button>
-              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Add Photo</Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
       {/* ─── Animal Detail Dialog ─────────────────────────────── */}
       <Dialog open={!!selectedAnimal} onOpenChange={(v) => { if (!v) setSelectedAnimal(null); }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
@@ -1376,459 +1202,13 @@ export function ColonyClient({
               onSchedule={() => handleScheduleAll(selectedAnimal)}
               onUpdateStatus={handleUpdateExpStatus}
               onSaveResultUrl={handleSaveResultUrl}
+              onEdit={() => { setEditingAnimal(selectedAnimal); setSelectedAnimal(null); }}
               onDelete={() => { act(actions.deleteAnimal(selectedAnimal.id)); setSelectedAnimal(null); }}
               busy={busy}
             />
           )}
         </DialogContent>
       </Dialog>
-    </>
-  );
-}
-
-// ─── Speech-to-Text Hook ────────────────────────────────────────────────
-
-/**
- * Uses the browser's built-in Web Speech API.
- * 100% free, no API calls, no limits.
- * Works in Chrome, Edge, Safari (most browsers).
- */
-function useSpeechToText(onTranscript: (text: string) => void) {
-  const [isListening, setIsListening] = useState(false);
-  const [isSupported, setIsSupported] = useState(false);
-  const [debugInfo, setDebugInfo] = useState("");
-  const wantRef = useRef(false);
-  const cbRef = useRef(onTranscript);
-  const transcriptRef = useRef("");
-  const recRef = useRef<SpeechRecognition | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Rapid-cycle detection: if recognition ends < 2s after start, 3 times in a row, the browser can't do speech
-  const startTimeRef = useRef(0);
-  const rapidFailCount = useRef(0);
-  const gotResultRef = useRef(false);
-
-  cbRef.current = onTranscript;
-
-  useEffect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any;
-    const has = !!(w.SpeechRecognition || w.webkitSpeechRecognition);
-    setIsSupported(has);
-    setDebugInfo(has ? "Speech API available" : "Speech API NOT available in this browser");
-    return () => {
-      wantRef.current = false;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      if (recRef.current) try { recRef.current.abort(); } catch { /* */ }
-    };
-  }, []);
-
-  function stopForGood(msg: string) {
-    wantRef.current = false;
-    setIsListening(false);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (recRef.current) try { recRef.current.abort(); } catch { /* */ }
-    setDebugInfo(msg);
-    toast.error(msg, { duration: 8000 });
-  }
-
-  function startRec() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any;
-    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
-    if (!SR || !wantRef.current) return;
-
-    // Stop any existing instance
-    if (recRef.current) {
-      try { recRef.current.abort(); } catch { /* */ }
-      recRef.current = null;
-    }
-
-    const rec = new SR();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = "en-US";
-    rec.maxAlternatives = 1;
-    recRef.current = rec;
-
-    startTimeRef.current = Date.now();
-    gotResultRef.current = false;
-
-    setDebugInfo("Starting recognition...");
-
-    rec.onaudiostart = () => {
-      setDebugInfo("🎤 Microphone active — speak now!");
-    };
-
-    rec.onspeechstart = () => {
-      setDebugInfo("🗣️ Speech detected!");
-      // Speech was detected, reset rapid-fail count
-      rapidFailCount.current = 0;
-    };
-
-    rec.onresult = (e: SpeechRecognitionEvent) => {
-      gotResultRef.current = true;
-      rapidFailCount.current = 0; // got results = working fine
-      let text = "";
-      for (let i = 0; i < e.results.length; i++) {
-        text += e.results[i][0].transcript;
-      }
-      transcriptRef.current = text;
-      setDebugInfo("📝 Heard: " + text.substring(0, 60) + (text.length > 60 ? "..." : ""));
-      cbRef.current(text);
-    };
-
-    rec.onerror = (e: SpeechRecognitionErrorEvent) => {
-      setDebugInfo("❌ Error: " + e.error);
-      if (e.error === "not-allowed") {
-        stopForGood("Microphone access denied. Check browser permissions.");
-      } else if (e.error === "service-not-available") {
-        stopForGood("Speech service unavailable. Please use Google Chrome (not Atlas/Arc/other browsers).");
-      }
-      // other errors (no-speech, network, aborted) will trigger onend → restart
-    };
-
-    rec.onend = () => {
-      const elapsed = Date.now() - startTimeRef.current;
-
-      if (wantRef.current) {
-        // If it ended in under 2 seconds without any results, that's a rapid fail
-        if (elapsed < 2000 && !gotResultRef.current) {
-          rapidFailCount.current++;
-          if (rapidFailCount.current >= 3) {
-            stopForGood(
-              "⚠️ Speech recognition is not working in this browser. " +
-              "Please open this page in Google Chrome for dictation."
-            );
-            return;
-          }
-          // Wait longer before retrying (exponential backoff)
-          const delay = 500 * Math.pow(2, rapidFailCount.current - 1);
-          setDebugInfo(`⏸️ Ended quickly (${elapsed}ms). Retry ${rapidFailCount.current}/3 in ${delay}ms...`);
-          if (timerRef.current) clearTimeout(timerRef.current);
-          timerRef.current = setTimeout(() => {
-            if (wantRef.current) startRec();
-          }, delay);
-        } else {
-          // Normal restart (recognition paused after silence — this is normal)
-          rapidFailCount.current = 0;
-          setDebugInfo("⏸️ Paused (silence). Auto-restarting...");
-          if (timerRef.current) clearTimeout(timerRef.current);
-          timerRef.current = setTimeout(() => {
-            if (wantRef.current) startRec();
-          }, 300);
-        }
-      } else {
-        setDebugInfo("Stopped.");
-      }
-    };
-
-    try {
-      rec.start();
-      setDebugInfo("✅ rec.start() called — listening...");
-    } catch (err) {
-      setDebugInfo("❌ rec.start() threw: " + String(err));
-      rapidFailCount.current++;
-      if (rapidFailCount.current >= 3) {
-        stopForGood(
-          "⚠️ Speech recognition failed to start. " +
-          "Please use Google Chrome for dictation."
-        );
-        return;
-      }
-      if (wantRef.current) {
-        timerRef.current = setTimeout(() => { if (wantRef.current) startRec(); }, 1000);
-      }
-    }
-  }
-
-  function toggle() {
-    if (wantRef.current) {
-      wantRef.current = false;
-      setIsListening(false);
-      rapidFailCount.current = 0;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      if (recRef.current) try { recRef.current.stop(); } catch { /* */ }
-      setDebugInfo("Stopped.");
-    } else {
-      transcriptRef.current = "";
-      rapidFailCount.current = 0;
-      wantRef.current = true;
-      setIsListening(true);
-      startRec();
-    }
-  }
-
-  function stop() {
-    wantRef.current = false;
-    setIsListening(false);
-    rapidFailCount.current = 0;
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (recRef.current) try { recRef.current.stop(); } catch { /* */ }
-  }
-
-  return { isListening, isSupported, toggle, stop, debugInfo };
-}
-
-// ─── Meeting Detail Sub-component ───────────────────────────────────────
-
-function MeetingDetail({
-  meeting,
-  onSave,
-  onClose,
-  busy,
-}: {
-  meeting: MeetingNote;
-  onSave: (fd: FormData) => void;
-  onClose: () => void;
-  busy: boolean;
-}) {
-  const [content, setContent] = useState(meeting.content);
-  const [actionItems, setActionItems] = useState<ActionItem[]>(meeting.action_items || []);
-  const [newAction, setNewAction] = useState("");
-  const [aiSummary, setAiSummary] = useState(meeting.ai_summary || "");
-  const [summarizing, setSummarizing] = useState(false);
-  const [extracting, setExtracting] = useState(false);
-
-  // Speech-to-text: live transcript replaces content below the base
-  const baseContentRef = useRef(content);
-  const { isListening, isSupported, toggle: toggleMic, stop: stopMic, debugInfo } = useSpeechToText((text) => {
-    const base = baseContentRef.current;
-    setContent(base ? base + "\n\n" + text : text);
-  });
-
-  // Snapshot current content when mic starts
-  function handleToggleMic() {
-    if (!isListening) {
-      baseContentRef.current = content;
-    }
-    toggleMic();
-  }
-
-  // Stop mic when dialog closes
-  useEffect(() => {
-    return () => { stopMic(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function handleSummarize() {
-    if (!content?.trim()) {
-      toast.error("Write some notes first, then summarize.");
-      return;
-    }
-    setSummarizing(true);
-    try {
-      const res = await fetch("/api/note-assist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "meeting_summary",
-          text: content,
-          actionItems: actionItems.map((a) => `${a.done ? "[DONE]" : "[ ]"} ${a.text}`).join("\n"),
-        }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setAiSummary(data.result || data.text || "");
-      toast.success("Summary generated!");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to summarize");
-    }
-    setSummarizing(false);
-  }
-
-  async function handleExtractActions() {
-    if (!content?.trim()) {
-      toast.error("Write or dictate some notes first, then extract action items.");
-      return;
-    }
-    setExtracting(true);
-    try {
-      const res = await fetch("/api/note-assist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "extract_actions", text: content }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      const items: string[] = data.items || [];
-      if (items.length === 0) {
-        toast.info("No action items found in the notes.");
-      } else {
-        // Merge with existing — don't duplicate
-        const existingTexts = new Set(actionItems.map((a) => a.text.toLowerCase().trim()));
-        const newItems = items
-          .filter((t) => !existingTexts.has(t.toLowerCase().trim()))
-          .map((t) => ({ text: t, done: false }));
-        setActionItems([...actionItems, ...newItems]);
-        toast.success(`Found ${newItems.length} new action item${newItems.length !== 1 ? "s" : ""}!`);
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to extract action items");
-    }
-    setExtracting(false);
-  }
-
-  function addAction() {
-    if (!newAction.trim()) return;
-    setActionItems([...actionItems, { text: newAction.trim(), done: false }]);
-    setNewAction("");
-  }
-
-  function toggleAction(idx: number) {
-    setActionItems(actionItems.map((a, i) => i === idx ? { ...a, done: !a.done } : a));
-  }
-
-  function removeAction(idx: number) {
-    setActionItems(actionItems.filter((_, i) => i !== idx));
-  }
-
-  function handleSave() {
-    stopMic(); // Stop recording if still going
-    const fd = new FormData();
-    fd.set("content", content);
-    fd.set("action_items", JSON.stringify(actionItems));
-    if (aiSummary) fd.set("ai_summary", aiSummary);
-    onSave(fd);
-  }
-
-  return (
-    <>
-      <DialogHeader>
-        <DialogTitle className="flex items-center gap-2">
-          <MessageSquare className="h-5 w-5" />
-          {meeting.title}
-          <Badge variant="outline" className="text-xs">{meeting.meeting_date}</Badge>
-        </DialogTitle>
-      </DialogHeader>
-
-      {meeting.attendees.length > 0 && (
-        <div className="text-sm text-muted-foreground">Attendees: {meeting.attendees.join(", ")}</div>
-      )}
-
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <Label className="text-xs">Meeting Notes</Label>
-          <div className="flex items-center gap-2">
-            {isListening && (
-              <div className="flex items-center gap-1.5 text-xs text-red-500 animate-pulse">
-                <div className="h-2 w-2 rounded-full bg-red-500" />
-                Recording...
-              </div>
-            )}
-            {isSupported ? (
-              <Button
-                variant={isListening ? "destructive" : "outline"}
-                size="sm"
-                className="h-7 text-xs gap-1"
-                onClick={handleToggleMic}
-                type="button"
-              >
-                {isListening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
-                {isListening ? "Stop" : "Dictate"}
-              </Button>
-            ) : (
-              <span className="text-[10px] text-muted-foreground">Speech not supported in this browser</span>
-            )}
-          </div>
-        </div>
-        <Textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          rows={10}
-          placeholder={isListening ? "Listening... speak now 🎙️" : "Type your meeting notes here, or click Dictate to speak..."}
-          className={`font-mono text-sm ${isListening ? "border-red-300 dark:border-red-700" : ""}`}
-        />
-        {debugInfo && (
-          <div className="mt-1 px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded text-[11px] font-mono text-muted-foreground">
-            {debugInfo}
-          </div>
-        )}
-      </div>
-
-      <Separator />
-
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <Label className="text-xs">Action Items</Label>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs gap-1"
-            onClick={handleExtractActions}
-            disabled={extracting}
-            type="button"
-          >
-            {extracting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            {extracting ? "Extracting..." : "Extract from Notes"}
-          </Button>
-        </div>
-        {actionItems.length > 0 && (
-          <div className="space-y-1.5 mb-3">
-            {actionItems.map((item, idx) => (
-              <div key={idx} className="flex items-center gap-2 text-sm">
-                <button
-                  className={`h-5 w-5 rounded border flex items-center justify-center flex-shrink-0 ${
-                    item.done ? "bg-green-500 border-green-500 text-white" : "border-gray-300 hover:border-primary"
-                  }`}
-                  onClick={() => toggleAction(idx)}
-                >
-                  {item.done && <Check className="h-3 w-3" />}
-                </button>
-                <span className={`flex-1 ${item.done ? "line-through text-muted-foreground" : ""}`}>{item.text}</span>
-                <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => removeAction(idx)}>
-                  <X className="h-3 w-3" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="flex gap-2">
-          <Input
-            value={newAction}
-            onChange={(e) => setNewAction(e.target.value)}
-            placeholder="Add an action item..."
-            className="text-sm"
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAction(); } }}
-          />
-          <Button variant="outline" size="sm" onClick={addAction} type="button">
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-
-      <Separator />
-
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <Label className="text-xs">AI Summary</Label>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs gap-1"
-            onClick={handleSummarize}
-            disabled={summarizing}
-            type="button"
-          >
-            {summarizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            {summarizing ? "Summarizing..." : aiSummary ? "Re-summarize" : "Summarize Notes"}
-          </Button>
-        </div>
-        {aiSummary ? (
-          <div className="text-sm bg-muted p-3 rounded-md whitespace-pre-wrap">{aiSummary}</div>
-        ) : (
-          <p className="text-xs text-muted-foreground italic">
-            Click &quot;Summarize Notes&quot; to generate an AI summary of your meeting notes. Uses your free Gemini API.
-          </p>
-        )}
-      </div>
-
-      <DialogFooter>
-        <Button variant="outline" onClick={() => { stopMic(); onClose(); }}>Close</Button>
-        <Button onClick={handleSave} disabled={busy}>
-          {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-          Save Changes
-        </Button>
-      </DialogFooter>
     </>
   );
 }
@@ -1844,6 +1224,7 @@ function AnimalDetail({
   onSchedule,
   onUpdateStatus,
   onSaveResultUrl,
+  onEdit,
   onDelete,
   busy,
 }: {
@@ -1855,6 +1236,7 @@ function AnimalDetail({
   onSchedule: () => void;
   onUpdateStatus: (id: string, status: string) => void;
   onSaveResultUrl: (id: string, url: string) => void;
+  onEdit: () => void;
   onDelete: () => void;
   busy: boolean;
 }) {
@@ -1915,6 +1297,15 @@ function AnimalDetail({
           <Badge variant="secondary">{genotypeLabel(animal.sex, animal.genotype)}</Badge>
         </DialogTitle>
       </DialogHeader>
+
+      <div className="flex justify-end gap-1 -mt-2">
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onEdit}>
+          <Edit className="h-3 w-3" /> Edit
+        </Button>
+        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-destructive" onClick={onDelete}>
+          <Trash2 className="h-3 w-3" /> Delete
+        </Button>
+      </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
         <div><span className="text-muted-foreground text-xs block">Age</span>{age} days</div>
@@ -2044,12 +1435,6 @@ function AnimalDetail({
         </div>
       )}
 
-      <Separator />
-      <div className="flex justify-end">
-        <Button variant="destructive" size="sm" onClick={onDelete}>
-          <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete Animal
-        </Button>
-      </div>
     </>
   );
 }

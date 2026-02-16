@@ -26,6 +26,7 @@ const NAV_LINKS = [
   { href: "/experiments", label: "Experiments" },
   { href: "/results", label: "Results" },
   { href: "/colony", label: "Colony" },
+  { href: "/meetings", label: "Meetings" },
   { href: "/ideas", label: "Ideas" },
   { href: "/writing", label: "Writing" },
 ];

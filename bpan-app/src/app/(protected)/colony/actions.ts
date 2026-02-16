@@ -472,6 +472,7 @@ export async function createMeetingNote(formData: FormData) {
   });
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  revalidatePath("/meetings");
   return { success: true };
 }
 
@@ -496,6 +497,7 @@ export async function updateMeetingNote(id: string, formData: FormData) {
   const { error } = await supabase.from("meeting_notes").update(update).eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  revalidatePath("/meetings");
   return { success: true };
 }
 
@@ -507,6 +509,7 @@ export async function deleteMeetingNote(id: string) {
   const { error } = await supabase.from("meeting_notes").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  revalidatePath("/meetings");
   return { success: true };
 }
 
