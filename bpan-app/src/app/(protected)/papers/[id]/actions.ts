@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { generateEmbedding } from "@/lib/ai";
 
 export async function createNote(formData: FormData) {
   const supabase = await createClient();
@@ -16,6 +17,16 @@ export async function createNote(formData: FormData) {
   const tagsRaw = formData.get("tags") as string || "";
   const tags = tagsRaw.split(",").map((t) => t.trim()).filter(Boolean);
 
+  // Generate embedding for semantic search
+  let embedding: number[] | null = null;
+  try {
+    const textToEmbed = [content, highlightText].filter(Boolean).join("\n\n");
+    embedding = await generateEmbedding(textToEmbed);
+  } catch (err) {
+    // Non-blocking: note is still saved without embedding
+    console.warn("Failed to generate embedding:", err);
+  }
+
   const { error } = await supabase.from("notes").insert({
     user_id: user.id,
     paper_id: paperId,
@@ -24,6 +35,7 @@ export async function createNote(formData: FormData) {
     highlight_text: highlightText,
     page_number: pageNumber,
     tags,
+    ...(embedding ? { embedding: JSON.stringify(embedding) } : {}),
   });
 
   if (error) throw new Error(error.message);

@@ -29,20 +29,23 @@
 - [x] Cross-paper notes page — view and search all notes across papers
 - [x] Chrome extension for note-taking on any webpage (highlight text → AI note → save)
 - [x] Manual note entry fallback
-- [ ] Cross-paper synthesis — "show me all notes about [topic]" with semantic search
-- [ ] Methods extractor — pull protocol details from highlighted text
-- [ ] Exportable annotated bibliography
+- [x] Cross-paper synthesis — semantic search across notes via pgvector embeddings (Gemini text-embedding-004)
+- [x] Methods extractor — extract protocol details (technique, reagents, timepoints, model, sample size) from highlighted text
+- [x] Exportable annotated bibliography — export as CSV or BibTeX with annotations
 
-## Phase 3: AI Research Advisor Sidebar
+## Phase 3: AI Research Advisor Sidebar ✅
 
-- [ ] Persistent chat sidebar across all modules
-- [ ] Context injection — feed notes, papers, and experiments into the AI
-- [ ] Proactive suggestions — "based on your recent notes, you might want to look at..."
-- [ ] Multi-LLM routing via OpenRouter/LiteLLM (Claude ↔ GPT ↔ Gemini fallback)
-- [ ] Hypothesis tracker — mark hypotheses as supported/refuted/pending
-- [ ] Gap analysis — "based on your thesis aims, you still need data for..."
-- [ ] Literature-to-experiment bridge — connect papers to open questions
-- [ ] Troubleshooting assistant — help debug experimental issues
+- [x] Persistent chat sidebar across all modules — collapsible panel with bot icon toggle
+- [x] Context injection — feeds notes, papers, hypotheses, and research context into AI
+- [x] Proactive suggestions — AI generates read/experiment/question/gap suggestions
+- [x] Multi-LLM routing via Gemini + OpenRouter fallback (gemini-2.0-flash → gemma-3-27b-it → Llama/Mistral/Qwen)
+- [x] Hypothesis tracker — create, update status (pending/supported/refuted/revised), add evidence for/against
+- [x] Gap analysis — built into advisor chat context (AI sees aims, questions, and notes gaps)
+- [x] Literature-to-experiment bridge — advisor connects papers to open questions via context injection
+- [x] Troubleshooting assistant — built into advisor chat (suggest troubleshooting prompts)
+- [x] Research context setup — thesis title, aims, open questions, model systems, techniques
+- [x] Conversation history — save, resume, and manage past advisor conversations
+- [x] Auto-titled conversations — AI generates titles from first message
 
 ## Phase 4: Experiment Planner & Calendar
 

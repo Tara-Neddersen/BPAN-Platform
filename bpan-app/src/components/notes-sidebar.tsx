@@ -15,8 +15,10 @@ import {
   Plus,
   ExternalLink,
   ClipboardPaste,
+  FlaskConical,
 } from "lucide-react";
 import type { Note } from "@/types";
+import type { ExtractedMethods } from "@/lib/ai";
 
 const TYPE_COLORS: Record<string, string> = {
   finding:
@@ -57,6 +59,14 @@ interface ProcessedNote {
   error?: string;
 }
 
+interface MethodsResult {
+  highlight: string;
+  page: number;
+  data: ExtractedMethods;
+  status: "processing" | "ready" | "saving" | "error";
+  error?: string;
+}
+
 export function NotesSidebar({
   paperId,
   paperTitle,
@@ -75,6 +85,9 @@ export function NotesSidebar({
   deleteAction,
 }: NotesSidebarProps) {
   const [processedNote, setProcessedNote] = useState<ProcessedNote | null>(
+    null
+  );
+  const [methodsResult, setMethodsResult] = useState<MethodsResult | null>(
     null
   );
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -180,6 +193,91 @@ export function NotesSidebar({
       onClearHighlight();
     } catch {
       setProcessedNote((prev) =>
+        prev ? { ...prev, status: "error", error: "Failed to save" } : null
+      );
+    }
+  }
+
+  async function extractMethodsFromHighlight(text: string, page: number) {
+    setMethodsResult({
+      highlight: text,
+      page,
+      data: {} as ExtractedMethods,
+      status: "processing",
+    });
+
+    try {
+      const res = await fetch("/api/methods-extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          highlight: text,
+          paperTitle,
+          paperAbstract,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Methods extraction failed");
+      const data: ExtractedMethods = await res.json();
+
+      setMethodsResult({
+        highlight: text,
+        page,
+        data,
+        status: "ready",
+      });
+    } catch (err) {
+      setMethodsResult((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "error",
+              error: err instanceof Error ? err.message : "Extraction failed",
+            }
+          : null
+      );
+    }
+  }
+
+  function formatMethodsNote(data: ExtractedMethods): string {
+    const lines: string[] = [];
+    lines.push(`**Protocol:** ${data.protocol_summary}`);
+    if (data.technique) lines.push(`**Technique:** ${data.technique}`);
+    if (data.model_system) lines.push(`**Model:** ${data.model_system}`);
+    if (data.sample_size) lines.push(`**Sample size:** ${data.sample_size}`);
+    if (data.key_reagents.length > 0)
+      lines.push(`**Reagents:** ${data.key_reagents.join(", ")}`);
+    if (data.timepoints.length > 0)
+      lines.push(`**Timepoints:** ${data.timepoints.join(", ")}`);
+    if (data.key_parameters.length > 0)
+      lines.push(`**Parameters:** ${data.key_parameters.join(", ")}`);
+    if (data.statistical_method)
+      lines.push(`**Stats:** ${data.statistical_method}`);
+    lines.push("");
+    lines.push(`— ${citation}`);
+    return lines.join("\n");
+  }
+
+  async function saveMethodsNote() {
+    if (!methodsResult || methodsResult.status !== "ready") return;
+    setMethodsResult((prev) => (prev ? { ...prev, status: "saving" } : null));
+
+    try {
+      const formData = new FormData();
+      formData.set("paper_id", paperId);
+      formData.set("content", formatMethodsNote(methodsResult.data));
+      formData.set("note_type", "method");
+      formData.set("highlight_text", methodsResult.highlight);
+      formData.set("page_number", String(methodsResult.page));
+      formData.set(
+        "tags",
+        methodsResult.data.suggestedTags?.join(",") || ""
+      );
+      await createAction(formData);
+      setMethodsResult(null);
+      onClearHighlight();
+    } catch {
+      setMethodsResult((prev) =>
         prev ? { ...prev, status: "error", error: "Failed to save" } : null
       );
     }
@@ -352,6 +450,22 @@ export function NotesSidebar({
                   </Button>
                   <Button
                     size="sm"
+                    variant="secondary"
+                    className="gap-1.5"
+                    onClick={() => {
+                      extractMethodsFromHighlight(
+                        processedNote.highlight,
+                        processedNote.page
+                      );
+                      setProcessedNote(null);
+                    }}
+                    disabled={processedNote.status === "saving"}
+                    title="Extract protocol/methods details instead"
+                  >
+                    <FlaskConical className="h-3 w-3" /> Methods
+                  </Button>
+                  <Button
+                    size="sm"
                     variant="outline"
                     onClick={() => {
                       setProcessedNote(null);
@@ -367,8 +481,135 @@ export function NotesSidebar({
           </div>
         )}
 
+        {/* Methods extraction result */}
+        {methodsResult && (
+          <div className="rounded-lg border-2 border-blue-400/40 bg-blue-50/50 dark:bg-blue-950/20 p-3 space-y-3 animate-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+              <FlaskConical className="h-3 w-3" />
+              Methods extraction
+            </div>
+
+            {methodsResult.status === "processing" && (
+              <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Extracting protocol details...
+              </div>
+            )}
+
+            {methodsResult.status === "error" && (
+              <div className="text-center py-2 space-y-2">
+                <p className="text-sm text-destructive">{methodsResult.error}</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setMethodsResult(null)}
+                >
+                  Dismiss
+                </Button>
+              </div>
+            )}
+
+            {(methodsResult.status === "ready" || methodsResult.status === "saving") && (
+              <>
+                <div className="space-y-2 text-sm">
+                  {methodsResult.data.protocol_summary && (
+                    <div>
+                      <span className="font-medium text-xs text-muted-foreground">Protocol:</span>
+                      <p>{methodsResult.data.protocol_summary}</p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    {methodsResult.data.technique && (
+                      <div>
+                        <span className="font-medium text-muted-foreground">Technique:</span>
+                        <p>{methodsResult.data.technique}</p>
+                      </div>
+                    )}
+                    {methodsResult.data.model_system && (
+                      <div>
+                        <span className="font-medium text-muted-foreground">Model:</span>
+                        <p>{methodsResult.data.model_system}</p>
+                      </div>
+                    )}
+                    {methodsResult.data.sample_size && (
+                      <div>
+                        <span className="font-medium text-muted-foreground">Sample size:</span>
+                        <p>{methodsResult.data.sample_size}</p>
+                      </div>
+                    )}
+                    {methodsResult.data.statistical_method && (
+                      <div>
+                        <span className="font-medium text-muted-foreground">Stats:</span>
+                        <p>{methodsResult.data.statistical_method}</p>
+                      </div>
+                    )}
+                  </div>
+                  {methodsResult.data.key_reagents.length > 0 && (
+                    <div className="text-xs">
+                      <span className="font-medium text-muted-foreground">Reagents:</span>
+                      <p>{methodsResult.data.key_reagents.join(", ")}</p>
+                    </div>
+                  )}
+                  {methodsResult.data.timepoints.length > 0 && (
+                    <div className="text-xs">
+                      <span className="font-medium text-muted-foreground">Timepoints:</span>
+                      <p>{methodsResult.data.timepoints.join(", ")}</p>
+                    </div>
+                  )}
+                  {methodsResult.data.key_parameters.length > 0 && (
+                    <div className="text-xs">
+                      <span className="font-medium text-muted-foreground">Parameters:</span>
+                      <p>{methodsResult.data.key_parameters.join(", ")}</p>
+                    </div>
+                  )}
+                </div>
+
+                {methodsResult.data.suggestedTags && methodsResult.data.suggestedTags.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {methodsResult.data.suggestedTags.map((tag) => (
+                      <Badge key={tag} variant="secondary" className="text-xs">
+                        {tag}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    className="flex-1 gap-1.5"
+                    onClick={saveMethodsNote}
+                    disabled={methodsResult.status === "saving"}
+                  >
+                    {methodsResult.status === "saving" ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin" /> Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="h-3 w-3" /> Save as methods note
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setMethodsResult(null);
+                      onClearHighlight();
+                    }}
+                    disabled={methodsResult.status === "saving"}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Paste zone (for paywalled papers without PDF viewer) */}
-        {!processedNote && !pendingHighlight && (
+        {!processedNote && !pendingHighlight && !methodsResult && (
           <div className="relative">
             <div className="rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 hover:border-primary/50 hover:bg-primary/10 transition-colors">
               <div className="flex flex-col items-center justify-center py-4 px-3 pointer-events-none">
@@ -391,7 +632,7 @@ export function NotesSidebar({
         )}
 
         {/* Empty state */}
-        {!processedNote && notes.length === 0 && !showManual && (
+        {!processedNote && !methodsResult && notes.length === 0 && !showManual && (
           <div className="text-center py-4 space-y-1">
             <p className="text-xs text-muted-foreground">
               No notes yet — highlight text in the PDF or paste copied text above

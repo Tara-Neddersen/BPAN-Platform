@@ -38,6 +38,10 @@ export async function POST(request: Request) {
     console.error("Note assist error:", err);
     const message =
       err instanceof Error ? err.message : "Failed to structure note";
-    return NextResponse.json({ error: message }, { status: 500, headers: corsHeaders() });
+    const isRateLimit = message.includes("rate-limited") || message.includes("quota") || message.includes("429");
+    return NextResponse.json(
+      { error: isRateLimit ? "AI rate-limited — please wait 1-2 minutes and try again." : message },
+      { status: isRateLimit ? 429 : 500, headers: corsHeaders() }
+    );
   }
 }

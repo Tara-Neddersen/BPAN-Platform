@@ -2,6 +2,8 @@ import { createClient } from "@/lib/supabase/server";
 import { NoteCard } from "@/components/note-card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { SemanticSearch } from "@/components/semantic-search";
+import { ExportButtons } from "@/components/export-buttons";
 import type { NoteWithPaper } from "@/types";
 import Link from "next/link";
 
@@ -58,21 +60,27 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
 
   const noteTypes = ["finding", "method", "limitation", "general"];
 
+  // Check if any notes lack embeddings (for backfill prompt)
+  const totalNotes = (notes ?? []).length;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Notes</h1>
-        <p className="text-muted-foreground">
-          All your notes across all papers. Filter by tag, type, or search.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Notes</h1>
+          <p className="text-muted-foreground">
+            All your notes across all papers. Filter by tag, type, or search.
+          </p>
+        </div>
+        <ExportButtons noteCount={totalNotes} />
       </div>
 
-      {/* Search */}
+      {/* Standard text search */}
       <form className="flex gap-2">
         <Input
           name="q"
           type="text"
-          placeholder="Search notes..."
+          placeholder="Search notes by keyword..."
           defaultValue={searchQuery}
           className="max-w-md"
         />
@@ -80,6 +88,9 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
         {filterType && <input type="hidden" name="type" value={filterType} />}
         <button type="submit" className="sr-only">Search</button>
       </form>
+
+      {/* Semantic search */}
+      <SemanticSearch />
 
       <div className="flex gap-6">
         {/* Sidebar: tags + type filters */}

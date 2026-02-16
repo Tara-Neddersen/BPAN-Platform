@@ -70,3 +70,50 @@ export interface NoteWithPaper extends Note {
     journal: string | null;
   };
 }
+
+// ─── Phase 3: AI Research Advisor ────────────────────────────────────────────
+
+export interface ResearchContext {
+  id: string;
+  user_id: string;
+  thesis_title: string | null;
+  thesis_summary: string | null;
+  aims: string[];
+  key_questions: string[];
+  model_systems: string[];
+  key_techniques: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdvisorConversation {
+  id: string;
+  user_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdvisorMessage {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  context_used: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface Hypothesis {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  status: "pending" | "supported" | "refuted" | "revised";
+  evidence_for: string[];
+  evidence_against: string[];
+  related_paper_ids: string[];
+  aim: string | null;
+  created_at: string;
+  updated_at: string;
+}
