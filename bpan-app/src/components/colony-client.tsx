@@ -1402,6 +1402,10 @@ function useSpeechToText(onTranscript: (text: string) => void) {
   const transcriptRef = useRef("");
   const recRef = useRef<SpeechRecognition | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Rapid-cycle detection: if recognition ends < 2s after start, 3 times in a row, the browser can't do speech
+  const startTimeRef = useRef(0);
+  const rapidFailCount = useRef(0);
+  const gotResultRef = useRef(false);
 
   cbRef.current = onTranscript;
 
@@ -1417,6 +1421,15 @@ function useSpeechToText(onTranscript: (text: string) => void) {
       if (recRef.current) try { recRef.current.abort(); } catch { /* */ }
     };
   }, []);
+
+  function stopForGood(msg: string) {
+    wantRef.current = false;
+    setIsListening(false);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (recRef.current) try { recRef.current.abort(); } catch { /* */ }
+    setDebugInfo(msg);
+    toast.error(msg, { duration: 8000 });
+  }
 
   function startRec() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1437,6 +1450,9 @@ function useSpeechToText(onTranscript: (text: string) => void) {
     rec.maxAlternatives = 1;
     recRef.current = rec;
 
+    startTimeRef.current = Date.now();
+    gotResultRef.current = false;
+
     setDebugInfo("Starting recognition...");
 
     rec.onaudiostart = () => {
@@ -1445,9 +1461,13 @@ function useSpeechToText(onTranscript: (text: string) => void) {
 
     rec.onspeechstart = () => {
       setDebugInfo("🗣️ Speech detected!");
+      // Speech was detected, reset rapid-fail count
+      rapidFailCount.current = 0;
     };
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
+      gotResultRef.current = true;
+      rapidFailCount.current = 0; // got results = working fine
       let text = "";
       for (let i = 0; i < e.results.length; i++) {
         text += e.results[i][0].transcript;
@@ -1460,33 +1480,63 @@ function useSpeechToText(onTranscript: (text: string) => void) {
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
       setDebugInfo("❌ Error: " + e.error);
       if (e.error === "not-allowed") {
-        wantRef.current = false;
-        setIsListening(false);
-        toast.error("Microphone access denied. Check browser permissions.");
+        stopForGood("Microphone access denied. Check browser permissions.");
       } else if (e.error === "service-not-available") {
-        wantRef.current = false;
-        setIsListening(false);
-        toast.error("Speech service unavailable. Use Chrome for best results.");
+        stopForGood("Speech service unavailable. Please use Google Chrome (not Atlas/Arc/other browsers).");
       }
+      // other errors (no-speech, network, aborted) will trigger onend → restart
     };
 
     rec.onend = () => {
-      setDebugInfo("⏸️ Recognition ended. " + (wantRef.current ? "Restarting..." : "Stopped."));
+      const elapsed = Date.now() - startTimeRef.current;
+
       if (wantRef.current) {
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => {
-          if (wantRef.current) startRec();
-        }, 300);
+        // If it ended in under 2 seconds without any results, that's a rapid fail
+        if (elapsed < 2000 && !gotResultRef.current) {
+          rapidFailCount.current++;
+          if (rapidFailCount.current >= 3) {
+            stopForGood(
+              "⚠️ Speech recognition is not working in this browser. " +
+              "Please open this page in Google Chrome for dictation."
+            );
+            return;
+          }
+          // Wait longer before retrying (exponential backoff)
+          const delay = 500 * Math.pow(2, rapidFailCount.current - 1);
+          setDebugInfo(`⏸️ Ended quickly (${elapsed}ms). Retry ${rapidFailCount.current}/3 in ${delay}ms...`);
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(() => {
+            if (wantRef.current) startRec();
+          }, delay);
+        } else {
+          // Normal restart (recognition paused after silence — this is normal)
+          rapidFailCount.current = 0;
+          setDebugInfo("⏸️ Paused (silence). Auto-restarting...");
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(() => {
+            if (wantRef.current) startRec();
+          }, 300);
+        }
+      } else {
+        setDebugInfo("Stopped.");
       }
     };
 
     try {
       rec.start();
-      setDebugInfo("✅ rec.start() called successfully");
+      setDebugInfo("✅ rec.start() called — listening...");
     } catch (err) {
       setDebugInfo("❌ rec.start() threw: " + String(err));
+      rapidFailCount.current++;
+      if (rapidFailCount.current >= 3) {
+        stopForGood(
+          "⚠️ Speech recognition failed to start. " +
+          "Please use Google Chrome for dictation."
+        );
+        return;
+      }
       if (wantRef.current) {
-        timerRef.current = setTimeout(() => { if (wantRef.current) startRec(); }, 500);
+        timerRef.current = setTimeout(() => { if (wantRef.current) startRec(); }, 1000);
       }
     }
   }
@@ -1495,11 +1545,13 @@ function useSpeechToText(onTranscript: (text: string) => void) {
     if (wantRef.current) {
       wantRef.current = false;
       setIsListening(false);
+      rapidFailCount.current = 0;
       if (timerRef.current) clearTimeout(timerRef.current);
       if (recRef.current) try { recRef.current.stop(); } catch { /* */ }
       setDebugInfo("Stopped.");
     } else {
       transcriptRef.current = "";
+      rapidFailCount.current = 0;
       wantRef.current = true;
       setIsListening(true);
       startRec();
@@ -1509,6 +1561,7 @@ function useSpeechToText(onTranscript: (text: string) => void) {
   function stop() {
     wantRef.current = false;
     setIsListening(false);
+    rapidFailCount.current = 0;
     if (timerRef.current) clearTimeout(timerRef.current);
     if (recRef.current) try { recRef.current.stop(); } catch { /* */ }
   }
