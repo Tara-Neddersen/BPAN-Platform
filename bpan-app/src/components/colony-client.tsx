@@ -1393,10 +1393,9 @@ export function ColonyClient({
  * 100% free, no API calls, no limits.
  * Works in Chrome, Edge, Safari (most browsers).
  */
-function useSpeechToText(onTranscript: (text: string) => void) {
+function useSpeechToText(onTranscript: (text: string, isFinal: boolean) => void) {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
-  // Refs so event handlers always see latest values (avoids stale closures)
   const wantListeningRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
   const finalTranscriptRef = useRef("");
@@ -1404,10 +1403,8 @@ function useSpeechToText(onTranscript: (text: string) => void) {
   const SpeechRecognitionRef = useRef<typeof SpeechRecognition | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
-  // Keep the callback ref up to date
   useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
 
-  // Detect support on mount
   useEffect(() => {
     const SR = (window as unknown as { SpeechRecognition?: typeof SpeechRecognition; webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition
       || (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
@@ -1422,56 +1419,57 @@ function useSpeechToText(onTranscript: (text: string) => void) {
     };
   }, []);
 
-  // Create a fresh SpeechRecognition instance & wire up handlers
   function createRecognition() {
     const SR = SpeechRecognitionRef.current;
     if (!SR) return null;
-
     const r = new SR();
     r.continuous = true;
     r.interimResults = true;
     r.lang = "en-US";
 
     r.onresult = (event: SpeechRecognitionEvent) => {
+      let interim = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
+        const t = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalTranscriptRef.current += transcript + " ";
-          onTranscriptRef.current(finalTranscriptRef.current.trim());
+          finalTranscriptRef.current += t + " ";
+        } else {
+          interim += t;
         }
+      }
+      // Send full text (committed + in-progress) to the callback
+      const fullText = (finalTranscriptRef.current + interim).trim();
+      if (fullText) {
+        onTranscriptRef.current(fullText, !interim);
       }
     };
 
     r.onerror = (event: SpeechRecognitionErrorEvent) => {
-      console.warn("Speech recognition error:", event.error);
-      // Only fully stop on fatal errors (not-allowed, service-not-available)
+      console.warn("Speech error:", event.error);
       if (event.error === "not-allowed" || event.error === "service-not-available") {
         wantListeningRef.current = false;
         setIsListening(false);
         toast.error("Microphone access denied or speech service unavailable.");
       }
-      // For "no-speech", "aborted", "network" — let onend handle restart
     };
 
     r.onend = () => {
-      // Browser stopped recognition. Restart if we still want to listen.
       if (wantListeningRef.current) {
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
         restartTimerRef.current = setTimeout(() => {
           if (!wantListeningRef.current) return;
           try {
-            // Create a brand-new instance to avoid InvalidStateError
             const fresh = createRecognition();
             if (fresh) {
               recognitionRef.current = fresh;
               fresh.start();
             }
           } catch (err) {
-            console.warn("Failed to restart speech recognition:", err);
+            console.warn("Restart failed:", err);
             wantListeningRef.current = false;
             setIsListening(false);
           }
-        }, 250);
+        }, 300);
       }
     };
 
@@ -1480,9 +1478,7 @@ function useSpeechToText(onTranscript: (text: string) => void) {
 
   function toggle() {
     if (!SpeechRecognitionRef.current) return;
-
     if (wantListeningRef.current) {
-      // Stop
       wantListeningRef.current = false;
       setIsListening(false);
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
@@ -1490,7 +1486,6 @@ function useSpeechToText(onTranscript: (text: string) => void) {
         try { recognitionRef.current.abort(); } catch { /* ignore */ }
       }
     } else {
-      // Start
       try {
         finalTranscriptRef.current = "";
         const r = createRecognition();
@@ -1500,7 +1495,7 @@ function useSpeechToText(onTranscript: (text: string) => void) {
         wantListeningRef.current = true;
         setIsListening(true);
       } catch {
-        toast.error("Could not start speech recognition. Make sure you've allowed microphone access.");
+        toast.error("Could not start speech recognition. Allow microphone access and try again.");
       }
     }
   }
@@ -1537,20 +1532,19 @@ function MeetingDetail({
   const [summarizing, setSummarizing] = useState(false);
 
   // Speech-to-text: appends transcribed text to content
-  const transcriptRef = useRef("");
   const baseContentRef = useRef(content);
-  const { isListening, isSupported, toggle: toggleMic, stop: stopMic } = useSpeechToText((text) => {
-    transcriptRef.current = text;
-    setContent(baseContentRef.current ? baseContentRef.current + "\n\n🎙️ " + text : "🎙️ " + text);
+  const { isListening, isSupported, toggle: toggleMic, stop: stopMic } = useSpeechToText((text, isFinal) => {
+    const base = baseContentRef.current;
+    const prefix = isFinal ? "" : "🎙️ ";
+    setContent(base ? base + "\n\n" + prefix + text : prefix + text);
   });
 
   // When mic starts, snapshot the current content as the "base"
   function handleToggleMic() {
     if (!isListening) {
       baseContentRef.current = content;
-      transcriptRef.current = "";
     } else {
-      // When stopping, remove the emoji prefix and make it clean
+      // When stopping, clean up the emoji prefix
       setContent((prev) => prev.replace(/🎙️ /g, ""));
     }
     toggleMic();
