@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Plus, Edit, Trash2, Loader2, Check, X, Copy,
   ExternalLink, Eye, ChevronDown, ChevronUp,
   Calendar, AlertTriangle, Link2, Mouse,
   MessageSquare, RefreshCw, FileText, CheckCircle2,
-  ImageIcon,
+  ImageIcon, Upload, CloudOff, Cloud,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -192,6 +192,55 @@ export function ColonyClient({
   const [filterCohort, setFilterCohort] = useState("all");
   const [filterGenotype, setFilterGenotype] = useState("all");
 
+  // Google Drive integration
+  const [driveStatus, setDriveStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null }>({ configured: false, connected: false });
+  const [driveLoading, setDriveLoading] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/gdrive/status")
+      .then((r) => r.json())
+      .then(setDriveStatus)
+      .catch(() => {});
+    // Show toast if redirected back from OAuth
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("drive") === "connected") {
+      toast.success("Google Drive connected successfully!");
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (params.get("drive") === "error") {
+      toast.error("Failed to connect Google Drive: " + (params.get("msg") || "unknown error"));
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  async function connectGoogleDrive() {
+    setDriveLoading(true);
+    try {
+      const res = await fetch("/api/gdrive/auth");
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        toast.error(data.error || "Failed to start Drive connection");
+        setDriveLoading(false);
+      }
+    } catch {
+      toast.error("Failed to connect Google Drive");
+      setDriveLoading(false);
+    }
+  }
+
+  async function disconnectGoogleDrive() {
+    setDriveLoading(true);
+    try {
+      await fetch("/api/gdrive/disconnect", { method: "POST" });
+      setDriveStatus({ configured: true, connected: false });
+      toast.success("Google Drive disconnected");
+    } catch {
+      toast.error("Failed to disconnect");
+    }
+    setDriveLoading(false);
+  }
+
   // Sort animals: cohort → sex → genotype
   const sortedAnimals = useMemo(() => {
     let filtered = [...animals];
@@ -369,6 +418,45 @@ export function ColonyClient({
           </CardContent>
         </Card>
       )}
+
+      {/* Google Drive Connection */}
+      <Card className={driveStatus.connected ? "border-green-200 dark:border-green-800" : "border-dashed"}>
+        <CardContent className="py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {driveStatus.connected ? (
+              <Cloud className="h-5 w-5 text-green-500" />
+            ) : (
+              <CloudOff className="h-5 w-5 text-muted-foreground" />
+            )}
+            <div>
+              <div className="text-sm font-medium">
+                {driveStatus.connected
+                  ? `Google Drive connected${driveStatus.email ? ` (${driveStatus.email})` : ""}`
+                  : "Google Drive not connected"}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {driveStatus.connected
+                  ? "Experiment results will be uploaded to your Drive automatically. Files are organized in BPAN Platform / Cohort / Animal."
+                  : driveStatus.configured
+                    ? "Connect your Google Drive to auto-upload experiment results."
+                    : "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment to enable Drive integration."}
+              </p>
+            </div>
+          </div>
+          {driveStatus.configured && (
+            driveStatus.connected ? (
+              <Button variant="outline" size="sm" onClick={disconnectGoogleDrive} disabled={driveLoading}>
+                {driveLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Disconnect"}
+              </Button>
+            ) : (
+              <Button size="sm" onClick={connectGoogleDrive} disabled={driveLoading}>
+                {driveLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Cloud className="h-4 w-4 mr-1" />}
+                Connect Drive
+              </Button>
+            )
+          )}
+        </CardContent>
+      </Card>
 
       <Tabs defaultValue="animals">
         <TabsList className="w-full flex flex-wrap h-auto gap-1 p-1">
@@ -1231,6 +1319,7 @@ export function ColonyClient({
               cohort={cohorts.find((c) => c.id === selectedAnimal.cohort_id)}
               experiments={experiments.filter((e) => e.animal_id === selectedAnimal.id)}
               timepoints={timepoints}
+              driveConnected={driveStatus.connected}
               onSchedule={() => handleScheduleAll(selectedAnimal)}
               onUpdateStatus={handleUpdateExpStatus}
               onSaveResultUrl={handleSaveResultUrl}
@@ -1373,6 +1462,7 @@ function AnimalDetail({
   cohort,
   experiments,
   timepoints,
+  driveConnected,
   onSchedule,
   onUpdateStatus,
   onSaveResultUrl,
@@ -1383,6 +1473,7 @@ function AnimalDetail({
   cohort?: Cohort;
   experiments: AnimalExperiment[];
   timepoints: ColonyTimepoint[];
+  driveConnected: boolean;
   onSchedule: () => void;
   onUpdateStatus: (id: string, status: string) => void;
   onSaveResultUrl: (id: string, url: string) => void;
@@ -1391,6 +1482,36 @@ function AnimalDetail({
 }) {
   const age = daysOld(animal.birth_date);
   const [resultUrls, setResultUrls] = useState<Record<string, string>>({});
+  const [uploading, setUploading] = useState<string | null>(null);
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  async function handleFileUpload(expId: string, experimentType: string, file: File) {
+    setUploading(expId);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("cohort_name", cohort?.name || "Unknown");
+      formData.append("animal_identifier", animal.identifier);
+      formData.append("experiment_type", experimentType);
+      formData.append("experiment_id", expId);
+
+      const res = await fetch("/api/gdrive/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (data.error) {
+        toast.error(data.error);
+      } else {
+        toast.success("Uploaded to Google Drive!");
+        onSaveResultUrl(expId, data.url);
+      }
+    } catch {
+      toast.error("Upload failed");
+    }
+    setUploading(null);
+  }
 
   // Group experiments by timepoint
   const grouped = useMemo(() => {
@@ -1482,12 +1603,41 @@ function AnimalDetail({
                           </Button>
                         )}
 
-                        {/* Results link */}
+                        {/* Results: upload or paste link */}
                         {exp.status === "completed" && !exp.results_drive_url && (
                           <div className="flex items-center gap-1">
+                            {/* Upload to Drive button */}
+                            {driveConnected && (
+                              <>
+                                <input
+                                  type="file"
+                                  ref={(el) => { fileInputRefs.current[exp.id] = el; }}
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) handleFileUpload(exp.id, exp.experiment_type, file);
+                                  }}
+                                />
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-6 text-xs px-2 gap-1"
+                                  onClick={() => fileInputRefs.current[exp.id]?.click()}
+                                  disabled={uploading === exp.id}
+                                >
+                                  {uploading === exp.id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Upload className="h-3 w-3" />
+                                  )}
+                                  {uploading === exp.id ? "Uploading..." : "Upload"}
+                                </Button>
+                              </>
+                            )}
+                            {/* Manual paste link fallback */}
                             <Input
-                              className="h-6 text-xs w-40"
-                              placeholder="Google Drive link"
+                              className="h-6 text-xs w-36"
+                              placeholder={driveConnected ? "or paste link" : "Google Drive link"}
                               value={resultUrls[exp.id] || ""}
                               onChange={(e) => setResultUrls((prev) => ({ ...prev, [exp.id]: e.target.value }))}
                             />
@@ -1502,8 +1652,8 @@ function AnimalDetail({
                           </div>
                         )}
                         {exp.results_drive_url && (
-                          <a href={exp.results_drive_url} target="_blank" rel="noopener noreferrer" className="text-primary">
-                            <ExternalLink className="h-3.5 w-3.5" />
+                          <a href={exp.results_drive_url} target="_blank" rel="noopener noreferrer" className="text-primary flex items-center gap-1 text-xs">
+                            <ExternalLink className="h-3.5 w-3.5" /> Results
                           </a>
                         )}
                       </div>
