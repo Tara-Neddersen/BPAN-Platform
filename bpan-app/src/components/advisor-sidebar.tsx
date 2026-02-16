@@ -18,6 +18,8 @@ import {
   BookOpen,
   Search,
   AlertTriangle,
+  Bookmark,
+  Check,
 } from "lucide-react";
 import type { AdvisorConversation, AdvisorMessage } from "@/types";
 import type { ProactiveSuggestion } from "@/lib/advisor";
@@ -46,6 +48,7 @@ export function AdvisorSidebar() {
   // Suggestions
   const [suggestions, setSuggestions] = useState<ProactiveSuggestion[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [savingIdeaIdx, setSavingIdeaIdx] = useState<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -329,7 +332,7 @@ export function AdvisorSidebar() {
                       }`}
                     >
                       <div
-                        className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
+                        className={`max-w-[85%] rounded-lg px-3 py-2 text-sm group/msg ${
                           msg.role === "user"
                             ? "bg-primary text-primary-foreground"
                             : "bg-muted"
@@ -338,6 +341,29 @@ export function AdvisorSidebar() {
                         <div className="whitespace-pre-wrap break-words leading-relaxed">
                           {msg.content}
                         </div>
+                        {msg.role === "assistant" && msg.content.length > 20 && (
+                          <button
+                            className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity"
+                            onClick={async () => {
+                              try {
+                                await fetch("/api/ideas", {
+                                  method: "POST",
+                                  body: JSON.stringify({
+                                    title: msg.content.slice(0, 150).split("\n")[0],
+                                    description: msg.content.slice(0, 500),
+                                    source: "advisor",
+                                    tags: ["from-chat"],
+                                  }),
+                                  headers: { "Content-Type": "application/json" },
+                                });
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            }}
+                          >
+                            <Bookmark className="h-3 w-3" /> Save as idea
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -494,18 +520,61 @@ export function AdvisorSidebar() {
                       </div>
                       <p className="text-sm">{s.suggestion}</p>
                       <p className="text-xs text-muted-foreground">{s.rationale}</p>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-xs h-7 gap-1"
-                        onClick={() => {
-                          setInput(`Tell me more about: ${s.suggestion}`);
-                          setView("chat");
-                          inputRef.current?.focus();
-                        }}
-                      >
-                        <Bot className="h-3 w-3" /> Discuss with advisor
-                      </Button>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs h-7 gap-1"
+                          onClick={() => {
+                            setInput(`Tell me more about: ${s.suggestion}`);
+                            setView("chat");
+                            inputRef.current?.focus();
+                          }}
+                        >
+                          <Bot className="h-3 w-3" /> Discuss
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs h-7 gap-1"
+                          disabled={savingIdeaIdx === i}
+                          onClick={async () => {
+                            setSavingIdeaIdx(i);
+                            try {
+                              const fd = new FormData();
+                              fd.set("title", s.suggestion.slice(0, 200));
+                              fd.set("description", s.rationale || "");
+                              fd.set("source", "advisor");
+                              fd.set("priority", s.type === "gap" ? "high" : "medium");
+                              fd.set("tags", s.type);
+                              const res = await fetch("/api/ideas", {
+                                method: "POST",
+                                body: JSON.stringify({
+                                  title: s.suggestion.slice(0, 200),
+                                  description: s.rationale || "",
+                                  source: "advisor",
+                                  priority: s.type === "gap" ? "high" : "medium",
+                                  tags: [s.type],
+                                }),
+                                headers: { "Content-Type": "application/json" },
+                              });
+                              if (!res.ok) throw new Error("Failed to save");
+                              // Brief success feedback
+                              setTimeout(() => setSavingIdeaIdx(null), 1500);
+                            } catch (err) {
+                              console.error(err);
+                              setSavingIdeaIdx(null);
+                            }
+                          }}
+                        >
+                          {savingIdeaIdx === i ? (
+                            <Check className="h-3 w-3 text-green-500" />
+                          ) : (
+                            <Bookmark className="h-3 w-3" />
+                          )}
+                          {savingIdeaIdx === i ? "Saved!" : "Save as Idea"}
+                        </Button>
+                      </div>
                     </div>
                   ))
                 )}

@@ -183,3 +183,38 @@ export interface Reagent {
   created_at: string;
   updated_at: string;
 }
+
+// ─── Research Ideas Board ────────────────────────────────────────────────────
+
+export interface ResearchIdea {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  source: string;
+  status: "exploring" | "promising" | "dead_end" | "incorporated";
+  priority: "low" | "medium" | "high";
+  tags: string[];
+  linked_paper_ids: string[];
+  linked_note_ids: string[];
+  linked_hypothesis_id: string | null;
+  aim: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IdeaEntry {
+  id: string;
+  idea_id: string;
+  user_id: string;
+  content: string;
+  entry_type: "finding" | "question" | "thought" | "contradiction" | "next_step";
+  source_paper_id: string | null;
+  source_note_id: string | null;
+  created_at: string;
+}
+
+export interface IdeaEntryWithSources extends IdeaEntry {
+  saved_papers?: { title: string; pmid: string } | null;
+  notes?: { content: string; highlight_text: string | null } | null;
+}

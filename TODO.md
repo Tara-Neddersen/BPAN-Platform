@@ -60,6 +60,17 @@
 - [x] Full CRUD — create, edit, delete for experiments, protocols, reagents, timepoints
 - [x] Tab-based UI — Calendar, Timeline, Protocols, Reagents views
 
+## Research Ideas Board ✅
+
+- [x] Ideas page — create, edit, filter by status (exploring/promising/dead end/incorporated)
+- [x] Research log — add findings, questions, thoughts, contradictions, and next steps to each idea
+- [x] Link papers to ideas — connect saved papers to track what informed each idea
+- [x] Link notes to entries — reference specific notes as evidence for findings
+- [x] Save from AI Advisor — save advisor suggestions and chat responses as ideas with one click
+- [x] Status tracking — quick-switch between exploring, promising, dead end, incorporated
+- [x] Priority and tagging — organize ideas by priority and custom tags
+- [x] Source tracking — see whether an idea came from manual entry or AI advisor
+
 ## Phase 5: Results Analyzer
 
 - [ ] Data import — CSV, Excel, paste from spreadsheet
