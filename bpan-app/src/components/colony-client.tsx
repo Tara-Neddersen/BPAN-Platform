@@ -1396,80 +1396,108 @@ export function ColonyClient({
 function useSpeechToText(onTranscript: (text: string) => void) {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
-  // Use refs so event handlers always see the latest values (no stale closures)
-  const isListeningRef = useRef(false);
+  // Refs so event handlers always see latest values (avoids stale closures)
+  const wantListeningRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
   const finalTranscriptRef = useRef("");
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const SpeechRecognitionRef = useRef<typeof SpeechRecognition | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   // Keep the callback ref up to date
   useEffect(() => { onTranscriptRef.current = onTranscript; }, [onTranscript]);
 
+  // Detect support on mount
   useEffect(() => {
-    const SpeechRecognition = (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition }).SpeechRecognition
-      || (window as unknown as { webkitSpeechRecognition?: typeof window.SpeechRecognition }).webkitSpeechRecognition;
-    setIsSupported(!!SpeechRecognition);
-
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "en-US";
-
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscriptRef.current += transcript + " ";
-            onTranscriptRef.current(finalTranscriptRef.current.trim());
-          }
-        }
-      };
-
-      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        console.error("Speech recognition error:", event.error);
-        if (event.error !== "no-speech" && event.error !== "aborted") {
-          isListeningRef.current = false;
-          setIsListening(false);
-        }
-      };
-
-      recognition.onend = () => {
-        // Auto-restart if still supposed to be listening (browser stops after pauses)
-        if (isListeningRef.current) {
-          try {
-            setTimeout(() => {
-              if (isListeningRef.current && recognitionRef.current) {
-                recognitionRef.current.start();
-              }
-            }, 100);
-          } catch { /* already started */ }
-        }
-      };
-
-      recognitionRef.current = recognition;
-    }
-
+    const SR = (window as unknown as { SpeechRecognition?: typeof SpeechRecognition; webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition
+      || (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
+    SpeechRecognitionRef.current = SR || null;
+    setIsSupported(!!SR);
     return () => {
-      isListeningRef.current = false;
+      wantListeningRef.current = false;
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch { /* ignore */ }
+        try { recognitionRef.current.abort(); } catch { /* ignore */ }
       }
     };
   }, []);
 
-  function toggle() {
-    if (!recognitionRef.current) return;
+  // Create a fresh SpeechRecognition instance & wire up handlers
+  function createRecognition() {
+    const SR = SpeechRecognitionRef.current;
+    if (!SR) return null;
 
-    if (isListeningRef.current) {
-      isListeningRef.current = false;
+    const r = new SR();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = "en-US";
+
+    r.onresult = (event: SpeechRecognitionEvent) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscriptRef.current += transcript + " ";
+          onTranscriptRef.current(finalTranscriptRef.current.trim());
+        }
+      }
+    };
+
+    r.onerror = (event: SpeechRecognitionErrorEvent) => {
+      console.warn("Speech recognition error:", event.error);
+      // Only fully stop on fatal errors (not-allowed, service-not-available)
+      if (event.error === "not-allowed" || event.error === "service-not-available") {
+        wantListeningRef.current = false;
+        setIsListening(false);
+        toast.error("Microphone access denied or speech service unavailable.");
+      }
+      // For "no-speech", "aborted", "network" — let onend handle restart
+    };
+
+    r.onend = () => {
+      // Browser stopped recognition. Restart if we still want to listen.
+      if (wantListeningRef.current) {
+        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = setTimeout(() => {
+          if (!wantListeningRef.current) return;
+          try {
+            // Create a brand-new instance to avoid InvalidStateError
+            const fresh = createRecognition();
+            if (fresh) {
+              recognitionRef.current = fresh;
+              fresh.start();
+            }
+          } catch (err) {
+            console.warn("Failed to restart speech recognition:", err);
+            wantListeningRef.current = false;
+            setIsListening(false);
+          }
+        }, 250);
+      }
+    };
+
+    return r;
+  }
+
+  function toggle() {
+    if (!SpeechRecognitionRef.current) return;
+
+    if (wantListeningRef.current) {
+      // Stop
+      wantListeningRef.current = false;
       setIsListening(false);
-      recognitionRef.current.stop();
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch { /* ignore */ }
+      }
     } else {
+      // Start
       try {
         finalTranscriptRef.current = "";
-        recognitionRef.current.start();
-        isListeningRef.current = true;
+        const r = createRecognition();
+        if (!r) return;
+        recognitionRef.current = r;
+        r.start();
+        wantListeningRef.current = true;
         setIsListening(true);
       } catch {
         toast.error("Could not start speech recognition. Make sure you've allowed microphone access.");
@@ -1478,10 +1506,11 @@ function useSpeechToText(onTranscript: (text: string) => void) {
   }
 
   function stop() {
-    isListeningRef.current = false;
+    wantListeningRef.current = false;
     setIsListening(false);
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch { /* ignore */ }
+      try { recognitionRef.current.abort(); } catch { /* ignore */ }
     }
   }
 
