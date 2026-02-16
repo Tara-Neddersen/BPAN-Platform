@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   Plus, Edit, Trash2, Loader2, Check, X, Copy,
   ExternalLink, Eye, ChevronDown, ChevronUp,
@@ -166,15 +167,18 @@ export function ColonyClient({
   colonyPhotos: initPhotos,
   actions,
 }: ColonyClientProps) {
-  const [cages] = useState(initCages);
-  const [cohorts] = useState(initCohorts);
-  const [animals] = useState(initAnimals);
-  const [experiments] = useState(initExps);
-  const [timepoints] = useState(initTPs);
-  const [portals] = useState(initPortals);
-  const [meetings] = useState(initMeetings);
-  const [cageChanges] = useState(initCageChanges);
-  const [photos] = useState(initPhotos);
+  const router = useRouter();
+
+  // Use props directly — they update when the server re-renders after mutations
+  const cages = initCages;
+  const cohorts = initCohorts;
+  const animals = initAnimals;
+  const experiments = initExps;
+  const timepoints = initTPs;
+  const portals = initPortals;
+  const meetings = initMeetings;
+  const cageChanges = initCageChanges;
+  const photos = initPhotos;
 
   const [showAddAnimal, setShowAddAnimal] = useState(false);
   const [showAddCohort, setShowAddCohort] = useState(false);
@@ -302,7 +306,16 @@ export function ColonyClient({
     } else {
       toast.success("Saved!");
       closeDialog?.();
+      router.refresh();
     }
+  }
+
+  // Wrapper for inline action calls (delete, toggle, etc.)
+  async function act(fn: Promise<{ success?: boolean; error?: string }>) {
+    const result = await fn;
+    if (result.error) toast.error(result.error);
+    else router.refresh();
+    return result;
   }
 
   async function handleScheduleAll(animal: Animal) {
@@ -313,6 +326,7 @@ export function ColonyClient({
       toast.error(result.error);
     } else {
       toast.success(`Scheduled ${result.count} experiments for ${animal.identifier}!`);
+      router.refresh();
     }
   }
 
@@ -322,7 +336,7 @@ export function ColonyClient({
     if (status === "completed") fd.set("completed_date", new Date().toISOString().split("T")[0]);
     const result = await actions.updateAnimalExperiment(expId, fd);
     if (result.error) toast.error(result.error);
-    else toast.success("Updated!");
+    else { toast.success("Updated!"); router.refresh(); }
   }
 
   async function handleSaveResultUrl(expId: string, url: string) {
@@ -330,7 +344,7 @@ export function ColonyClient({
     fd.set("results_drive_url", url);
     const result = await actions.updateAnimalExperiment(expId, fd);
     if (result.error) toast.error(result.error);
-    else toast.success("Results link saved!");
+    else { toast.success("Results link saved!"); router.refresh(); }
   }
 
   function copyPILink(token: string) {
@@ -388,7 +402,7 @@ export function ColonyClient({
                     <span className="text-xs text-muted-foreground">{cc.scheduled_date}</span>
                     <Button
                       variant="ghost" size="sm" className="h-6 text-xs px-2"
-                      onClick={() => actions.toggleCageChange(cc.id, true)}
+                      onClick={() => act(actions.toggleCageChange(cc.id, true))}
                     >
                       <Check className="h-3 w-3 mr-0.5" /> Done
                     </Button>
@@ -572,7 +586,7 @@ export function ColonyClient({
                             {c.litter_size ? ` · Litter: ${c.litter_size}` : ""}
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => actions.deleteCohort(c.id)}>
+                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteCohort(c.id))}>
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -633,7 +647,7 @@ export function ColonyClient({
                         <Button variant="ghost" size="sm" onClick={() => setEditingTP(tp)}>
                           <Edit className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => actions.deleteColonyTimepoint(tp.id)}>
+                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteColonyTimepoint(tp.id))}>
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -670,7 +684,7 @@ export function ColonyClient({
                             {c.location || "No location"}{c.breeding_start ? ` · Since: ${c.breeding_start}` : ""}
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => actions.deleteBreederCage(c.id)}>
+                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteBreederCage(c.id))}>
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -723,7 +737,7 @@ export function ColonyClient({
                             <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{m.content}</p>
                           )}
                         </div>
-                        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); actions.deleteMeetingNote(m.id); }}>
+                        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); act(actions.deleteMeetingNote(m.id)); }}>
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -767,7 +781,7 @@ export function ColonyClient({
                                 ? "bg-green-500 border-green-500 text-white"
                                 : "border-gray-300 hover:border-primary"
                             }`}
-                            onClick={() => actions.toggleCageChange(cc.id, !cc.is_completed)}
+                            onClick={() => act(actions.toggleCageChange(cc.id, !cc.is_completed))}
                           >
                             {cc.is_completed && <Check className="h-3.5 w-3.5" />}
                           </button>
@@ -793,7 +807,7 @@ export function ColonyClient({
                             )}
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => actions.deleteCageChange(cc.id)}>
+                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteCageChange(cc.id))}>
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -838,7 +852,7 @@ export function ColonyClient({
                         <Button
                           variant="destructive" size="sm"
                           className="opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={() => actions.deleteColonyPhoto(p.id)}
+                          onClick={() => act(actions.deleteColonyPhoto(p.id))}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -895,7 +909,7 @@ export function ColonyClient({
                           {copiedToken === p.token ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
                           {copiedToken === p.token ? "Copied!" : "Copy Link"}
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => actions.deleteAdvisorAccess(p.id)}>
+                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteAdvisorAccess(p.id))}>
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -1164,7 +1178,7 @@ export function ColonyClient({
                 const result = await actions.updateMeetingNote(editingMeeting.id, fd);
                 setBusy(false);
                 if (result.error) toast.error(result.error);
-                else { toast.success("Saved!"); setEditingMeeting(null); }
+                else { toast.success("Saved!"); setEditingMeeting(null); router.refresh(); }
               }}
               onClose={() => setEditingMeeting(null)}
               busy={busy}
@@ -1188,7 +1202,7 @@ export function ColonyClient({
               );
               setBusy(false);
               if (result.error) toast.error(result.error);
-              else { toast.success(`Generated ${result.count} cage change reminders!`); setShowGenerateCageChanges(false); }
+              else { toast.success(`Generated ${result.count} cage change reminders!`); setShowGenerateCageChanges(false); router.refresh(); }
             }}
             className="space-y-3"
           >
@@ -1227,6 +1241,7 @@ export function ColonyClient({
                 navigator.clipboard.writeText(url);
                 toast.success("Access created! Link copied to clipboard.");
                 setShowAddPI(false);
+                router.refresh();
               }
             }}
             className="space-y-3"
@@ -1323,7 +1338,7 @@ export function ColonyClient({
               onSchedule={() => handleScheduleAll(selectedAnimal)}
               onUpdateStatus={handleUpdateExpStatus}
               onSaveResultUrl={handleSaveResultUrl}
-              onDelete={() => { actions.deleteAnimal(selectedAnimal.id); setSelectedAnimal(null); }}
+              onDelete={() => { act(actions.deleteAnimal(selectedAnimal.id)); setSelectedAnimal(null); }}
               busy={busy}
             />
           )}
