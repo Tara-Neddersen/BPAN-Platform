@@ -52,6 +52,9 @@ export function Nav({ userEmail }: NavProps) {
               <Link href="/experiments" className="text-muted-foreground hover:text-foreground transition-colors">
                 Experiments
               </Link>
+              <Link href="/results" className="text-muted-foreground hover:text-foreground transition-colors">
+                Results
+              </Link>
               <Link href="/ideas" className="text-muted-foreground hover:text-foreground transition-colors">
                 Ideas
               </Link>

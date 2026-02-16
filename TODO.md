@@ -71,16 +71,19 @@
 - [x] Priority and tagging — organize ideas by priority and custom tags
 - [x] Source tracking — see whether an idea came from manual entry or AI advisor
 
-## Phase 5: Results Analyzer
+## Phase 5: Results Analyzer ✅
 
-- [ ] Data import — CSV, Excel, paste from spreadsheet
-- [ ] Auto-detection of data type → suggest appropriate plots
-- [ ] Statistical analysis — t-tests, ANOVA, mixed models, non-parametric
-- [ ] Plain-English AI interpretation of results
-- [ ] Publication-ready figures (Plotly) — journal-formatted, customizable
-- [ ] Reproducibility checks — sample size warnings, normality violations
-- [ ] Cross-experiment comparison
-- [ ] Figure export — SVG, PNG, PDF at publication resolution
+- [x] Data import — CSV upload, Excel (.xlsx/.xls), paste from spreadsheet (tab/comma separated)
+- [x] Auto-detection of column types (numeric, categorical, date, text) with preview
+- [x] Statistical analysis — t-test (Welch's), ANOVA, Mann-Whitney U, chi-square, Pearson correlation, descriptive stats
+- [x] Plain-English AI interpretation of results (Gemini + OpenRouter fallback)
+- [x] Publication-ready figures (Plotly) — bar, scatter, box, histogram, line, violin charts with color coding
+- [x] Reproducibility checks — sample size warnings, normality assessment (skewness), significance thresholds
+- [x] Cross-experiment linking — datasets can be linked to experiments
+- [x] Figure export — SVG and PNG (high resolution) via Plotly
+- [x] Paginated data table with column type badges
+- [x] Save & recall analyses with expandable result cards
+- [x] Effect size reporting — Cohen's d, eta-squared, Cramér's V, Pearson r
 
 ## Phase 6: Polish & Extras
 

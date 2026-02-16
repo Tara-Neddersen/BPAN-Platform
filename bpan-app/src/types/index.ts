@@ -218,3 +218,50 @@ export interface IdeaEntryWithSources extends IdeaEntry {
   saved_papers?: { title: string; pmid: string } | null;
   notes?: { content: string; highlight_text: string | null } | null;
 }
+
+// ─── Phase 5: Results Analyzer ───────────────────────────────────────────────
+
+export interface DatasetColumn {
+  name: string;
+  type: "numeric" | "categorical" | "date" | "text";
+  unit?: string;
+}
+
+export interface Dataset {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string | null;
+  experiment_id: string | null;
+  columns: DatasetColumn[];
+  data: Record<string, unknown>[];
+  row_count: number;
+  source: "csv" | "excel" | "paste";
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Analysis {
+  id: string;
+  user_id: string;
+  dataset_id: string;
+  name: string;
+  test_type: "t_test" | "anova" | "mann_whitney" | "chi_square" | "correlation" | "descriptive";
+  config: Record<string, unknown>;
+  results: Record<string, unknown>;
+  ai_interpretation: string | null;
+  created_at: string;
+}
+
+export interface Figure {
+  id: string;
+  user_id: string;
+  dataset_id: string;
+  analysis_id: string | null;
+  name: string;
+  chart_type: "bar" | "scatter" | "box" | "histogram" | "line" | "violin" | "heatmap";
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
