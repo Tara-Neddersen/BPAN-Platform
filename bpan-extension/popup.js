@@ -1,5 +1,5 @@
 // BPAN Research Notes — Popup Script
-let API_BASE = "http://localhost:3000";
+let API_BASE = "https://bpan-app.vercel.app";
 
 // Load saved API base on startup
 chrome.storage.local.get(["bpan_api_base"], (data) => {

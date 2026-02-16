@@ -5,7 +5,7 @@
   "use strict";
 
   // Will be overridden from storage if set via popup
-  let API_BASE = "http://localhost:3000";
+  let API_BASE = "https://bpan-app.vercel.app";
   let sidebarOpen = false;
   let currentPaperId = null;
   let sidebarEl = null;
