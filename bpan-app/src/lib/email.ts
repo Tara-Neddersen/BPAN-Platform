@@ -1,8 +1,14 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 const FROM_ADDRESS = "BPAN Platform <onboarding@resend.dev>";
+
+function getResendClient() {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) {
+    throw new Error("RESEND_API_KEY is not configured");
+  }
+  return new Resend(key);
+}
 
 /**
  * Send an HTML email via Resend.
@@ -16,9 +22,7 @@ export async function sendEmail({
   subject: string;
   html: string;
 }) {
-  if (!process.env.RESEND_API_KEY) {
-    throw new Error("RESEND_API_KEY is not configured");
-  }
+  const resend = getResendClient();
 
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
