@@ -85,15 +85,14 @@
 - [x] Save & recall analyses with expandable result cards
 - [x] Effect size reporting — Cohen's d, eta-squared, Cramér's V, Pearson r
 
-## Phase 6: Polish & Extras
+## Phase 6: Polish & Extras ✅
 
-- [ ] Mobile responsiveness optimization
-- [ ] Collaboration/sharing — share projects with PI or lab members
-- [ ] Reference manager integration (Zotero/Mendeley)
-- [ ] Grant/thesis writing assistant — draft sections from notes and results
-- [ ] Lab meeting prep — auto-generate slides from recent results
-- [ ] Performance optimization
-- [ ] Unified search across notes, results, papers, protocols
+- [x] Mobile responsiveness — hamburger menu on small screens, active link highlighting
+- [x] Unified search (⌘K) — search across papers, notes, experiments, protocols, reagents, ideas, and datasets
+- [x] Grant/thesis writing assistant — AI drafts Specific Aims, Significance, Innovation, Approach, and Abstract sections using your research context, notes, papers, hypotheses, experiments, and results
+- [x] Lab meeting prep — AI generates a structured summary (what I worked on, findings, problems, next steps, questions)
+- [x] Collaboration/sharing — create read-only snapshot links to share papers, notes, experiments, results, ideas, and hypotheses with PI or collaborators (no account needed)
+- [x] Performance optimization — dynamic imports for heavy client components, responsive grids throughout
 
 ---
 

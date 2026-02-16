@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { Nav } from "@/components/nav";
 import { AdvisorSidebar } from "@/components/advisor-sidebar";
+import { UnifiedSearch } from "@/components/unified-search";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export default async function ProtectedLayout({
       <Nav userEmail={user?.email ?? null} />
       <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>
       {user && <AdvisorSidebar />}
+      {user && <UnifiedSearch />}
     </>
   );
 }
