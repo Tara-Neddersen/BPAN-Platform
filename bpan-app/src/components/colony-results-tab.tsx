@@ -459,7 +459,7 @@ export function ColonyResultsTab({
                     <TabsTrigger
                       key={exp}
                       value={exp}
-                      className="flex-1 min-w-[100px] text-xs sm:text-sm relative"
+                      className="flex-1 min-w-[80px] text-[11px] sm:text-xs relative px-2 py-1.5"
                     >
                       {EXPERIMENT_LABELS[exp] || exp}
                       {count > 0 && (
