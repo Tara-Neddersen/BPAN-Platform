@@ -217,13 +217,24 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  const newAgeDays = parseInt(formData.get("age_days") as string);
   const experiments = formData.getAll("experiments") as string[];
+
+  // Get old timepoint to detect age_days change
+  const { data: oldTP } = await supabase
+    .from("colony_timepoints")
+    .select("age_days")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .single();
+
+  const oldAgeDays = oldTP?.age_days;
 
   const { error } = await supabase
     .from("colony_timepoints")
     .update({
       name: formData.get("name") as string,
-      age_days: parseInt(formData.get("age_days") as string),
+      age_days: newAgeDays,
       experiments,
       handling_days_before: parseInt(formData.get("handling_days_before") as string) || 3,
       duration_days: parseInt(formData.get("duration_days") as string) || 21,
@@ -237,6 +248,53 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
     .eq("id", id)
     .eq("user_id", user.id);
   if (error) return { error: error.message };
+
+  // If age_days changed, cascade to animal_experiments and colony_results
+  if (oldAgeDays != null && oldAgeDays !== newAgeDays) {
+    // Update animal_experiments timepoint_age_days
+    const { data: affectedExps } = await supabase
+      .from("animal_experiments")
+      .select("id, animal_id")
+      .eq("user_id", user.id)
+      .eq("timepoint_age_days", oldAgeDays);
+
+    if (affectedExps && affectedExps.length > 0) {
+      // Get birth dates for all affected animals to recalculate scheduled_date
+      const animalIds = [...new Set(affectedExps.map(e => e.animal_id))];
+      const { data: animalData } = await supabase
+        .from("animals")
+        .select("id, birth_date")
+        .in("id", animalIds);
+
+      const birthDateMap = new Map((animalData || []).map(a => [a.id, a.birth_date]));
+
+      // Update each experiment: new timepoint_age_days + recalculated scheduled_date
+      for (const exp of affectedExps) {
+        const birthDate = birthDateMap.get(exp.animal_id);
+        let newScheduledDate: string | undefined;
+        if (birthDate) {
+          const d = new Date(birthDate);
+          d.setDate(d.getDate() + newAgeDays);
+          newScheduledDate = d.toISOString().split("T")[0];
+        }
+        await supabase
+          .from("animal_experiments")
+          .update({
+            timepoint_age_days: newAgeDays,
+            ...(newScheduledDate ? { scheduled_date: newScheduledDate } : {}),
+          })
+          .eq("id", exp.id);
+      }
+    }
+
+    // Update colony_results timepoint_age_days
+    await supabase
+      .from("colony_results")
+      .update({ timepoint_age_days: newAgeDays })
+      .eq("user_id", user.id)
+      .eq("timepoint_age_days", oldAgeDays);
+  }
+
   revalidatePath("/colony");
   return { success: true };
 }

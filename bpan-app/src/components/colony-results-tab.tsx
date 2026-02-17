@@ -147,7 +147,7 @@ export function ColonyResultsTab({
   // State
   const [saving, setSaving] = useState(false);
   const [activeTimepoint, setActiveTimepoint] = useState<string>(
-    timepoints.length > 0 ? String(timepoints[0].age_days) : "60"
+    timepoints.length > 0 ? String(timepoints[0].age_days) : "30"
   );
   const [activeExperiment, setActiveExperiment] = useState<string>("y_maze");
   // Custom fields per experiment type

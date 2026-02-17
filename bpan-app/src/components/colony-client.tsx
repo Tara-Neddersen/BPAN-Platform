@@ -855,7 +855,7 @@ export function ColonyClient({
           <div className="flex justify-between items-center">
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">
-                Define experiment timepoints (60d, 120d, 180d). The protocol follows your 2-week timeline:
+                Define experiment timepoints (e.g. 30d, 120d, 210d). The protocol follows your experiment timeline:
               </p>
               <p className="text-xs text-muted-foreground italic">
                 Week 0: Handling → Day 1: Y-Maze + Marble → Day 2: LDB + Nesting → Day 3: Move to Core → Day 4–5: Acclimation → Day 6: CatWalk + RR Hab → Day 7–8: Rotarod → Day 9: Stamina → Day 10: Plasma
@@ -866,7 +866,7 @@ export function ColonyClient({
           {timepoints.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               <p>No timepoints configured.</p>
-              <p className="text-xs mt-1">Add timepoints like &quot;60-day&quot;, &quot;120-day&quot;, &quot;180-day&quot; with the experiments for each.</p>
+              <p className="text-xs mt-1">Add timepoints like &quot;30-day&quot;, &quot;120-day&quot;, &quot;210-day&quot; with the experiments for each.</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -1483,7 +1483,7 @@ export function ColonyClient({
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="text-xs">Name *</Label>
-                <Input name="name" defaultValue={editingTP?.name || ""} required placeholder="e.g. 60-day Behavioral" />
+                <Input name="name" defaultValue={editingTP?.name || ""} required placeholder="e.g. 30-day Behavioral" />
               </div>
               <div>
                 <Label className="text-xs">Age (days) *</Label>
