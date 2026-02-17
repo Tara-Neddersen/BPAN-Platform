@@ -17,6 +17,11 @@ export async function createBreederCage(formData: FormData) {
     strain: (formData.get("strain") as string) || null,
     location: (formData.get("location") as string) || null,
     breeding_start: (formData.get("breeding_start") as string) || null,
+    is_pregnant: formData.get("is_pregnant") === "true",
+    pregnancy_start_date: (formData.get("pregnancy_start_date") as string) || null,
+    expected_birth_date: (formData.get("expected_birth_date") as string) || null,
+    last_check_date: (formData.get("last_check_date") as string) || null,
+    check_interval_days: parseInt(formData.get("check_interval_days") as string) || 7,
     notes: (formData.get("notes") as string) || null,
   });
   if (error) return { error: error.message };
@@ -36,6 +41,11 @@ export async function updateBreederCage(id: string, formData: FormData) {
       strain: (formData.get("strain") as string) || null,
       location: (formData.get("location") as string) || null,
       breeding_start: (formData.get("breeding_start") as string) || null,
+      is_pregnant: formData.get("is_pregnant") === "true",
+      pregnancy_start_date: (formData.get("pregnancy_start_date") as string) || null,
+      expected_birth_date: (formData.get("expected_birth_date") as string) || null,
+      last_check_date: (formData.get("last_check_date") as string) || null,
+      check_interval_days: parseInt(formData.get("check_interval_days") as string) || 7,
       notes: (formData.get("notes") as string) || null,
     })
     .eq("id", id)
@@ -346,6 +356,9 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
   const DAY = 24 * 60 * 60 * 1000;
   const records: Record<string, unknown>[] = [];
 
+  // Track whether EEG implant surgery has been scheduled (only once, at first timepoint)
+  let eegImplantScheduled = false;
+
   for (const tp of timepoints) {
     const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
     const selectedExps = new Set((tp.experiments as string[]) || []);
@@ -384,29 +397,51 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
       });
     }
 
-    // EEG implant + recovery + recording (after experiment window)
+    // EEG: implant surgery happens ONCE (first EEG timepoint only),
+    // then recording-only at subsequent timepoints.
+    //
+    // Protocol:
+    //   1st EEG TP (e.g. 60d): experiments (10d) → implant surgery → 7d recovery → 3d recording
+    //   Later TPs (120d, 180d): experiments (10d) → 7d rest → 3d recording (no surgery)
     if (tp.includes_eeg_implant) {
-      const implantDate = new Date(experimentStart.getTime() + 10 * DAY); // after Day 10
-      records.push({
-        user_id: user.id,
-        animal_id: animalId,
-        experiment_type: "eeg_implant",
-        timepoint_age_days: tp.age_days,
-        scheduled_date: implantDate.toISOString().split("T")[0],
-        status: "scheduled",
-        notes: "EEG implant surgery",
-      });
+      const afterExperimentsDate = new Date(experimentStart.getTime() + 10 * DAY);
 
-      const recordingStart = new Date(implantDate.getTime() + tp.eeg_recovery_days * DAY);
-      records.push({
-        user_id: user.id,
-        animal_id: animalId,
-        experiment_type: "eeg_recording",
-        timepoint_age_days: tp.age_days,
-        scheduled_date: recordingStart.toISOString().split("T")[0],
-        status: "scheduled",
-        notes: `EEG recording (${tp.eeg_recording_days} days) after ${tp.eeg_recovery_days}d recovery`,
-      });
+      if (!eegImplantScheduled) {
+        // First timepoint with EEG: schedule surgery + recovery + recording
+        eegImplantScheduled = true;
+        records.push({
+          user_id: user.id,
+          animal_id: animalId,
+          experiment_type: "eeg_implant",
+          timepoint_age_days: tp.age_days,
+          scheduled_date: afterExperimentsDate.toISOString().split("T")[0],
+          status: "scheduled",
+          notes: "EEG implant surgery (one-time)",
+        });
+
+        const recordingStart = new Date(afterExperimentsDate.getTime() + tp.eeg_recovery_days * DAY);
+        records.push({
+          user_id: user.id,
+          animal_id: animalId,
+          experiment_type: "eeg_recording",
+          timepoint_age_days: tp.age_days,
+          scheduled_date: recordingStart.toISOString().split("T")[0],
+          status: "scheduled",
+          notes: `EEG recording (${tp.eeg_recording_days}d) after ${tp.eeg_recovery_days}d post-surgery recovery`,
+        });
+      } else {
+        // Subsequent timepoints: recording only (7d rest after experiments, no surgery)
+        const recordingStart = new Date(afterExperimentsDate.getTime() + 7 * DAY);
+        records.push({
+          user_id: user.id,
+          animal_id: animalId,
+          experiment_type: "eeg_recording",
+          timepoint_age_days: tp.age_days,
+          scheduled_date: recordingStart.toISOString().split("T")[0],
+          status: "scheduled",
+          notes: `EEG recording (${tp.eeg_recording_days}d) — 7d rest after experiments (no surgery needed)`,
+        });
+      }
     }
   }
 
@@ -417,6 +452,77 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
 
   revalidatePath("/colony");
   return { success: true, count: records.length };
+}
+
+// ─── Cohort-Level Auto-Schedule ─────────────────────────────────────────
+
+/**
+ * Auto-schedule experiments for ALL animals in a given cohort.
+ * Uses each animal's birth_date from the cohort's birth_date.
+ * Skips animals that already have scheduled experiments.
+ */
+export async function scheduleExperimentsForCohort(cohortId: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  // Get the cohort
+  const { data: cohort } = await supabase
+    .from("cohorts")
+    .select("*")
+    .eq("id", cohortId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (!cohort) return { error: "Cohort not found." };
+
+  // Get all active animals in this cohort
+  const { data: cohortAnimals } = await supabase
+    .from("animals")
+    .select("id, birth_date")
+    .eq("cohort_id", cohortId)
+    .eq("user_id", user.id)
+    .eq("status", "active");
+
+  if (!cohortAnimals || cohortAnimals.length === 0) {
+    return { error: "No active animals in this cohort." };
+  }
+
+  // Find which animals already have experiments scheduled
+  const animalIds = cohortAnimals.map(a => a.id);
+  const { data: existingExps } = await supabase
+    .from("animal_experiments")
+    .select("animal_id")
+    .in("animal_id", animalIds)
+    .eq("user_id", user.id);
+
+  const animalsWithExps = new Set((existingExps || []).map(e => e.animal_id));
+
+  // Schedule for animals that don't have any experiments yet
+  const toSchedule = cohortAnimals.filter(a => !animalsWithExps.has(a.id));
+
+  if (toSchedule.length === 0) {
+    return { error: `All ${cohortAnimals.length} animals already have experiments scheduled. To re-schedule, delete their existing experiments first.` };
+  }
+
+  let totalCount = 0;
+  const errors: string[] = [];
+
+  for (const animal of toSchedule) {
+    const birthDate = animal.birth_date || cohort.birth_date;
+    const result = await scheduleExperimentsForAnimal(animal.id, birthDate);
+    if (result.error) {
+      errors.push(`Animal ${animal.id}: ${result.error}`);
+    } else {
+      totalCount += result.count || 0;
+    }
+  }
+
+  revalidatePath("/colony");
+  if (errors.length > 0) {
+    return { success: true, scheduled: toSchedule.length, total: totalCount, errors };
+  }
+  return { success: true, scheduled: toSchedule.length, skipped: animalsWithExps.size, total: totalCount };
 }
 
 // ─── Grace Period / Reschedule ──────────────────────────────────────────

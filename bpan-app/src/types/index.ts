@@ -275,6 +275,11 @@ export interface BreederCage {
   strain: string | null;
   location: string | null;
   breeding_start: string | null;
+  is_pregnant: boolean;
+  pregnancy_start_date: string | null;
+  expected_birth_date: string | null;
+  last_check_date: string | null;
+  check_interval_days: number;
   notes: string | null;
   created_at: string;
   updated_at: string;

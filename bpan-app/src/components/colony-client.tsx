@@ -130,6 +130,7 @@ interface ColonyClientProps {
     updateAnimalExperiment: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     deleteAnimalExperiment: (id: string) => Promise<{ success?: boolean; error?: string }>;
     scheduleExperimentsForAnimal: (animalId: string, birthDate: string) => Promise<{ success?: boolean; error?: string; count?: number }>;
+    scheduleExperimentsForCohort: (cohortId: string) => Promise<{ success?: boolean; error?: string; scheduled?: number; skipped?: number; total?: number }>;
     createAdvisorAccess: (fd: FormData) => Promise<{ success?: boolean; error?: string; token?: string }>;
     deleteAdvisorAccess: (id: string) => Promise<{ success?: boolean; error?: string }>;
     createMeetingNote: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -341,20 +342,39 @@ export function ColonyClient({
     });
   }, [animals, cohorts, filterCohort, filterGenotype]);
 
-  // Upcoming experiments
+  // Upcoming experiments — only next 7 days
+  const oneWeekFromNow = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().split("T")[0];
+  }, []);
+  const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
+
   const upcoming = useMemo(
     () =>
       experiments
-        .filter((e) => e.status === "scheduled" && e.scheduled_date)
-        .sort((a, b) => (a.scheduled_date || "").localeCompare(b.scheduled_date || ""))
-        .slice(0, 10),
-    [experiments]
+        .filter((e) => e.status === "scheduled" && e.scheduled_date && e.scheduled_date <= oneWeekFromNow)
+        .sort((a, b) => (a.scheduled_date || "").localeCompare(b.scheduled_date || "")),
+    [experiments, oneWeekFromNow]
   );
 
-  // Upcoming cage changes
+  // Upcoming cage changes — only next 7 days
   const upcomingCageChanges = useMemo(
-    () => cageChanges.filter((c) => !c.is_completed).sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)).slice(0, 5),
-    [cageChanges]
+    () => cageChanges
+      .filter((c) => !c.is_completed && c.scheduled_date <= oneWeekFromNow)
+      .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)),
+    [cageChanges, oneWeekFromNow]
+  );
+
+  // Pregnant breeder check reminders
+  const breederReminders = useMemo(
+    () => cages.filter((c) => {
+      if (!c.is_pregnant) return false;
+      if (!c.last_check_date) return true; // never checked
+      const daysSinceCheck = (Date.now() - new Date(c.last_check_date).getTime()) / (1000 * 60 * 60 * 24);
+      return daysSinceCheck >= (c.check_interval_days || 7);
+    }),
+    [cages]
   );
 
   // Stats
@@ -448,13 +468,13 @@ export function ColonyClient({
         </CardContent></Card>
       </div>
 
-      {/* Upcoming alerts */}
-      {(upcoming.length > 0 || upcomingCageChanges.length > 0) && (
+      {/* Upcoming alerts — next 7 days only */}
+      {(upcoming.length > 0 || upcomingCageChanges.length > 0 || breederReminders.length > 0) && (
         <Card className="border-yellow-200 dark:border-yellow-800">
           <CardHeader className="py-3 px-4">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-yellow-500" />
-              Upcoming
+              This Week
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 pb-3">
@@ -482,6 +502,37 @@ export function ColonyClient({
                 </div>
               );
             })}
+            {/* Breeder pregnancy check reminders */}
+            {breederReminders.map((c) => (
+              <div key={`preg-${c.id}`} className="flex items-center justify-between text-sm">
+                <div className="flex items-center gap-2">
+                  <Badge className="bg-pink-100 text-pink-700" variant="secondary">🤰</Badge>
+                  <span className="font-medium">{c.name}</span>
+                  <span className="text-muted-foreground">Pregnancy check overdue</span>
+                </div>
+                <Button
+                  variant="outline" size="sm" className="h-6 text-xs px-2"
+                  onClick={async () => {
+                    const fd = new FormData();
+                    fd.set("name", c.name);
+                    fd.set("strain", c.strain || "");
+                    fd.set("location", c.location || "");
+                    fd.set("breeding_start", c.breeding_start || "");
+                    fd.set("is_pregnant", "true");
+                    fd.set("pregnancy_start_date", c.pregnancy_start_date || "");
+                    fd.set("expected_birth_date", c.expected_birth_date || "");
+                    fd.set("last_check_date", new Date().toISOString().split("T")[0]);
+                    fd.set("check_interval_days", String(c.check_interval_days || 7));
+                    fd.set("notes", c.notes || "");
+                    const res = await actions.updateBreederCage(c.id, fd);
+                    if (res.error) toast.error(res.error);
+                    else { toast.success(`${c.name} marked as checked!`); refetchAll(); }
+                  }}
+                >
+                  <Check className="h-3 w-3 mr-0.5" /> Checked
+                </Button>
+              </div>
+            ))}
             {/* Experiment alerts */}
             {upcoming.map((exp) => {
               const animal = animals.find((a) => a.id === exp.animal_id);
@@ -651,8 +702,9 @@ export function ColonyClient({
             <div className="space-y-2">
               {cohorts.map((c) => {
                 const cage = cages.find((b) => b.id === c.breeder_cage_id);
-                const cohortAnimals = animals.filter((a) => a.cohort_id === c.id);
+                const cohortAnimals = animals.filter((a) => a.cohort_id === c.id && a.status === "active");
                 const age = daysOld(c.birth_date);
+                const cohortExpCount = experiments.filter(e => cohortAnimals.some(a => a.id === e.animal_id)).length;
                 return (
                   <Card key={c.id}>
                     <CardContent className="py-3">
@@ -662,6 +714,9 @@ export function ColonyClient({
                             {c.name}
                             <Badge variant="outline" className="text-xs">{age} days old</Badge>
                             <Badge variant="secondary" className="text-xs">{cohortAnimals.length} animals</Badge>
+                            {cohortExpCount > 0 && (
+                              <Badge variant="secondary" className="text-xs text-green-600">{cohortExpCount} experiments</Badge>
+                            )}
                           </div>
                           <div className="text-xs text-muted-foreground mt-0.5">
                             Born: {c.birth_date}{cage ? ` · From: ${cage.name}` : ""}
@@ -669,6 +724,28 @@ export function ColonyClient({
                           </div>
                         </div>
                         <div className="flex gap-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs gap-1"
+                            disabled={busy}
+                            onClick={async () => {
+                              setBusy(true);
+                              try {
+                                const res = await actions.scheduleExperimentsForCohort(c.id);
+                                if (res.error) {
+                                  toast.error(res.error);
+                                } else {
+                                  toast.success(`Scheduled ${res.total} experiments for ${res.scheduled} animals${res.skipped ? ` (${res.skipped} already had experiments)` : ""}`);
+                                  refetchAll();
+                                }
+                              } finally {
+                                setBusy(false);
+                              }
+                            }}
+                          >
+                            <Calendar className="h-3 w-3" /> Auto-Schedule
+                          </Button>
                           <Button variant="ghost" size="sm" onClick={() => setEditingCohort(c)}>
                             <Edit className="h-3.5 w-3.5" />
                           </Button>
@@ -758,8 +835,17 @@ export function ColonyClient({
             <div className="space-y-2">
               {cages.map((c) => {
                 const cageCohorts = cohorts.filter((co) => co.breeder_cage_id === c.id);
+                const needsCheck = c.is_pregnant && c.last_check_date
+                  ? (Date.now() - new Date(c.last_check_date).getTime()) / (1000 * 60 * 60 * 24) >= (c.check_interval_days || 7)
+                  : c.is_pregnant;
+                const daysPregnant = c.pregnancy_start_date
+                  ? Math.floor((Date.now() - new Date(c.pregnancy_start_date).getTime()) / (1000 * 60 * 60 * 24))
+                  : null;
+                const daysToBirth = c.expected_birth_date
+                  ? Math.ceil((new Date(c.expected_birth_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                  : null;
                 return (
-                  <Card key={c.id}>
+                  <Card key={c.id} className={needsCheck ? "border-pink-300 dark:border-pink-800" : ""}>
                     <CardContent className="py-3">
                       <div className="flex items-center justify-between">
                         <div>
@@ -767,12 +853,56 @@ export function ColonyClient({
                             {c.name}
                             {c.strain && <Badge variant="outline" className="text-xs">{c.strain}</Badge>}
                             <Badge variant="secondary" className="text-xs">{cageCohorts.length} cohorts</Badge>
+                            {c.is_pregnant && (
+                              <Badge className="bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300 text-xs">
+                                🤰 Pregnant{daysPregnant != null ? ` (${daysPregnant}d)` : ""}
+                              </Badge>
+                            )}
+                            {needsCheck && (
+                              <Badge className="bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 text-xs animate-pulse">
+                                ⏰ Check needed
+                              </Badge>
+                            )}
                           </div>
-                          <div className="text-xs text-muted-foreground mt-0.5">
-                            {c.location || "No location"}{c.breeding_start ? ` · Since: ${c.breeding_start}` : ""}
+                          <div className="text-xs text-muted-foreground mt-0.5 flex flex-wrap gap-2">
+                            <span>{c.location || "No location"}{c.breeding_start ? ` · Since: ${c.breeding_start}` : ""}</span>
+                            {c.is_pregnant && daysToBirth != null && daysToBirth > 0 && (
+                              <span className="text-pink-600">· Expected birth in {daysToBirth}d ({c.expected_birth_date})</span>
+                            )}
+                            {c.is_pregnant && daysToBirth != null && daysToBirth <= 0 && (
+                              <span className="text-red-600 font-medium">· Birth expected {Math.abs(daysToBirth)}d ago!</span>
+                            )}
+                            {c.last_check_date && (
+                              <span>· Last checked: {c.last_check_date}</span>
+                            )}
                           </div>
                         </div>
                         <div className="flex gap-1">
+                          {c.is_pregnant && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs gap-1"
+                              onClick={async () => {
+                                const fd = new FormData();
+                                fd.set("name", c.name);
+                                fd.set("strain", c.strain || "");
+                                fd.set("location", c.location || "");
+                                fd.set("breeding_start", c.breeding_start || "");
+                                fd.set("is_pregnant", "true");
+                                fd.set("pregnancy_start_date", c.pregnancy_start_date || "");
+                                fd.set("expected_birth_date", c.expected_birth_date || "");
+                                fd.set("last_check_date", new Date().toISOString().split("T")[0]);
+                                fd.set("check_interval_days", String(c.check_interval_days || 7));
+                                fd.set("notes", c.notes || "");
+                                const res = await actions.updateBreederCage(c.id, fd);
+                                if (res.error) toast.error(res.error);
+                                else { toast.success("Marked as checked today!"); refetchAll(); }
+                              }}
+                            >
+                              <Check className="h-3 w-3" /> Checked
+                            </Button>
+                          )}
                           <Button variant="ghost" size="sm" onClick={() => setEditingCage(c)}>
                             <Edit className="h-3.5 w-3.5" />
                           </Button>
@@ -1224,6 +1354,20 @@ export function ColonyClient({
               <div><Label className="text-xs">Strain</Label><Input name="strain" placeholder="e.g. BPAN / ATP13A2" defaultValue={editingCage?.strain || ""} /></div>
               <div><Label className="text-xs">Location</Label><Input name="location" placeholder="Room, rack" defaultValue={editingCage?.location || ""} /></div>
               <div><Label className="text-xs">Breeding Start</Label><Input name="breeding_start" type="date" defaultValue={editingCage?.breeding_start || ""} /></div>
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <input type="hidden" name="is_pregnant" value="false" />
+                <input type="checkbox" name="is_pregnant" value="true" className="h-4 w-4" defaultChecked={editingCage?.is_pregnant || false} />
+                🤰 Currently Pregnant
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div><Label className="text-xs">Pregnancy Start</Label><Input name="pregnancy_start_date" type="date" defaultValue={editingCage?.pregnancy_start_date || ""} /></div>
+                <div><Label className="text-xs">Expected Birth</Label><Input name="expected_birth_date" type="date" defaultValue={editingCage?.expected_birth_date || ""} /></div>
+                <div><Label className="text-xs">Last Checked</Label><Input name="last_check_date" type="date" defaultValue={editingCage?.last_check_date || ""} /></div>
+                <div><Label className="text-xs">Check Every (days)</Label><Input name="check_interval_days" type="number" min={1} defaultValue={editingCage?.check_interval_days ?? 7} /></div>
+              </div>
             </div>
             <div><Label className="text-xs">Notes</Label><Textarea name="notes" rows={2} defaultValue={editingCage?.notes || ""} /></div>
             <DialogFooter>
