@@ -633,21 +633,47 @@ export async function deleteExperimentsForAnimal(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  let query = supabase
+  // First count what we're about to delete
+  let countQuery = supabase
     .from("animal_experiments")
-    .delete()
+    .select("id", { count: "exact", head: true })
     .eq("animal_id", animalId)
     .eq("user_id", user.id);
 
   if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
-    query = query.in("timepoint_age_days", onlyTimepointAgeDays);
+    countQuery = countQuery.in("timepoint_age_days", onlyTimepointAgeDays);
   }
   if (onlyStatuses && onlyStatuses.length > 0) {
-    query = query.in("status", onlyStatuses);
+    countQuery = countQuery.in("status", onlyStatuses);
   }
 
-  const { error, count } = await query.select("id");
-  if (error) return { error: error.message };
+  const { count } = await countQuery;
+
+  // Now delete — build fresh query to avoid type issues
+  // We need to get the IDs first, then delete by IDs
+  let idsQuery = supabase
+    .from("animal_experiments")
+    .select("id")
+    .eq("animal_id", animalId)
+    .eq("user_id", user.id);
+
+  if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
+    idsQuery = idsQuery.in("timepoint_age_days", onlyTimepointAgeDays);
+  }
+  if (onlyStatuses && onlyStatuses.length > 0) {
+    idsQuery = idsQuery.in("status", onlyStatuses);
+  }
+
+  const { data: rows } = await idsQuery;
+  if (rows && rows.length > 0) {
+    const ids = rows.map(r => r.id);
+    const { error } = await supabase
+      .from("animal_experiments")
+      .delete()
+      .in("id", ids);
+    if (error) return { error: error.message };
+  }
+
   revalidatePath("/colony");
   return { success: true, deleted: count ?? 0 };
 }
@@ -679,23 +705,37 @@ export async function deleteExperimentsForCohort(
 
   const animalIds = cohortAnimals.map(a => a.id);
 
-  let query = supabase
+  // Get IDs of experiments to delete
+  let idsQuery = supabase
     .from("animal_experiments")
-    .delete()
+    .select("id")
     .in("animal_id", animalIds)
     .eq("user_id", user.id);
 
   if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
-    query = query.in("timepoint_age_days", onlyTimepointAgeDays);
+    idsQuery = idsQuery.in("timepoint_age_days", onlyTimepointAgeDays);
   }
   if (onlyStatuses && onlyStatuses.length > 0) {
-    query = query.in("status", onlyStatuses);
+    idsQuery = idsQuery.in("status", onlyStatuses);
   }
 
-  const { error, count } = await query.select("id");
-  if (error) return { error: error.message };
+  const { data: rows } = await idsQuery;
+  const deleteCount = rows?.length ?? 0;
+
+  if (rows && rows.length > 0) {
+    // Delete in batches of 100 to avoid query size limits
+    for (let i = 0; i < rows.length; i += 100) {
+      const batch = rows.slice(i, i + 100).map(r => r.id);
+      const { error } = await supabase
+        .from("animal_experiments")
+        .delete()
+        .in("id", batch);
+      if (error) return { error: error.message };
+    }
+  }
+
   revalidatePath("/colony");
-  return { success: true, deleted: count ?? 0, animals: cohortAnimals.length };
+  return { success: true, deleted: deleteCount, animals: cohortAnimals.length };
 }
 
 // ─── Grace Period / Reschedule ──────────────────────────────────────────
