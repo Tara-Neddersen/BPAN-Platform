@@ -336,20 +336,37 @@ const PROTOCOL_SCHEDULE: { type: string; dayOffset: number; notes?: string }[] =
   { type: "blood_draw",        dayOffset: 9,  notes: "Day 10 — Plasma Collection (10:00–13:00)" },
 ];
 
-export async function scheduleExperimentsForAnimal(animalId: string, birthDate: string) {
+/**
+ * Schedule experiments for an animal.
+ * @param onlyTimepointAgeDays - optional array of timepoint age_days to limit scheduling to
+ */
+export async function scheduleExperimentsForAnimal(
+  animalId: string,
+  birthDate: string,
+  onlyTimepointAgeDays?: number[]
+) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
   // Get all timepoints
-  const { data: timepoints } = await supabase
+  const { data: allTimepoints } = await supabase
     .from("colony_timepoints")
     .select("*")
     .eq("user_id", user.id)
     .order("sort_order", { ascending: true });
 
-  if (!timepoints || timepoints.length === 0) {
+  if (!allTimepoints || allTimepoints.length === 0) {
     return { error: "No timepoints configured. Add timepoints first." };
+  }
+
+  // Filter to requested timepoints if specified
+  const timepoints = onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0
+    ? allTimepoints.filter(tp => onlyTimepointAgeDays.includes(tp.age_days))
+    : allTimepoints;
+
+  if (timepoints.length === 0) {
+    return { error: "No matching timepoints found." };
   }
 
   // Get existing experiments for this animal to avoid duplicates
@@ -369,9 +386,8 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
   const records: Record<string, unknown>[] = [];
 
   // Track whether EEG implant surgery has been scheduled (only once, at first timepoint)
-  // Check if one already exists in the DB
-  let eegImplantScheduled = existingKeys.has("eeg_implant::" + timepoints[0]?.age_days) ||
-    (existingExps || []).some(e => e.experiment_type === "eeg_implant");
+  // Check if one already exists in the DB or is being created for an earlier timepoint
+  let eegImplantScheduled = (existingExps || []).some(e => e.experiment_type === "eeg_implant");
 
   for (const tp of timepoints) {
     const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
@@ -484,10 +500,12 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
 
 /**
  * Auto-schedule experiments for ALL animals in a given cohort.
- * Uses each animal's birth_date from the cohort's birth_date.
- * Skips animals that already have scheduled experiments.
+ * @param onlyTimepointAgeDays - optional array of timepoint age_days to limit scheduling
  */
-export async function scheduleExperimentsForCohort(cohortId: string) {
+export async function scheduleExperimentsForCohort(
+  cohortId: string,
+  onlyTimepointAgeDays?: number[]
+) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
@@ -520,7 +538,7 @@ export async function scheduleExperimentsForCohort(cohortId: string) {
 
   for (const animal of cohortAnimals) {
     const birthDate = animal.birth_date || cohort.birth_date;
-    const result = await scheduleExperimentsForAnimal(animal.id, birthDate);
+    const result = await scheduleExperimentsForAnimal(animal.id, birthDate, onlyTimepointAgeDays);
     if (result.error) {
       errors.push(`Animal ${animal.id}: ${result.error}`);
     } else if ((result.count || 0) > 0) {
@@ -539,6 +557,87 @@ export async function scheduleExperimentsForCohort(cohortId: string) {
     return { success: true, scheduled: animalsScheduled, total: totalCount, errors };
   }
   return { success: true, scheduled: animalsScheduled, total: totalCount };
+}
+
+// ─── Mass Delete Experiments ────────────────────────────────────────────
+
+/**
+ * Delete experiments for a single animal.
+ * @param onlyTimepointAgeDays — if provided, only delete experiments at these timepoints
+ * @param onlyStatuses — if provided, only delete experiments with these statuses
+ */
+export async function deleteExperimentsForAnimal(
+  animalId: string,
+  onlyTimepointAgeDays?: number[],
+  onlyStatuses?: string[]
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  let query = supabase
+    .from("animal_experiments")
+    .delete()
+    .eq("animal_id", animalId)
+    .eq("user_id", user.id);
+
+  if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
+    query = query.in("timepoint_age_days", onlyTimepointAgeDays);
+  }
+  if (onlyStatuses && onlyStatuses.length > 0) {
+    query = query.in("status", onlyStatuses);
+  }
+
+  const { error, count } = await query.select("id");
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true, deleted: count ?? 0 };
+}
+
+/**
+ * Delete experiments for ALL animals in a cohort.
+ * @param onlyTimepointAgeDays — if provided, only delete at these timepoints
+ * @param onlyStatuses — if provided, only delete experiments with these statuses
+ */
+export async function deleteExperimentsForCohort(
+  cohortId: string,
+  onlyTimepointAgeDays?: number[],
+  onlyStatuses?: string[]
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  // Get all animals in this cohort
+  const { data: cohortAnimals } = await supabase
+    .from("animals")
+    .select("id")
+    .eq("cohort_id", cohortId)
+    .eq("user_id", user.id);
+
+  if (!cohortAnimals || cohortAnimals.length === 0) {
+    return { error: "No animals in this cohort." };
+  }
+
+  const animalIds = cohortAnimals.map(a => a.id);
+
+  let query = supabase
+    .from("animal_experiments")
+    .delete()
+    .in("animal_id", animalIds)
+    .eq("user_id", user.id);
+
+  if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
+    query = query.in("timepoint_age_days", onlyTimepointAgeDays);
+  }
+  if (onlyStatuses && onlyStatuses.length > 0) {
+    query = query.in("status", onlyStatuses);
+  }
+
+  const { error, count } = await query.select("id");
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  return { success: true, deleted: count ?? 0, animals: cohortAnimals.length };
 }
 
 // ─── Grace Period / Reschedule ──────────────────────────────────────────

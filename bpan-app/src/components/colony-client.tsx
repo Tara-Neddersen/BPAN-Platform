@@ -129,8 +129,10 @@ interface ColonyClientProps {
     createAnimalExperiment: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateAnimalExperiment: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     deleteAnimalExperiment: (id: string) => Promise<{ success?: boolean; error?: string }>;
-    scheduleExperimentsForAnimal: (animalId: string, birthDate: string) => Promise<{ success?: boolean; error?: string; count?: number }>;
-    scheduleExperimentsForCohort: (cohortId: string) => Promise<{ success?: boolean; error?: string; scheduled?: number; skipped?: number; total?: number }>;
+    scheduleExperimentsForAnimal: (animalId: string, birthDate: string, onlyTimepointAgeDays?: number[]) => Promise<{ success?: boolean; error?: string; count?: number }>;
+    scheduleExperimentsForCohort: (cohortId: string, onlyTimepointAgeDays?: number[]) => Promise<{ success?: boolean; error?: string; scheduled?: number; skipped?: number; total?: number }>;
+    deleteExperimentsForAnimal: (animalId: string, onlyTimepointAgeDays?: number[], onlyStatuses?: string[]) => Promise<{ success?: boolean; error?: string; deleted?: number }>;
+    deleteExperimentsForCohort: (cohortId: string, onlyTimepointAgeDays?: number[], onlyStatuses?: string[]) => Promise<{ success?: boolean; error?: string; deleted?: number; animals?: number }>;
     createAdvisorAccess: (fd: FormData) => Promise<{ success?: boolean; error?: string; token?: string }>;
     deleteAdvisorAccess: (id: string) => Promise<{ success?: boolean; error?: string }>;
     createMeetingNote: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -261,6 +263,12 @@ export function ColonyClient({
   const [editingTP, setEditingTP] = useState<ColonyTimepoint | null>(null);
   const [editingHousingCage, setEditingHousingCage] = useState<HousingCage | null>(null);
   const [selectedAnimal, setSelectedAnimal] = useState<Animal | null>(null);
+
+  // Schedule / Delete dialog state
+  const [scheduleDialog, setScheduleDialog] = useState<{ type: "cohort" | "animal"; id: string; name: string; birthDate?: string } | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<{ type: "cohort" | "animal"; id: string; name: string } | null>(null);
+  const [selectedTpAges, setSelectedTpAges] = useState<Set<number>>(new Set());
+  const [deleteStatusFilter, setDeleteStatusFilter] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [filterCohort, setFilterCohort] = useState("all");
@@ -748,23 +756,24 @@ export function ColonyClient({
                             variant="outline"
                             size="sm"
                             className="h-7 text-xs gap-1"
-                            disabled={busy}
-                            onClick={async () => {
-                              setBusy(true);
-                              try {
-                                const res = await actions.scheduleExperimentsForCohort(c.id);
-                                if (res.error) {
-                                  toast.error(res.error);
-                                } else {
-                                  toast.success(`Scheduled ${res.total} experiments for ${res.scheduled} animals${res.skipped ? ` (${res.skipped} already had experiments)` : ""}`);
-                                  refetchAll();
-                                }
-                              } finally {
-                                setBusy(false);
-                              }
+                            onClick={() => {
+                              setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)));
+                              setScheduleDialog({ type: "cohort", id: c.id, name: c.name });
                             }}
                           >
-                            <Calendar className="h-3 w-3" /> Auto-Schedule
+                            <Calendar className="h-3 w-3" /> Schedule
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/10"
+                            onClick={() => {
+                              setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)));
+                              setDeleteStatusFilter(new Set(["scheduled", "pending"]));
+                              setDeleteDialog({ type: "cohort", id: c.id, name: c.name });
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3" /> Delete Exps
                           </Button>
                           <Button variant="ghost" size="sm" onClick={() => setEditingCohort(c)}>
                             <Edit className="h-3.5 w-3.5" />
@@ -1522,6 +1531,184 @@ export function ColonyClient({
         </DialogContent>
       </Dialog>
 
+      {/* ─── Schedule Experiments Dialog ───────────────────── */}
+      <Dialog open={!!scheduleDialog} onOpenChange={(v) => { if (!v) setScheduleDialog(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Schedule Experiments — {scheduleDialog?.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Choose which timepoints to schedule. Already-scheduled experiments will be skipped (no duplicates).
+            </p>
+            <div className="space-y-2">
+              <Label className="text-xs font-medium">Timepoints</Label>
+              <div className="flex flex-wrap gap-2">
+                {timepoints.map((tp) => {
+                  const isSelected = selectedTpAges.has(tp.age_days);
+                  return (
+                    <Button
+                      key={tp.id}
+                      variant={isSelected ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => {
+                        const next = new Set(selectedTpAges);
+                        if (isSelected) next.delete(tp.age_days);
+                        else next.add(tp.age_days);
+                        setSelectedTpAges(next);
+                      }}
+                    >
+                      {tp.name} ({tp.age_days}d)
+                    </Button>
+                  );
+                })}
+              </div>
+              <div className="flex gap-2 mt-1">
+                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)))}>Select all</Button>
+                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setSelectedTpAges(new Set())}>Select none</Button>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setScheduleDialog(null)}>Cancel</Button>
+              <Button
+                disabled={busy || selectedTpAges.size === 0}
+                onClick={async () => {
+                  if (!scheduleDialog) return;
+                  setBusy(true);
+                  try {
+                    const tpAges = Array.from(selectedTpAges);
+                    if (scheduleDialog.type === "cohort") {
+                      const res = await actions.scheduleExperimentsForCohort(scheduleDialog.id, tpAges);
+                      if (res.error) toast.error(res.error);
+                      else toast.success(`Scheduled ${res.total} experiments for ${res.scheduled} animals!`);
+                    } else {
+                      const res = await actions.scheduleExperimentsForAnimal(scheduleDialog.id, scheduleDialog.birthDate!, tpAges);
+                      if (res.error) toast.error(res.error);
+                      else toast.success(`Scheduled ${res.count} experiments!`);
+                    }
+                    refetchAll();
+                    setScheduleDialog(null);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                Schedule {selectedTpAges.size} timepoint{selectedTpAges.size !== 1 ? "s" : ""}
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Delete Experiments Dialog ───────────────────── */}
+      <Dialog open={!!deleteDialog} onOpenChange={(v) => { if (!v) setDeleteDialog(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive">
+              Delete Experiments — {deleteDialog?.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Choose which experiments to delete. This action cannot be undone.
+            </p>
+
+            <div className="space-y-2">
+              <Label className="text-xs font-medium">Filter by Timepoint</Label>
+              <div className="flex flex-wrap gap-2">
+                {timepoints.map((tp) => {
+                  const isSelected = selectedTpAges.has(tp.age_days);
+                  return (
+                    <Button
+                      key={tp.id}
+                      variant={isSelected ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => {
+                        const next = new Set(selectedTpAges);
+                        if (isSelected) next.delete(tp.age_days);
+                        else next.add(tp.age_days);
+                        setSelectedTpAges(next);
+                      }}
+                    >
+                      {tp.name} ({tp.age_days}d)
+                    </Button>
+                  );
+                })}
+              </div>
+              <div className="flex gap-2 mt-1">
+                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)))}>Select all</Button>
+                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setSelectedTpAges(new Set())}>Select none</Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs font-medium">Filter by Status (leave empty = all)</Label>
+              <div className="flex flex-wrap gap-2">
+                {["pending", "scheduled", "in_progress", "completed", "skipped"].map((s) => {
+                  const isSelected = deleteStatusFilter.has(s);
+                  return (
+                    <Button
+                      key={s}
+                      variant={isSelected ? "default" : "outline"}
+                      size="sm"
+                      className={`h-7 text-xs ${isSelected ? "bg-destructive hover:bg-destructive/90" : ""}`}
+                      onClick={() => {
+                        const next = new Set(deleteStatusFilter);
+                        if (isSelected) next.delete(s);
+                        else next.add(s);
+                        setDeleteStatusFilter(next);
+                      }}
+                    >
+                      {s}
+                    </Button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground italic">
+                Tip: select only &quot;scheduled&quot; + &quot;pending&quot; to keep completed experiments
+              </p>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeleteDialog(null)}>Cancel</Button>
+              <Button
+                variant="destructive"
+                disabled={busy || selectedTpAges.size === 0}
+                onClick={async () => {
+                  if (!deleteDialog) return;
+                  setBusy(true);
+                  try {
+                    const tpAges = Array.from(selectedTpAges);
+                    const statuses = deleteStatusFilter.size > 0 ? Array.from(deleteStatusFilter) : undefined;
+                    if (deleteDialog.type === "cohort") {
+                      const res = await actions.deleteExperimentsForCohort(deleteDialog.id, tpAges, statuses);
+                      if (res.error) toast.error(res.error);
+                      else toast.success(`Deleted ${res.deleted} experiments across ${res.animals} animals`);
+                    } else {
+                      const res = await actions.deleteExperimentsForAnimal(deleteDialog.id, tpAges, statuses);
+                      if (res.error) toast.error(res.error);
+                      else toast.success(`Deleted ${res.deleted} experiments`);
+                    }
+                    refetchAll();
+                    setDeleteDialog(null);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                Delete Experiments
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Add PI Access */}
       <Dialog open={showAddPI} onOpenChange={setShowAddPI}>
         <DialogContent>
@@ -1641,7 +1828,15 @@ export function ColonyClient({
               experiments={experiments.filter((e) => e.animal_id === selectedAnimal.id)}
               timepoints={timepoints}
               driveConnected={driveStatus.connected}
-              onSchedule={() => handleScheduleAll(selectedAnimal)}
+              onSchedule={() => {
+                setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)));
+                setScheduleDialog({ type: "animal", id: selectedAnimal.id, name: selectedAnimal.identifier, birthDate: selectedAnimal.birth_date });
+              }}
+              onDeleteAllExps={() => {
+                setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)));
+                setDeleteStatusFilter(new Set(["scheduled", "pending"]));
+                setDeleteDialog({ type: "animal", id: selectedAnimal.id, name: selectedAnimal.identifier });
+              }}
               onUpdateStatus={handleUpdateExpStatus}
               onSaveResultUrl={handleSaveResultUrl}
               onReschedule={async (timepointAgeDays: number, newStartDate: string) => {
@@ -1689,6 +1884,7 @@ function AnimalDetail({
   timepoints,
   driveConnected,
   onSchedule,
+  onDeleteAllExps,
   onUpdateStatus,
   onSaveResultUrl,
   onReschedule,
@@ -1705,6 +1901,7 @@ function AnimalDetail({
   timepoints: ColonyTimepoint[];
   driveConnected: boolean;
   onSchedule: () => void;
+  onDeleteAllExps: () => void;
   onUpdateStatus: (id: string, status: string) => void;
   onSaveResultUrl: (id: string, url: string) => void;
   onReschedule: (timepointAgeDays: number, newStartDate: string) => Promise<void>;
@@ -1805,12 +2002,18 @@ function AnimalDetail({
 
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-sm">Experiment Schedule</h3>
-        {experiments.length === 0 && (
-          <Button size="sm" onClick={onSchedule} disabled={busy}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Calendar className="h-4 w-4 mr-1" />}
-            Auto-Schedule All
+        <div className="flex gap-1">
+          <Button size="sm" variant="outline" onClick={onSchedule} disabled={busy} className="h-7 text-xs">
+            {busy ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Calendar className="h-3 w-3 mr-1" />}
+            Schedule
           </Button>
-        )}
+          {experiments.length > 0 && (
+            <Button size="sm" variant="outline" onClick={onDeleteAllExps} disabled={busy} className="h-7 text-xs text-destructive border-destructive/30 hover:bg-destructive/10">
+              <Trash2 className="h-3 w-3 mr-1" />
+              Delete Exps
+            </Button>
+          )}
+        </div>
       </div>
 
       {experiments.length === 0 ? (
