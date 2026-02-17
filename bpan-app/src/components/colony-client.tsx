@@ -267,6 +267,7 @@ export function ColonyClient({
   // Schedule / Delete dialog state
   const [scheduleDialog, setScheduleDialog] = useState<{ type: "cohort" | "animal"; id: string; name: string; birthDate?: string } | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<{ type: "cohort" | "animal"; id: string; name: string } | null>(null);
+  const [showOverdueDetails, setShowOverdueDetails] = useState(false);
   const [selectedTpAges, setSelectedTpAges] = useState<Set<number>>(new Set());
   const [deleteStatusFilter, setDeleteStatusFilter] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -350,20 +351,27 @@ export function ColonyClient({
     });
   }, [animals, cohorts, filterCohort, filterGenotype]);
 
-  // Upcoming experiments — only next 7 days
+  // Date helpers
+  const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
   const oneWeekFromNow = useMemo(() => {
     const d = new Date();
     d.setDate(d.getDate() + 7);
     return d.toISOString().split("T")[0];
   }, []);
-  const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
 
+  // Overdue experiments (past today, still scheduled)
+  const overdueExps = useMemo(
+    () => experiments.filter((e) => e.status === "scheduled" && e.scheduled_date && e.scheduled_date < todayStr),
+    [experiments, todayStr]
+  );
+
+  // Upcoming experiments — today through next 7 days
   const upcoming = useMemo(
     () =>
       experiments
-        .filter((e) => e.status === "scheduled" && e.scheduled_date && e.scheduled_date <= oneWeekFromNow)
+        .filter((e) => e.status === "scheduled" && e.scheduled_date && e.scheduled_date >= todayStr && e.scheduled_date <= oneWeekFromNow)
         .sort((a, b) => (a.scheduled_date || "").localeCompare(b.scheduled_date || "")),
-    [experiments, oneWeekFromNow]
+    [experiments, todayStr, oneWeekFromNow]
   );
 
   // Upcoming cage changes — only next 7 days
@@ -476,8 +484,8 @@ export function ColonyClient({
         </CardContent></Card>
       </div>
 
-      {/* Upcoming alerts — next 7 days only */}
-      {(upcoming.length > 0 || upcomingCageChanges.length > 0 || breederReminders.length > 0) && (
+      {/* Upcoming alerts — next 7 days + overdue summary */}
+      {(upcoming.length > 0 || upcomingCageChanges.length > 0 || breederReminders.length > 0 || overdueExps.length > 0) && (
         <Card className="border-yellow-200 dark:border-yellow-800">
           <CardHeader className="py-3 px-4">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -541,41 +549,92 @@ export function ColonyClient({
                 </Button>
               </div>
             ))}
-            {/* Experiment alerts — grouped by type + date */}
+            {/* Overdue experiments — collapsed summary */}
+            {overdueExps.length > 0 && (
+              <div className="rounded-md border border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 p-2 space-y-1">
+                <div
+                  className="flex items-center justify-between cursor-pointer"
+                  onClick={() => setShowOverdueDetails(!showOverdueDetails)}
+                >
+                  <div className="flex items-center gap-2 text-sm">
+                    <Badge className="bg-red-100 text-red-700" variant="secondary">OVERDUE</Badge>
+                    <span className="font-medium text-red-700 dark:text-red-400">
+                      {overdueExps.length} experiment{overdueExps.length !== 1 ? "s" : ""} past due
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      ({new Set(overdueExps.map(e => e.animal_id)).size} animals)
+                    </span>
+                  </div>
+                  <Button variant="ghost" size="sm" className="h-6 text-xs px-2">
+                    {showOverdueDetails ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    {showOverdueDetails ? "Hide" : "Details"}
+                  </Button>
+                </div>
+                {showOverdueDetails && (
+                  <div className="space-y-0.5 pt-1 border-t border-red-200/50">
+                    {(() => {
+                      // Group overdue by experiment type
+                      const groups = new Map<string, { animalIds: Set<string>; earliest: string; latest: string }>();
+                      for (const exp of overdueExps) {
+                        if (!groups.has(exp.experiment_type)) {
+                          groups.set(exp.experiment_type, { animalIds: new Set(), earliest: exp.scheduled_date!, latest: exp.scheduled_date! });
+                        }
+                        const g = groups.get(exp.experiment_type)!;
+                        g.animalIds.add(exp.animal_id);
+                        if (exp.scheduled_date! < g.earliest) g.earliest = exp.scheduled_date!;
+                        if (exp.scheduled_date! > g.latest) g.latest = exp.scheduled_date!;
+                      }
+                      return Array.from(groups.entries())
+                        .sort(([, a], [, b]) => a.earliest.localeCompare(b.earliest))
+                        .map(([type, g]) => (
+                          <div key={type} className="flex items-center justify-between text-xs text-red-700 dark:text-red-400">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{EXPERIMENT_LABELS[type] || type}</span>
+                              <span className="text-muted-foreground">{g.animalIds.size} animals</span>
+                            </div>
+                            <span className="text-muted-foreground">
+                              {g.earliest === g.latest ? g.earliest : `${g.earliest} → ${g.latest}`}
+                            </span>
+                          </div>
+                        ));
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Upcoming experiments — grouped by experiment type */}
             {(() => {
-              // Group upcoming experiments by (experiment_type + scheduled_date)
-              const groups = new Map<string, { type: string; date: string; animalIds: string[] }>();
+              // Group upcoming by experiment type (across all dates this week)
+              const groups = new Map<string, { animalIds: Set<string>; earliest: string; latest: string }>();
               for (const exp of upcoming) {
-                const key = `${exp.experiment_type}::${exp.scheduled_date}`;
-                if (!groups.has(key)) {
-                  groups.set(key, { type: exp.experiment_type, date: exp.scheduled_date!, animalIds: [] });
+                if (!groups.has(exp.experiment_type)) {
+                  groups.set(exp.experiment_type, { animalIds: new Set(), earliest: exp.scheduled_date!, latest: exp.scheduled_date! });
                 }
-                groups.get(key)!.animalIds.push(exp.animal_id);
+                const g = groups.get(exp.experiment_type)!;
+                g.animalIds.add(exp.animal_id);
+                if (exp.scheduled_date! < g.earliest) g.earliest = exp.scheduled_date!;
+                if (exp.scheduled_date! > g.latest) g.latest = exp.scheduled_date!;
               }
-              return Array.from(groups.values())
-                .sort((a, b) => a.date.localeCompare(b.date) || a.type.localeCompare(b.type))
-                .map((g) => {
-                  const dLeft = daysUntil(g.date);
-                  const animalNames = g.animalIds
-                    .map((id) => animals.find((a) => a.id === id)?.identifier)
-                    .filter(Boolean);
+              return Array.from(groups.entries())
+                .sort(([, a], [, b]) => a.earliest.localeCompare(b.earliest))
+                .map(([type, g]) => {
+                  const dLeft = daysUntil(g.earliest);
                   return (
-                    <div key={`${g.type}-${g.date}`} className="flex items-center justify-between text-sm">
+                    <div key={type} className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
-                        <Badge className={dLeft <= 0 ? "bg-red-100 text-red-700" : dLeft <= 3 ? "bg-orange-100 text-orange-700" : "bg-blue-100 text-blue-700"} variant="secondary">
+                        <Badge className={dLeft <= 0 ? "bg-orange-100 text-orange-700" : "bg-blue-100 text-blue-700"} variant="secondary">
                           {dLeft <= 0 ? "TODAY" : `${dLeft}d`}
                         </Badge>
                         <span className="font-medium">
-                          {EXPERIMENT_LABELS[g.type] || g.type}
+                          {EXPERIMENT_LABELS[type] || type}
                         </span>
                         <Badge variant="outline" className="text-xs">
-                          {g.animalIds.length} {g.animalIds.length === 1 ? "animal" : "animals"}
+                          {g.animalIds.size} {g.animalIds.size === 1 ? "animal" : "animals"}
                         </Badge>
-                        <span className="text-xs text-muted-foreground truncate max-w-[300px]" title={animalNames.join(", ")}>
-                          {animalNames.slice(0, 4).join(", ")}{animalNames.length > 4 ? ` +${animalNames.length - 4}` : ""}
-                        </span>
                       </div>
-                      <span className="text-xs text-muted-foreground">{g.date}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {g.earliest === g.latest ? g.earliest : `${g.earliest} → ${g.latest}`}
+                      </span>
                     </div>
                   );
                 });
