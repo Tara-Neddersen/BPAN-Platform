@@ -189,6 +189,10 @@ interface BehaviorImportDialogProps {
     saved?: number;
     errors?: string[];
   }>;
+  onImportComplete?: (
+    experimentType: string,
+    importedMeasures: { key: string; name: string; unit?: string }[]
+  ) => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -203,6 +207,7 @@ export function BehaviorImportDialog({
   defaultTimepointAge,
   defaultExperimentType,
   batchUpsertColonyResults,
+  onImportComplete,
 }: BehaviorImportDialogProps) {
   const [rawText, setRawText] = useState("");
   const [parsed, setParsed] = useState<ParsedMeasure[] | null>(null);
@@ -429,6 +434,13 @@ export function BehaviorImportDialog({
         toast.success(
           `Imported ${selectedMeasures.size} measures for ${result.saved} animals`
         );
+        // Notify parent of which measures were imported so columns can be added
+        if (onImportComplete && parsed) {
+          const importedMeasures = parsed
+            .filter((m) => selectedMeasures.has(m.key))
+            .map((m) => ({ key: m.key, name: m.name, unit: m.unit }));
+          onImportComplete(experimentType, importedMeasures);
+        }
         onClose();
       }
     } catch (err) {
@@ -446,6 +458,7 @@ export function BehaviorImportDialog({
     experimentType,
     colonyResults,
     batchUpsertColonyResults,
+    onImportComplete,
     onClose,
   ]);
 

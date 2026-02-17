@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
-import { Loader2, Save, ChevronDown, ChevronRight, Plus, Trash2, Check, Upload } from "lucide-react";
+import { useState, useMemo, useCallback, useEffect } from "react";
+import { Loader2, Save, ChevronDown, ChevronRight, Plus, Trash2, Check, Upload, Eye, EyeOff, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -149,11 +149,37 @@ export function ColonyResultsTab({
   const [activeExperiment, setActiveExperiment] = useState<string>("y_maze");
   // Custom fields per experiment type
   const [customFields, setCustomFields] = useState<Record<string, MeasureField[]>>({});
+  // Hidden fields per experiment type (persisted in localStorage)
+  const [hiddenFields, setHiddenFields] = useState<Record<string, Set<string>>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const stored = localStorage.getItem("colony_hidden_fields");
+      if (stored) {
+        const parsed = JSON.parse(stored) as Record<string, string[]>;
+        const result: Record<string, Set<string>> = {};
+        for (const [k, v] of Object.entries(parsed)) result[k] = new Set(v);
+        return result;
+      }
+    } catch { /* ignore */ }
+    return {};
+  });
+  const [showHiddenFields, setShowHiddenFields] = useState(false);
   const [showAddField, setShowAddField] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [newFieldKey, setNewFieldKey] = useState("");
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [newFieldUnit, setNewFieldUnit] = useState("");
+
+  // Persist hidden fields to localStorage
+  useEffect(() => {
+    try {
+      const serializable: Record<string, string[]> = {};
+      for (const [k, v] of Object.entries(hiddenFields)) {
+        if (v.size > 0) serializable[k] = Array.from(v);
+      }
+      localStorage.setItem("colony_hidden_fields", JSON.stringify(serializable));
+    } catch { /* ignore */ }
+  }, [hiddenFields]);
 
   // Local editable data: keyed by `${animalId}-${timepoint}-${experiment}`
   const [editData, setEditData] = useState<
@@ -250,15 +276,24 @@ export function ColonyResultsTab({
     return detected;
   }, [colonyResults, customFields]);
 
-  // Get the fields for an experiment — puts columns with data first, then empty defaults
-  const getFields = useCallback(
+  // Get ALL fields for an experiment (before hiding), with data-filled first
+  const getAllFields = useCallback(
     (exp: string): MeasureField[] => {
       const defaults = DEFAULT_MEASURES[exp] || [];
       const custom = customFields[exp] || [];
       const autoDetected = detectedFields[exp] || [];
       const allFields = [...defaults, ...custom, ...autoDetected];
 
-      // Determine which field keys actually have data in any colonyResult for the active experiment + timepoint
+      // De-duplicate by key (imported fields may overlap with defaults)
+      const seen = new Set<string>();
+      const unique: MeasureField[] = [];
+      for (const f of allFields) {
+        if (seen.has(f.key)) continue;
+        seen.add(f.key);
+        unique.push(f);
+      }
+
+      // Determine which field keys actually have data in any colonyResult for the active experiment
       const keysWithData = new Set<string>();
       for (const r of colonyResults) {
         if (r.experiment_type !== exp) continue;
@@ -269,11 +304,22 @@ export function ColonyResultsTab({
       }
 
       // Sort: fields with data first, then empty defaults
-      const withData = allFields.filter((f) => keysWithData.has(f.key));
-      const withoutData = allFields.filter((f) => !keysWithData.has(f.key));
+      const withData = unique.filter((f) => keysWithData.has(f.key));
+      const withoutData = unique.filter((f) => !keysWithData.has(f.key));
       return [...withData, ...withoutData];
     },
     [customFields, detectedFields, colonyResults]
+  );
+
+  // Get visible fields (filter out hidden)
+  const getFields = useCallback(
+    (exp: string): MeasureField[] => {
+      const all = getAllFields(exp);
+      const hidden = hiddenFields[exp];
+      if (!hidden || hidden.size === 0) return all;
+      return all.filter((f) => !hidden.has(f.key));
+    },
+    [getAllFields, hiddenFields]
   );
 
   // Update a specific measure for an animal
@@ -387,9 +433,16 @@ export function ColonyResultsTab({
     toast.success(`Added "${newFieldLabel.trim()}" field`);
   }, [activeExperiment, newFieldKey, newFieldLabel, newFieldUnit]);
 
-  // Remove custom field
-  const handleRemoveCustomField = useCallback(
+  // Hide a field (works for any field type)
+  const handleHideField = useCallback(
     (fieldKey: string) => {
+      setHiddenFields((prev) => {
+        const current = prev[activeExperiment] || new Set<string>();
+        const next = new Set(current);
+        next.add(fieldKey);
+        return { ...prev, [activeExperiment]: next };
+      });
+      // Also remove from custom fields if it's a custom one
       setCustomFields((prev) => ({
         ...prev,
         [activeExperiment]: (prev[activeExperiment] || []).filter((f) => f.key !== fieldKey),
@@ -398,11 +451,66 @@ export function ColonyResultsTab({
     [activeExperiment]
   );
 
+  // Unhide a field
+  const handleUnhideField = useCallback(
+    (fieldKey: string) => {
+      setHiddenFields((prev) => {
+        const current = prev[activeExperiment] || new Set<string>();
+        const next = new Set(current);
+        next.delete(fieldKey);
+        return { ...prev, [activeExperiment]: next };
+      });
+    },
+    [activeExperiment]
+  );
+
+  // Handle import completion: add imported measures as custom fields
+  const handleImportComplete = useCallback(
+    (experimentType: string, importedMeasures: { key: string; name: string; unit?: string }[]) => {
+      // Get existing keys to avoid duplicates
+      const defaults = DEFAULT_MEASURES[experimentType] || [];
+      const existing = customFields[experimentType] || [];
+      const existingKeys = new Set([
+        ...defaults.map((f) => f.key),
+        ...existing.map((f) => f.key),
+      ]);
+
+      const newFields: MeasureField[] = [];
+      for (const m of importedMeasures) {
+        if (existingKeys.has(m.key)) continue;
+        newFields.push({
+          key: m.key,
+          label: m.name,
+          unit: m.unit,
+          type: "number",
+        });
+      }
+
+      if (newFields.length > 0) {
+        setCustomFields((prev) => ({
+          ...prev,
+          [experimentType]: [...(prev[experimentType] || []), ...newFields],
+        }));
+      }
+
+      // Unhide any of the imported measures that were previously hidden
+      setHiddenFields((prev) => {
+        const current = prev[experimentType] || new Set<string>();
+        if (current.size === 0) return prev;
+        const next = new Set(current);
+        for (const m of importedMeasures) next.delete(m.key);
+        return { ...prev, [experimentType]: next };
+      });
+    },
+    [customFields]
+  );
+
   const currentFields = getFields(activeExperiment);
-  const defaultFieldKeys = new Set([
-    ...(DEFAULT_MEASURES[activeExperiment] || []).map((f) => f.key),
-    ...(detectedFields[activeExperiment] || []).map((f) => f.key),
-  ]);
+  const allFieldsForExp = getAllFields(activeExperiment);
+  const hiddenCount = (hiddenFields[activeExperiment]?.size || 0);
+  const hiddenFieldsList = allFieldsForExp.filter(
+    (f) => hiddenFields[activeExperiment]?.has(f.key)
+  );
   const tp = Number(activeTimepoint);
 
   // Count how many animals have results for current view
@@ -596,6 +704,47 @@ export function ColonyResultsTab({
                           </Button>
                         </div>
                       )}
+
+                      {/* Hidden fields indicator + restore UI */}
+                      {hiddenCount > 0 && (
+                        <div className="mt-3">
+                          <button
+                            onClick={() => setShowHiddenFields(!showHiddenFields)}
+                            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            <EyeOff className="w-3.5 h-3.5" />
+                            {hiddenCount} hidden column{hiddenCount !== 1 ? "s" : ""}
+                            <ChevronDown className={`w-3 h-3 transition-transform ${showHiddenFields ? "rotate-180" : ""}`} />
+                          </button>
+                          {showHiddenFields && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {hiddenFieldsList.map((f) => (
+                                <button
+                                  key={f.key}
+                                  onClick={() => handleUnhideField(f.key)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors border border-dashed"
+                                  title={`Show "${f.label}" column`}
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  {f.label}
+                                  {f.unit && <span className="text-muted-foreground/50">({f.unit})</span>}
+                                </button>
+                              ))}
+                              <button
+                                onClick={() => {
+                                  setHiddenFields((prev) => ({
+                                    ...prev,
+                                    [activeExperiment]: new Set<string>(),
+                                  }));
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/20 transition-colors"
+                              >
+                                Show all
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </CardHeader>
 
                     <CardContent>
@@ -619,24 +768,22 @@ export function ColonyResultsTab({
                               {currentFields.map((field) => (
                                 <th
                                   key={field.key}
-                                  className="text-left px-2 py-2 font-medium text-xs text-muted-foreground min-w-[100px]"
+                                  className="text-left px-2 py-2 font-medium text-xs text-muted-foreground min-w-[100px] group/col"
                                 >
                                   <div className="flex items-center gap-1">
-                                    <span>{field.label}</span>
+                                    <span className="truncate">{field.label}</span>
                                     {field.unit && (
-                                      <span className="text-[10px] text-muted-foreground/60">
+                                      <span className="text-[10px] text-muted-foreground/60 shrink-0">
                                         ({field.unit})
                                       </span>
                                     )}
-                                    {!defaultFieldKeys.has(field.key) && (
-                                      <button
-                                        onClick={() => handleRemoveCustomField(field.key)}
-                                        className="text-red-400 hover:text-red-600 ml-1"
-                                        title="Remove field"
-                                      >
-                                        <Trash2 className="w-3 h-3" />
-                                      </button>
-                                    )}
+                                    <button
+                                      onClick={() => handleHideField(field.key)}
+                                      className="text-muted-foreground/30 hover:text-red-500 ml-auto opacity-0 group-hover/col:opacity-100 transition-opacity shrink-0"
+                                      title="Hide this column"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
                                   </div>
                                 </th>
                               ))}
@@ -688,6 +835,7 @@ export function ColonyResultsTab({
           defaultTimepointAge={Number(activeTimepoint)}
           defaultExperimentType={activeExperiment}
           batchUpsertColonyResults={batchUpsertColonyResults}
+          onImportComplete={handleImportComplete}
         />
       )}
     </div>
