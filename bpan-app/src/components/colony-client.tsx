@@ -827,8 +827,8 @@ export function ColonyClient({
                             size="sm"
                             className="h-7 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/10"
                             onClick={() => {
-                              setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)));
-                              setDeleteStatusFilter(new Set(["scheduled", "pending"]));
+                              setSelectedTpAges(new Set());
+                              setDeleteStatusFilter(new Set());
                               setDeleteDialog({ type: "cohort", id: c.id, name: c.name });
                             }}
                           >
@@ -1671,100 +1671,130 @@ export function ColonyClient({
               Delete Experiments — {deleteDialog?.name}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Choose which experiments to delete. This action cannot be undone.
-            </p>
+          {deleteDialog && (() => {
+            // Get actual timepoint values from existing experiments for this target
+            const targetExps = deleteDialog.type === "cohort"
+              ? experiments.filter(e => {
+                  const animal = animals.find(a => a.id === e.animal_id);
+                  return animal?.cohort_id === deleteDialog.id;
+                })
+              : experiments.filter(e => e.animal_id === deleteDialog.id);
+            const actualTpAges = [...new Set(targetExps.map(e => e.timepoint_age_days).filter((v): v is number => v != null))].sort((a, b) => a - b);
+            const actualStatuses = [...new Set(targetExps.map(e => e.status))].sort();
+            // Count matching
+            const matchCount = targetExps.filter(e => {
+              if (selectedTpAges.size > 0 && e.timepoint_age_days != null && !selectedTpAges.has(e.timepoint_age_days)) return false;
+              if (deleteStatusFilter.size > 0 && !deleteStatusFilter.has(e.status)) return false;
+              return true;
+            }).length;
 
-            <div className="space-y-2">
-              <Label className="text-xs font-medium">Filter by Timepoint</Label>
-              <div className="flex flex-wrap gap-2">
-                {timepoints.map((tp) => {
-                  const isSelected = selectedTpAges.has(tp.age_days);
-                  return (
-                    <Button
-                      key={tp.id}
-                      variant={isSelected ? "default" : "outline"}
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => {
-                        const next = new Set(selectedTpAges);
-                        if (isSelected) next.delete(tp.age_days);
-                        else next.add(tp.age_days);
-                        setSelectedTpAges(next);
-                      }}
-                    >
-                      {tp.name} ({tp.age_days}d)
-                    </Button>
-                  );
-                })}
-              </div>
-              <div className="flex gap-2 mt-1">
-                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)))}>Select all</Button>
-                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setSelectedTpAges(new Set())}>Select none</Button>
-              </div>
-            </div>
+            return (
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  This {deleteDialog.type} has <strong>{targetExps.length}</strong> experiment{targetExps.length !== 1 ? "s" : ""}. Choose which to delete.
+                </p>
 
-            <div className="space-y-2">
-              <Label className="text-xs font-medium">Filter by Status (leave empty = all)</Label>
-              <div className="flex flex-wrap gap-2">
-                {["pending", "scheduled", "in_progress", "completed", "skipped"].map((s) => {
-                  const isSelected = deleteStatusFilter.has(s);
-                  return (
-                    <Button
-                      key={s}
-                      variant={isSelected ? "default" : "outline"}
-                      size="sm"
-                      className={`h-7 text-xs ${isSelected ? "bg-destructive hover:bg-destructive/90" : ""}`}
-                      onClick={() => {
-                        const next = new Set(deleteStatusFilter);
-                        if (isSelected) next.delete(s);
-                        else next.add(s);
-                        setDeleteStatusFilter(next);
-                      }}
-                    >
-                      {s}
-                    </Button>
-                  );
-                })}
-              </div>
-              <p className="text-xs text-muted-foreground italic">
-                Tip: select only &quot;scheduled&quot; + &quot;pending&quot; to keep completed experiments
-              </p>
-            </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Filter by Timepoint (empty = all)</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {actualTpAges.map((age) => {
+                      const tp = timepoints.find(t => t.age_days === age);
+                      const isSelected = selectedTpAges.has(age);
+                      const count = targetExps.filter(e => e.timepoint_age_days === age).length;
+                      return (
+                        <Button
+                          key={age}
+                          variant={isSelected ? "default" : "outline"}
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() => {
+                            const next = new Set(selectedTpAges);
+                            if (isSelected) next.delete(age);
+                            else next.add(age);
+                            setSelectedTpAges(next);
+                          }}
+                        >
+                          {tp ? tp.name : `${age}d`} ({count})
+                        </Button>
+                      );
+                    })}
+                    {actualTpAges.length === 0 && (
+                      <span className="text-xs text-muted-foreground">No experiments found</span>
+                    )}
+                  </div>
+                  <div className="flex gap-2 mt-1">
+                    <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setSelectedTpAges(new Set(actualTpAges))}>Select all</Button>
+                    <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setSelectedTpAges(new Set())}>None (= all)</Button>
+                  </div>
+                </div>
 
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDeleteDialog(null)}>Cancel</Button>
-              <Button
-                variant="destructive"
-                disabled={busy || selectedTpAges.size === 0}
-                onClick={async () => {
-                  if (!deleteDialog) return;
-                  setBusy(true);
-                  try {
-                    const tpAges = Array.from(selectedTpAges);
-                    const statuses = deleteStatusFilter.size > 0 ? Array.from(deleteStatusFilter) : undefined;
-                    if (deleteDialog.type === "cohort") {
-                      const res = await actions.deleteExperimentsForCohort(deleteDialog.id, tpAges, statuses);
-                      if (res.error) toast.error(res.error);
-                      else toast.success(`Deleted ${res.deleted} experiments across ${res.animals} animals`);
-                    } else {
-                      const res = await actions.deleteExperimentsForAnimal(deleteDialog.id, tpAges, statuses);
-                      if (res.error) toast.error(res.error);
-                      else toast.success(`Deleted ${res.deleted} experiments`);
-                    }
-                    refetchAll();
-                    setDeleteDialog(null);
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-                Delete Experiments
-              </Button>
-            </DialogFooter>
-          </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Filter by Status (empty = all)</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {actualStatuses.map((s) => {
+                      const isSelected = deleteStatusFilter.has(s);
+                      const count = targetExps.filter(e => e.status === s).length;
+                      return (
+                        <Button
+                          key={s}
+                          variant={isSelected ? "default" : "outline"}
+                          size="sm"
+                          className={`h-7 text-xs ${isSelected ? "bg-destructive hover:bg-destructive/90" : ""}`}
+                          onClick={() => {
+                            const next = new Set(deleteStatusFilter);
+                            if (isSelected) next.delete(s);
+                            else next.add(s);
+                            setDeleteStatusFilter(next);
+                          }}
+                        >
+                          {s} ({count})
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-muted-foreground italic">
+                    Tip: select only &quot;scheduled&quot; + &quot;pending&quot; to keep completed experiments
+                  </p>
+                </div>
+
+                <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm">
+                  Will delete <strong className="text-destructive">{selectedTpAges.size === 0 && deleteStatusFilter.size === 0 ? targetExps.length : matchCount}</strong> experiment{(selectedTpAges.size === 0 && deleteStatusFilter.size === 0 ? targetExps.length : matchCount) !== 1 ? "s" : ""}
+                </div>
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDeleteDialog(null)}>Cancel</Button>
+                  <Button
+                    variant="destructive"
+                    disabled={busy || targetExps.length === 0}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        // Pass empty array for timepoints = no filter = delete all matching status
+                        const tpAges = selectedTpAges.size > 0 ? Array.from(selectedTpAges) : undefined;
+                        const statuses = deleteStatusFilter.size > 0 ? Array.from(deleteStatusFilter) : undefined;
+                        if (deleteDialog.type === "cohort") {
+                          const res = await actions.deleteExperimentsForCohort(deleteDialog.id, tpAges, statuses);
+                          if (res.error) toast.error(res.error);
+                          else toast.success(`Deleted ${res.deleted} experiments across ${res.animals} animals`);
+                        } else {
+                          const res = await actions.deleteExperimentsForAnimal(deleteDialog.id, tpAges, statuses);
+                          if (res.error) toast.error(res.error);
+                          else toast.success(`Deleted ${res.deleted} experiments`);
+                        }
+                        refetchAll();
+                        setDeleteDialog(null);
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                    Delete {selectedTpAges.size === 0 && deleteStatusFilter.size === 0 ? "ALL" : ""} Experiments
+                  </Button>
+                </DialogFooter>
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 
@@ -1892,8 +1922,8 @@ export function ColonyClient({
                 setScheduleDialog({ type: "animal", id: selectedAnimal.id, name: selectedAnimal.identifier, birthDate: selectedAnimal.birth_date });
               }}
               onDeleteAllExps={() => {
-                setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)));
-                setDeleteStatusFilter(new Set(["scheduled", "pending"]));
+                setSelectedTpAges(new Set());
+                setDeleteStatusFilter(new Set());
                 setDeleteDialog({ type: "animal", id: selectedAnimal.id, name: selectedAnimal.identifier });
               }}
               onUpdateStatus={handleUpdateExpStatus}

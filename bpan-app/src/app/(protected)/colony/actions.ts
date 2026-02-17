@@ -633,30 +633,14 @@ export async function deleteExperimentsForAnimal(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  // First count what we're about to delete
-  let countQuery = supabase
-    .from("animal_experiments")
-    .select("id", { count: "exact", head: true })
-    .eq("animal_id", animalId)
-    .eq("user_id", user.id);
-
-  if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
-    countQuery = countQuery.in("timepoint_age_days", onlyTimepointAgeDays);
-  }
-  if (onlyStatuses && onlyStatuses.length > 0) {
-    countQuery = countQuery.in("status", onlyStatuses);
-  }
-
-  const { count } = await countQuery;
-
-  // Now delete — build fresh query to avoid type issues
-  // We need to get the IDs first, then delete by IDs
+  // Get IDs of experiments to delete
   let idsQuery = supabase
     .from("animal_experiments")
     .select("id")
     .eq("animal_id", animalId)
     .eq("user_id", user.id);
 
+  // Only filter by timepoint if explicitly provided (empty array = no filter = all)
   if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
     idsQuery = idsQuery.in("timepoint_age_days", onlyTimepointAgeDays);
   }
@@ -664,18 +648,24 @@ export async function deleteExperimentsForAnimal(
     idsQuery = idsQuery.in("status", onlyStatuses);
   }
 
-  const { data: rows } = await idsQuery;
+  const { data: rows, error: selectError } = await idsQuery;
+  if (selectError) return { error: selectError.message };
+
+  const deleteCount = rows?.length ?? 0;
+
   if (rows && rows.length > 0) {
-    const ids = rows.map(r => r.id);
-    const { error } = await supabase
-      .from("animal_experiments")
-      .delete()
-      .in("id", ids);
-    if (error) return { error: error.message };
+    for (let i = 0; i < rows.length; i += 100) {
+      const batch = rows.slice(i, i + 100).map(r => r.id);
+      const { error } = await supabase
+        .from("animal_experiments")
+        .delete()
+        .in("id", batch);
+      if (error) return { error: error.message };
+    }
   }
 
   revalidatePath("/colony");
-  return { success: true, deleted: count ?? 0 };
+  return { success: true, deleted: deleteCount };
 }
 
 /**
