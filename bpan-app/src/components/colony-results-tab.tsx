@@ -758,24 +758,24 @@ export function ColonyResultsTab({
                         <table className="w-full text-sm">
                           <thead className="sticky top-0 z-20">
                             <tr className="border-b bg-background shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground sticky left-0 z-30 bg-background min-w-[140px]">
+                              <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground sticky left-0 z-30 bg-background min-w-[150px]">
                                 Animal
                               </th>
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[80px]">
+                              <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[90px]">
                                 Cohort
                               </th>
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[60px]">
+                              <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[55px]">
                                 Sex
                               </th>
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[60px]">
+                              <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[65px]">
                                 GT
                               </th>
                               {currentFields.map((field) => (
                                 <th
                                   key={field.key}
-                                  className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[100px] group/col"
+                                  className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[120px] group/col"
                                 >
-                                  <div className="flex items-center gap-1">
+                                  <div className="flex items-center gap-1.5">
                                     <span className="truncate">{field.label}</span>
                                     {field.unit && (
                                       <span className="text-[10px] text-muted-foreground/60 shrink-0">
@@ -792,13 +792,13 @@ export function ColonyResultsTab({
                                   </div>
                                 </th>
                               ))}
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[120px]">
+                              <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[140px]">
                                 Notes
                               </th>
-                              <th className="text-center px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[80px]">
+                              <th className="text-center px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[85px]">
                                 {IMAGE_EXPERIMENTS.has(exp) ? "📷 Cage" : "🔗 Data"}
                               </th>
-                              <th className="text-center px-2 py-2 font-medium text-xs text-muted-foreground bg-background w-[50px]">
+                              <th className="text-center px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background w-[50px]">
                                 ✓
                               </th>
                             </tr>
@@ -894,7 +894,7 @@ function CohortGroup({
         className="border-b bg-muted/20 cursor-pointer hover:bg-muted/40 transition-colors"
         onClick={() => setCollapsed(!collapsed)}
       >
-        <td colSpan={fields.length + 6} className="px-2 py-1.5">
+        <td colSpan={fields.length + 6} className="px-3 py-2">
           <div className="flex items-center gap-2">
             {collapsed ? (
               <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
@@ -942,21 +942,21 @@ function CohortGroup({
                   : genotypeRowBg
               } hover:bg-muted/20`}
             >
-              <td className="px-2 py-1.5 sticky left-0 bg-inherit font-medium text-xs">
-                <div className="flex items-center gap-1">
+              <td className="px-3 py-2 sticky left-0 bg-inherit font-medium text-xs">
+                <div className="flex items-center gap-1.5">
                   <MiniEarTag earTag={animal.ear_tag} size={20} />
                   <span>{animal.identifier}</span>
                 </div>
               </td>
-              <td className="px-2 py-1.5 text-xs text-muted-foreground">
+              <td className="px-3 py-2 text-xs text-muted-foreground">
                 {cohort?.name || "—"}
               </td>
-              <td className="px-2 py-1.5 text-xs">
+              <td className="px-3 py-2 text-xs">
                 <span className={animal.sex === "male" ? "text-blue-600" : "text-pink-600"}>
                   {animal.sex === "male" ? "♂" : "♀"}
                 </span>
               </td>
-              <td className="px-2 py-1.5 text-xs">
+              <td className="px-3 py-2 text-xs">
                 <Badge
                   variant="outline"
                   className={`text-[10px] py-0 ${
@@ -971,11 +971,11 @@ function CohortGroup({
                 </Badge>
               </td>
               {fields.map((field) => (
-                <td key={field.key} className="px-1 py-1">
+                <td key={field.key} className="px-1.5 py-1.5">
                   <Input
                     type={field.type === "text" ? "text" : "text"}
                     inputMode={field.type === "text" ? "text" : "decimal"}
-                    className="h-7 text-xs w-full min-w-[80px]"
+                    className="h-7 text-xs w-full min-w-[100px]"
                     placeholder="—"
                     value={data.measures[field.key] ?? ""}
                     onChange={(e) =>
@@ -984,15 +984,15 @@ function CohortGroup({
                   />
                 </td>
               ))}
-              <td className="px-1 py-1">
+              <td className="px-1.5 py-1.5">
                 <Input
-                  className="h-7 text-xs w-full min-w-[100px]"
+                  className="h-7 text-xs w-full min-w-[120px]"
                   placeholder="Notes..."
                   value={data.notes || ""}
                   onChange={(e) => updateNotes(animal.id, timepoint, experiment, e.target.value)}
                 />
               </td>
-              <td className="px-1 py-1">
+              <td className="px-1.5 py-1.5">
                 {isImageExperiment ? (
                   <CageImageCell
                     animalId={animal.id}
@@ -1012,7 +1012,7 @@ function CohortGroup({
                   />
                 )}
               </td>
-              <td className="px-2 py-1.5 text-center">
+              <td className="px-3 py-2 text-center">
                 {hasData ? (
                   <span className="text-green-600">
                     <Check className="w-4 h-4 inline" />
