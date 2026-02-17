@@ -30,6 +30,7 @@ import type {
   HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AnimalStatus,
 } from "@/types";
 import { ColonyResultsTab } from "@/components/colony-results-tab";
+import { EarTagSelector, MiniEarTag, formatEarTag, parseEarTag } from "@/components/ear-tag-selector";
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -262,6 +263,7 @@ export function ColonyClient({
   const [filterCohort, setFilterCohort] = useState("all");
   const [filterGenotype, setFilterGenotype] = useState("all");
   const [animalFormCohortId, setAnimalFormCohortId] = useState("");
+  const [animalFormEarTag, setAnimalFormEarTag] = useState("0000");
   const birthDateRef = useRef<HTMLInputElement>(null);
 
   // Google Drive integration
@@ -610,7 +612,12 @@ export function ColonyClient({
                         </div>
                         <div className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
                           <span>{age} days old</span>
-                          {animal.ear_tag && <span>Tag: {animal.ear_tag}</span>}
+                          {animal.ear_tag && animal.ear_tag !== "0000" && (
+                            <span className="flex items-center gap-1">
+                              <MiniEarTag earTag={animal.ear_tag} size={22} />
+                              <span>{formatEarTag(animal.ear_tag)}</span>
+                            </span>
+                          )}
                           {animal.cage_number && <span>Cage: {animal.cage_number}</span>}
                           {totalCount > 0 && (
                             <span>{completedCount}/{totalCount} experiments done</span>
@@ -1025,14 +1032,14 @@ export function ColonyClient({
       {/* ─── Dialogs ────────────────────────────────────────────── */}
 
       {/* Add / Edit Animal */}
-      <Dialog open={showAddAnimal || !!editingAnimal} onOpenChange={(v) => { if (!v) { setShowAddAnimal(false); setEditingAnimal(null); setAnimalFormCohortId(""); } }}>
+      <Dialog open={showAddAnimal || !!editingAnimal} onOpenChange={(v) => { if (!v) { setShowAddAnimal(false); setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{editingAnimal ? "Edit Animal" : "Add Animal"}</DialogTitle></DialogHeader>
           <form onSubmit={(e) => {
             if (editingAnimal) {
-              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => { setEditingAnimal(null); setAnimalFormCohortId(""); });
+              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => { setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); });
             } else {
-              handleFormAction(actions.createAnimal, e, () => { setShowAddAnimal(false); setAnimalFormCohortId(""); });
+              handleFormAction(actions.createAnimal, e, () => { setShowAddAnimal(false); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); });
             }
           }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -1089,9 +1096,13 @@ export function ColonyClient({
                 <Label className="text-xs">Birth Date * <span className="text-muted-foreground">(auto-filled from cohort)</span></Label>
                 <Input ref={birthDateRef} name="birth_date" type="date" required defaultValue={editingAnimal?.birth_date || ""} />
               </div>
-              <div>
-                <Label className="text-xs">Ear Tag</Label>
-                <Input name="ear_tag" placeholder="Optional" defaultValue={editingAnimal?.ear_tag || ""} />
+              <div className="sm:col-span-2">
+                <Label className="text-xs mb-2 block">Ear Punch Tag</Label>
+                <input type="hidden" name="ear_tag" value={animalFormEarTag} />
+                <EarTagSelector
+                  value={animalFormEarTag}
+                  onChange={setAnimalFormEarTag}
+                />
               </div>
               <div>
                 <Label className="text-xs">Cage #</Label>
@@ -1452,7 +1463,7 @@ export function ColonyClient({
                 if (res.error) { toast.error(res.error); }
                 else { toast.success(`Rescheduled ${res.rescheduled} experiments (last: ${res.lastDate})`); await refetchAll(); }
               }}
-              onEdit={() => { setEditingAnimal(selectedAnimal); setSelectedAnimal(null); }}
+              onEdit={() => { setEditingAnimal(selectedAnimal); setAnimalFormEarTag(parseEarTag(selectedAnimal.ear_tag)); setSelectedAnimal(null); }}
               onDelete={() => { act(actions.deleteAnimal(selectedAnimal.id)); setSelectedAnimal(null); }}
               busy={busy}
             />
@@ -1564,7 +1575,13 @@ function AnimalDetail({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
         <div><span className="text-muted-foreground text-xs block">Age</span>{age} days</div>
         <div><span className="text-muted-foreground text-xs block">Cohort</span>{cohort?.name || "—"}</div>
-        <div><span className="text-muted-foreground text-xs block">Ear Tag</span>{animal.ear_tag || "—"}</div>
+        <div>
+          <span className="text-muted-foreground text-xs block">Ear Tag</span>
+          <div className="flex items-center gap-1">
+            <MiniEarTag earTag={animal.ear_tag} size={26} />
+            <span>{formatEarTag(animal.ear_tag)}</span>
+          </div>
+        </div>
         <div><span className="text-muted-foreground text-xs block">Cage</span>{animal.cage_number || "—"}</div>
         <div><span className="text-muted-foreground text-xs block">Status</span>{animal.status}</div>
         <div><span className="text-muted-foreground text-xs block">EEG</span>{animal.eeg_implanted ? `Yes (${animal.eeg_implant_date})` : "No"}</div>

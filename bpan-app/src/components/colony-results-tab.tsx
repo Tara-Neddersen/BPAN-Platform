@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
+import { MiniEarTag, formatEarTag } from "@/components/ear-tag-selector";
 
 // ─── Default experiment measures per type ─────────────────────────────
 
@@ -709,10 +710,13 @@ function CohortGroup({
               } hover:bg-muted/20`}
             >
               <td className="px-2 py-1.5 sticky left-0 bg-inherit font-medium text-xs">
-                {animal.identifier}
-                {animal.ear_tag && (
-                  <span className="text-muted-foreground ml-1">#{animal.ear_tag}</span>
-                )}
+                <div className="flex items-center gap-1">
+                  <MiniEarTag earTag={animal.ear_tag} size={20} />
+                  <span>{animal.identifier}</span>
+                  {animal.ear_tag && animal.ear_tag !== "0000" && (
+                    <span className="text-muted-foreground text-[10px]">{formatEarTag(animal.ear_tag)}</span>
+                  )}
+                </div>
               </td>
               <td className="px-2 py-1.5 text-xs text-muted-foreground">
                 {cohort?.name || "—"}
