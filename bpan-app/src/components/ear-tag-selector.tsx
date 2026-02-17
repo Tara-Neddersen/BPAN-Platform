@@ -21,11 +21,7 @@ import { useState, useCallback, useEffect } from "react";
 /** Value assigned to each grid position: TL, TR, BL, BR */
 const POSITION_VALUES = [1, 4, 2, 8] as const;
 
-/** Ear labels for each COLUMN */
-const COLUMN_LABELS = ["R", "L"] as const; // Left col = Right ear, Right col = Left ear
-
-/** Row labels */
-const ROW_LABELS = ["Top", "Bot"] as const;
+// Grid positions map to: [0]=R-top, [1]=L-top, [2]=R-bottom, [3]=L-bottom
 
 /**
  * Convert a punch pattern to its ear tag number (1–15).
@@ -172,10 +168,9 @@ export function MiniEarTag({
 interface EarTagSelectorProps {
   value: string; // punch pattern "0000"–"1111" or ear tag number
   onChange: (pattern: string) => void;
-  showNumber?: boolean;
 }
 
-export function EarTagSelector({ value, onChange, showNumber = true }: EarTagSelectorProps) {
+export function EarTagSelector({ value, onChange }: EarTagSelectorProps) {
   const [pattern, setPattern] = useState(() => parseEarTag(value));
 
   useEffect(() => {
@@ -207,67 +202,45 @@ export function EarTagSelector({ value, onChange, showNumber = true }: EarTagSel
         <MouseHeadSVG size={70} />
       </div>
 
-      {/* Punch grid */}
+      {/* Punch grid — circles only, no numbers */}
       <div className="flex flex-col items-center gap-0.5">
-        <span className="text-[10px] text-muted-foreground font-medium mb-0.5">Click to punch</span>
+        <span className="text-[10px] text-muted-foreground font-medium mb-1">Click to punch</span>
 
-        {/* Column headers — R.Ear / L.Ear */}
-        <div className="grid grid-cols-2 gap-1.5 mb-0.5">
-          {COLUMN_LABELS.map((label) => (
-            <div key={label} className="text-center text-[10px] font-semibold text-muted-foreground">
-              {label === "R" ? "R.Ear" : "L.Ear"}
-            </div>
-          ))}
-        </div>
-
-        {/* Grid with value labels */}
-        <div className="grid grid-cols-2 gap-1.5">
+        <div className="grid grid-cols-2 gap-2">
           {[0, 1, 2, 3].map((i) => {
             const isPunched = pattern[i] === "1";
-            const posValue = POSITION_VALUES[i];
-            const row = Math.floor(i / 2);
             return (
               <button
                 key={i}
                 type="button"
                 onClick={() => togglePosition(i)}
-                className={`w-9 h-9 rounded-full border-2 transition-all duration-150 flex items-center justify-center relative
+                className={`w-8 h-8 rounded-full border-2 transition-all duration-150 flex items-center justify-center
                   ${
                     isPunched
-                      ? "bg-red-500 border-red-600 text-white shadow-md scale-105"
-                      : "bg-gray-100 border-gray-300 text-gray-400 hover:bg-gray-200 hover:border-gray-400 dark:bg-gray-800 dark:border-gray-600 dark:hover:bg-gray-700"
+                      ? "bg-red-500 border-red-600 shadow-md scale-105"
+                      : "bg-gray-100 border-gray-300 hover:bg-gray-200 hover:border-gray-400 dark:bg-gray-800 dark:border-gray-600 dark:hover:bg-gray-700"
                   }`}
-                title={`${COLUMN_LABELS[i % 2]}.Ear ${ROW_LABELS[row]} (=${posValue}) — ${isPunched ? "Punched" : "Not punched"}`}
               >
-                {isPunched ? (
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                {isPunched && (
+                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
                     <line x1="3" y1="3" x2="11" y2="11" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
                     <line x1="11" y1="3" x2="3" y2="11" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
                   </svg>
-                ) : (
-                  <span className="text-[10px] font-bold">{posValue}</span>
                 )}
               </button>
             );
           })}
         </div>
 
-        <div className="flex items-center gap-2 mt-1">
-          {showNumber && num > 0 && (
-            <span className="text-sm font-bold text-indigo-600 dark:text-indigo-400">
-              #{num}
-            </span>
-          )}
-          {num > 0 && (
-            <button
-              type="button"
-              onClick={clearAll}
-              className="text-[10px] text-muted-foreground hover:text-red-500 underline"
-            >
-              Clear
-            </button>
-          )}
-        </div>
+        {num > 0 && (
+          <button
+            type="button"
+            onClick={clearAll}
+            className="text-[10px] text-muted-foreground hover:text-red-500 underline mt-1"
+          >
+            Clear
+          </button>
+        )}
       </div>
     </div>
   );
