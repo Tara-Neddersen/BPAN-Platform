@@ -566,6 +566,7 @@ export async function scheduleExperimentsForAnimal(
 
 /**
  * Auto-schedule experiments for ALL animals in a given cohort.
+ * Optimized: fetches all data in 3 queries, computes in memory, batch inserts.
  * @param onlyTimepointAgeDays - optional array of timepoint age_days to limit scheduling
  */
 export async function scheduleExperimentsForCohort(
@@ -576,53 +577,160 @@ export async function scheduleExperimentsForCohort(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  // Get the cohort
-  const { data: cohort } = await supabase
-    .from("cohorts")
-    .select("*")
-    .eq("id", cohortId)
-    .eq("user_id", user.id)
-    .single();
+  // ── 1. Fetch all needed data in parallel ──
+  const [cohortRes, animalsRes, timepointsRes] = await Promise.all([
+    supabase.from("cohorts").select("*").eq("id", cohortId).eq("user_id", user.id).single(),
+    supabase.from("animals").select("id, birth_date").eq("cohort_id", cohortId).eq("user_id", user.id).eq("status", "active"),
+    supabase.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order", { ascending: true }),
+  ]);
 
+  const cohort = cohortRes.data;
   if (!cohort) return { error: "Cohort not found." };
 
-  // Get all active animals in this cohort
-  const { data: cohortAnimals } = await supabase
-    .from("animals")
-    .select("id, birth_date")
-    .eq("cohort_id", cohortId)
-    .eq("user_id", user.id)
-    .eq("status", "active");
+  const cohortAnimals = animalsRes.data;
+  if (!cohortAnimals || cohortAnimals.length === 0) return { error: "No active animals in this cohort." };
 
-  if (!cohortAnimals || cohortAnimals.length === 0) {
-    return { error: "No active animals in this cohort." };
-  }
+  const allTimepoints = timepointsRes.data;
+  if (!allTimepoints || allTimepoints.length === 0) return { error: "No timepoints configured." };
 
-  let totalCount = 0;
+  const timepoints = onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0
+    ? allTimepoints.filter(tp => onlyTimepointAgeDays.includes(tp.age_days))
+    : allTimepoints;
+
+  if (timepoints.length === 0) return { error: "No matching timepoints found." };
+
+  // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (one query) ──
+  const animalIds = cohortAnimals.map(a => a.id);
+  const { data: allExisting } = await supabase
+    .from("animal_experiments")
+    .select("animal_id, experiment_type, timepoint_age_days")
+    .in("animal_id", animalIds)
+    .eq("user_id", user.id);
+
+  // Build a set of "animalId::type::tp" for quick lookup
+  const existingSet = new Set(
+    (allExisting || []).map(e => `${e.animal_id}::${e.experiment_type}::${e.timepoint_age_days}`)
+  );
+  // Track if EEG implant exists per animal
+  const animalHasEegImplant = new Set(
+    (allExisting || []).filter(e => e.experiment_type === "eeg_implant").map(e => e.animal_id)
+  );
+
+  // ── 3. Compute all records in memory ──
+  const DAY = 24 * 60 * 60 * 1000;
+  const allRecords: Record<string, unknown>[] = [];
   let animalsScheduled = 0;
-  const errors: string[] = [];
 
   for (const animal of cohortAnimals) {
     const birthDate = animal.birth_date || cohort.birth_date;
-    const result = await scheduleExperimentsForAnimal(animal.id, birthDate, onlyTimepointAgeDays);
-    if (result.error) {
-      errors.push(`Animal ${animal.id}: ${result.error}`);
-    } else if ((result.count || 0) > 0) {
-      totalCount += result.count || 0;
-      animalsScheduled++;
+    const birth = new Date(birthDate);
+    let animalRecords = 0;
+    let eegImplantScheduled = animalHasEegImplant.has(animal.id);
+
+    for (const tp of timepoints) {
+      const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
+      const expList = (tp.experiments as string[]) || [];
+      const selectedExps = new Set(
+        expList.length > 0 ? expList : PROTOCOL_SCHEDULE.map(s => s.type).filter(t => t !== "handling")
+      );
+
+      for (const step of PROTOCOL_SCHEDULE) {
+        const key = `${animal.id}::${step.type}::${tp.age_days}`;
+
+        if (step.type === "handling") {
+          if (tp.handling_days_before > 0 && !existingSet.has(key)) {
+            const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * DAY);
+            allRecords.push({
+              user_id: user.id, animal_id: animal.id,
+              experiment_type: "handling", timepoint_age_days: tp.age_days,
+              scheduled_date: handlingStart.toISOString().split("T")[0],
+              status: "scheduled", notes: step.notes,
+            });
+            existingSet.add(key);
+            animalRecords++;
+          }
+          continue;
+        }
+
+        if (!selectedExps.has(step.type)) continue;
+        if (existingSet.has(key)) continue;
+
+        const expDate = new Date(experimentStart.getTime() + step.dayOffset * DAY);
+        allRecords.push({
+          user_id: user.id, animal_id: animal.id,
+          experiment_type: step.type, timepoint_age_days: tp.age_days,
+          scheduled_date: expDate.toISOString().split("T")[0],
+          status: "scheduled", notes: step.notes,
+        });
+        existingSet.add(key);
+        animalRecords++;
+      }
+
+      // EEG scheduling
+      if (tp.includes_eeg_implant) {
+        const afterExperimentsDate = new Date(experimentStart.getTime() + 10 * DAY);
+
+        if (!eegImplantScheduled) {
+          eegImplantScheduled = true;
+          const implantKey = `${animal.id}::eeg_implant::${tp.age_days}`;
+          if (!existingSet.has(implantKey)) {
+            allRecords.push({
+              user_id: user.id, animal_id: animal.id,
+              experiment_type: "eeg_implant", timepoint_age_days: tp.age_days,
+              scheduled_date: afterExperimentsDate.toISOString().split("T")[0],
+              status: "scheduled", notes: "EEG implant surgery (one-time)",
+            });
+            existingSet.add(implantKey);
+            animalRecords++;
+          }
+          const recKey = `${animal.id}::eeg_recording::${tp.age_days}`;
+          if (!existingSet.has(recKey)) {
+            const recordingStart = new Date(afterExperimentsDate.getTime() + tp.eeg_recovery_days * DAY);
+            allRecords.push({
+              user_id: user.id, animal_id: animal.id,
+              experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
+              scheduled_date: recordingStart.toISOString().split("T")[0],
+              status: "scheduled", notes: `EEG recording (${tp.eeg_recording_days}d) after ${tp.eeg_recovery_days}d recovery`,
+            });
+            existingSet.add(recKey);
+            animalRecords++;
+          }
+        } else {
+          const recKey = `${animal.id}::eeg_recording::${tp.age_days}`;
+          if (!existingSet.has(recKey)) {
+            const recordingStart = new Date(afterExperimentsDate.getTime() + 7 * DAY);
+            allRecords.push({
+              user_id: user.id, animal_id: animal.id,
+              experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
+              scheduled_date: recordingStart.toISOString().split("T")[0],
+              status: "scheduled", notes: `EEG recording (${tp.eeg_recording_days}d) — 7d rest after experiments`,
+            });
+            existingSet.add(recKey);
+            animalRecords++;
+          }
+        }
+      }
+    }
+
+    if (animalRecords > 0) animalsScheduled++;
+  }
+
+  // ── 4. Batch insert all records at once ──
+  if (allRecords.length > 0) {
+    for (let i = 0; i < allRecords.length; i += 200) {
+      const batch = allRecords.slice(i, i + 200);
+      const { error } = await supabase.from("animal_experiments").insert(batch);
+      if (error) return { error: `Insert failed at batch ${Math.floor(i / 200) + 1}: ${error.message}` };
     }
   }
 
   revalidatePath("/colony");
 
-  if (totalCount === 0 && errors.length === 0) {
+  if (allRecords.length === 0) {
     return { error: `All experiments for all ${cohortAnimals.length} animals are already scheduled. Nothing new to add.` };
   }
 
-  if (errors.length > 0) {
-    return { success: true, scheduled: animalsScheduled, total: totalCount, errors };
-  }
-  return { success: true, scheduled: animalsScheduled, total: totalCount };
+  return { success: true, scheduled: animalsScheduled, total: allRecords.length };
 }
 
 // ─── Mass Delete Experiments ────────────────────────────────────────────
