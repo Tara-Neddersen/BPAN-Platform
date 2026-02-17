@@ -85,7 +85,8 @@ export async function GET(
         .from("animal_experiments")
         .select("*, animals(identifier)")
         .eq("user_id", userId)
-        .order("scheduled_date");
+        .order("scheduled_date")
+        .range(0, 9999);
 
       animalExperiments = (expsData || []).map((e: Record<string, unknown>) => ({
         animal_identifier: (e.animals as { identifier: string } | null)?.identifier || "?",

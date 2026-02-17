@@ -71,15 +71,15 @@ export default async function ColonyPage() {
   ] = await Promise.all([
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
-    supabase.from("animals").select("*").eq("user_id", user.id).order("identifier"),
-    supabase.from("animal_experiments").select("*").eq("user_id", user.id).order("scheduled_date"),
+    supabase.from("animals").select("*").eq("user_id", user.id).order("identifier").range(0, 4999),
+    supabase.from("animal_experiments").select("*").eq("user_id", user.id).order("scheduled_date").range(0, 9999),
     supabase.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
     supabase.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
-    supabase.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
+    supabase.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date").range(0, 4999),
     supabase.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
-    supabase.from("colony_results").select("*").eq("user_id", user.id).order("created_at"),
+    supabase.from("colony_results").select("*").eq("user_id", user.id).order("created_at").range(0, 9999),
   ]);
 
   return (
