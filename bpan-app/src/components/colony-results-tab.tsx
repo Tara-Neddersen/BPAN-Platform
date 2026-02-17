@@ -995,16 +995,21 @@ function CohortGroup({
               <td className="px-1.5 py-1.5">
                 {isImageExperiment ? (
                   <CageImageCell
-                    animalId={animal.id}
+                    cohortName={cohort?.name || "Unknown Cohort"}
+                    animalIdentifier={animal.identifier}
                     experiment={experiment}
                     timepoint={timepoint}
-                    currentPath={data.measures.__cage_image as string | null}
-                    onUploaded={(path) =>
-                      updateMeasure(animal.id, timepoint, experiment, "__cage_image", path)
+                    currentUrl={data.measures.__cage_image as string | null}
+                    onUploaded={(url) =>
+                      updateMeasure(animal.id, timepoint, experiment, "__cage_image", url)
                     }
                   />
                 ) : (
                   <RawDataLinkCell
+                    cohortName={cohort?.name || "Unknown Cohort"}
+                    animalIdentifier={animal.identifier}
+                    experiment={experiment}
+                    timepoint={timepoint}
                     currentUrl={data.measures.__raw_data_url as string | null}
                     onChange={(url) =>
                       updateMeasure(animal.id, timepoint, experiment, "__raw_data_url", url)
@@ -1030,24 +1035,24 @@ function CohortGroup({
   );
 }
 
-// ─── Cage Image Upload Cell (nesting/marble burying) ────────────────
+// ─── Cage Image Upload Cell (nesting/marble burying) — via Google Drive ─────
 
 function CageImageCell({
-  animalId,
+  cohortName,
+  animalIdentifier,
   experiment,
   timepoint,
-  currentPath,
+  currentUrl,
   onUploaded,
 }: {
-  animalId: string;
+  cohortName: string;
+  animalIdentifier: string;
   experiment: string;
   timepoint: number;
-  currentPath: string | null;
-  onUploaded: (path: string) => void;
+  currentUrl: string | null;
+  onUploaded: (url: string) => void;
 }) {
   const [uploading, setUploading] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [showPreview, setShowPreview] = useState(false);
   const fileRef = useCallback((input: HTMLInputElement | null) => {
     if (input) input.value = "";
   }, []);
@@ -1061,11 +1066,11 @@ function CageImageCell({
       try {
         const formData = new FormData();
         formData.append("file", file);
-        formData.append("animal_id", animalId);
-        formData.append("experiment_type", experiment);
-        formData.append("timepoint_age", String(timepoint));
+        formData.append("cohort_name", cohortName);
+        formData.append("animal_identifier", animalIdentifier);
+        formData.append("experiment_type", `${experiment}_${timepoint}d`);
 
-        const res = await fetch("/api/colony-image", {
+        const res = await fetch("/api/gdrive/upload", {
           method: "POST",
           body: formData,
         });
@@ -1074,51 +1079,39 @@ function CageImageCell({
         if (json.error) {
           toast.error(json.error);
         } else {
-          toast.success("Image uploaded!");
-          onUploaded(json.path);
-          if (json.url) setPreviewUrl(json.url);
+          toast.success("Uploaded to Google Drive!");
+          onUploaded(json.url);
         }
       } catch {
-        toast.error("Upload failed");
+        toast.error("Upload failed — is Google Drive connected?");
       } finally {
         setUploading(false);
       }
     },
-    [animalId, experiment, timepoint, onUploaded]
+    [cohortName, animalIdentifier, experiment, timepoint, onUploaded]
   );
 
-  const handleView = useCallback(async () => {
-    if (previewUrl) {
-      setShowPreview(true);
-      return;
-    }
-    if (!currentPath) return;
-
-    try {
-      const res = await fetch(`/api/colony-image?path=${encodeURIComponent(currentPath)}`);
-      const json = await res.json();
-      if (json.url) {
-        setPreviewUrl(json.url);
-        setShowPreview(true);
-      }
-    } catch {
-      toast.error("Could not load image");
-    }
-  }, [currentPath, previewUrl]);
+  const hasUrl = !!(currentUrl && currentUrl.trim());
 
   return (
     <div className="flex items-center gap-1 min-w-[70px]">
-      {currentPath ? (
+      {hasUrl ? (
         <>
-          <button
-            onClick={handleView}
+          <a
+            href={currentUrl!}
+            target="_blank"
+            rel="noopener noreferrer"
             className="text-green-600 hover:text-green-800 transition-colors"
-            title="View cage image"
+            title="View on Google Drive"
           >
             <ImageIcon className="w-4 h-4" />
-          </button>
+          </a>
           <label className="cursor-pointer text-muted-foreground hover:text-foreground transition-colors" title="Replace image">
-            <Camera className="w-3.5 h-3.5" />
+            {uploading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Camera className="w-3.5 h-3.5" />
+            )}
             <input
               ref={fileRef}
               type="file"
@@ -1130,7 +1123,7 @@ function CageImageCell({
           </label>
         </>
       ) : (
-        <label className="cursor-pointer flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors" title="Upload cage image">
+        <label className="cursor-pointer flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors" title="Upload cage image to Google Drive">
           {uploading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
           ) : (
@@ -1147,49 +1140,67 @@ function CageImageCell({
           />
         </label>
       )}
-
-      {/* Image preview modal */}
-      {showPreview && previewUrl && (
-        <div
-          className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-4"
-          onClick={() => setShowPreview(false)}
-        >
-          <div
-            className="relative max-w-3xl max-h-[85vh] bg-white dark:bg-zinc-900 rounded-lg overflow-hidden shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              className="absolute top-2 right-2 z-10 bg-black/60 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-black/80"
-              onClick={() => setShowPreview(false)}
-            >
-              ✕
-            </button>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={previewUrl}
-              alt="Cage image"
-              className="max-w-full max-h-[80vh] object-contain"
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-// ─── Raw Data URL Link Cell (all other tests) ───────────────────────
+// ─── Raw Data Link/Upload Cell (all other tests) ────────────────────
 
 function RawDataLinkCell({
+  cohortName,
+  animalIdentifier,
+  experiment,
+  timepoint,
   currentUrl,
   onChange,
 }: {
+  cohortName: string;
+  animalIdentifier: string;
+  experiment: string;
+  timepoint: number;
   currentUrl: string | null;
   onChange: (url: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [inputVal, setInputVal] = useState(currentUrl || "");
 
   const hasUrl = !!(currentUrl && currentUrl.trim());
+
+  const handleFileUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      setUploading(true);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("cohort_name", cohortName);
+        formData.append("animal_identifier", animalIdentifier);
+        formData.append("experiment_type", `${experiment}_${timepoint}d`);
+
+        const res = await fetch("/api/gdrive/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        const json = await res.json();
+        if (json.error) {
+          toast.error(json.error);
+        } else {
+          toast.success("Uploaded to Google Drive!");
+          onChange(json.url);
+        }
+      } catch {
+        toast.error("Upload failed — is Google Drive connected?");
+      } finally {
+        setUploading(false);
+        e.target.value = "";
+      }
+    },
+    [cohortName, animalIdentifier, experiment, timepoint, onChange]
+  );
 
   if (editing) {
     return (
@@ -1241,14 +1252,31 @@ function RawDataLinkCell({
           </button>
         </>
       ) : (
-        <button
-          onClick={() => setEditing(true)}
-          className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
-          title="Add Google Drive or data URL"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-          <span className="text-[10px]">Add link</span>
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors"
+            title="Paste a URL"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            <span className="text-[10px]">Link</span>
+          </button>
+          <span className="text-muted-foreground/30 text-[10px]">|</span>
+          <label className="cursor-pointer flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors" title="Upload file to Google Drive">
+            {uploading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Upload className="w-3.5 h-3.5" />
+            )}
+            <span className="text-[10px]">Upload</span>
+            <input
+              type="file"
+              className="hidden"
+              onChange={handleFileUpload}
+              disabled={uploading}
+            />
+          </label>
+        </div>
       )}
     </div>
   );
