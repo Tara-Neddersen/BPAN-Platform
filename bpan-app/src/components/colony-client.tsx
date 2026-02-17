@@ -30,6 +30,7 @@ import type {
   HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AnimalStatus,
 } from "@/types";
 import { ColonyResultsTab } from "@/components/colony-results-tab";
+import { ColonyAnalysisPanel } from "@/components/colony-analysis-panel";
 import { EarTagSelector, MiniEarTag, parseEarTag } from "@/components/ear-tag-selector";
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -549,6 +550,7 @@ export function ColonyClient({
           <TabsTrigger value="timepoints" className="flex-1 min-w-[80px]">Timepoints</TabsTrigger>
           <TabsTrigger value="breeders" className="flex-1 min-w-[80px]">Breeders</TabsTrigger>
           <TabsTrigger value="results" className="flex-1 min-w-[80px] font-semibold text-indigo-700 dark:text-indigo-300">📊 Results</TabsTrigger>
+          <TabsTrigger value="analysis" className="flex-1 min-w-[80px] font-semibold text-emerald-700 dark:text-emerald-300">📈 Analysis</TabsTrigger>
           <TabsTrigger value="housing" className="flex-1 min-w-[80px]">Housing</TabsTrigger>
           <TabsTrigger value="cages" className="flex-1 min-w-[80px]">Cage Changes</TabsTrigger>
           <TabsTrigger value="pi" className="flex-1 min-w-[80px]">PI Access</TabsTrigger>
@@ -797,6 +799,16 @@ export function ColonyClient({
               if (result.success) await refetchAll();
               return result;
             }}
+          />
+        </TabsContent>
+
+        {/* ─── Colony Analysis Tab ────────────────────────────── */}
+        <TabsContent value="analysis" className="space-y-4">
+          <ColonyAnalysisPanel
+            animals={animals}
+            cohorts={cohorts}
+            timepoints={timepoints}
+            colonyResults={colonyResults}
           />
         </TabsContent>
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
-import { Loader2, Save, ChevronDown, ChevronRight, Plus, Trash2, Check } from "lucide-react";
+import { Loader2, Save, ChevronDown, ChevronRight, Plus, Trash2, Check, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 import { MiniEarTag } from "@/components/ear-tag-selector";
+import { BehaviorImportDialog } from "@/components/behavior-import-dialog";
 
 // ─── Default experiment measures per type ─────────────────────────────
 
@@ -149,6 +150,7 @@ export function ColonyResultsTab({
   // Custom fields per experiment type
   const [customFields, setCustomFields] = useState<Record<string, MeasureField[]>>({});
   const [showAddField, setShowAddField] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [newFieldKey, setNewFieldKey] = useState("");
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [newFieldUnit, setNewFieldUnit] = useState("");
@@ -218,14 +220,45 @@ export function ColonyResultsTab({
     [editData, getExistingResult]
   );
 
+  // Auto-detect extra measure fields from existing colony results (e.g. from tracking imports)
+  const detectedFields = useMemo(() => {
+    const detected: Record<string, MeasureField[]> = {};
+
+    for (const result of colonyResults) {
+      const exp = result.experiment_type;
+      const defaultKeys = new Set((DEFAULT_MEASURES[exp] || []).map((f) => f.key));
+      const customKeys = new Set((customFields[exp] || []).map((f) => f.key));
+      if (!detected[exp]) detected[exp] = [];
+      const detectedKeys = new Set(detected[exp].map((f) => f.key));
+
+      const measures = result.measures as Record<string, unknown>;
+      for (const key of Object.keys(measures)) {
+        if (measures[key] === null) continue;
+        if (defaultKeys.has(key) || customKeys.has(key) || detectedKeys.has(key)) continue;
+
+        detected[exp].push({
+          key,
+          label: key
+            .replace(/_/g, " ")
+            .replace(/\b\w/g, (c) => c.toUpperCase()),
+          type: typeof measures[key] === "number" ? "number" : "text",
+        });
+        detectedKeys.add(key);
+      }
+    }
+
+    return detected;
+  }, [colonyResults, customFields]);
+
   // Get the fields for an experiment
   const getFields = useCallback(
     (exp: string): MeasureField[] => {
       const defaults = DEFAULT_MEASURES[exp] || [];
       const custom = customFields[exp] || [];
-      return [...defaults, ...custom];
+      const autoDetected = detectedFields[exp] || [];
+      return [...defaults, ...custom, ...autoDetected];
     },
-    [customFields]
+    [customFields, detectedFields]
   );
 
   // Update a specific measure for an animal
@@ -351,7 +384,10 @@ export function ColonyResultsTab({
   );
 
   const currentFields = getFields(activeExperiment);
-  const defaultFieldKeys = new Set((DEFAULT_MEASURES[activeExperiment] || []).map((f) => f.key));
+  const defaultFieldKeys = new Set([
+    ...(DEFAULT_MEASURES[activeExperiment] || []).map((f) => f.key),
+    ...(detectedFields[activeExperiment] || []).map((f) => f.key),
+  ]);
   const tp = Number(activeTimepoint);
 
   // Count how many animals have results for current view
@@ -490,6 +526,14 @@ export function ColonyResultsTab({
                           <Button
                             size="sm"
                             variant="outline"
+                            onClick={() => setShowImport(true)}
+                          >
+                            <Upload className="w-3.5 h-3.5 mr-1" />
+                            Import Data
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
                             onClick={() => setShowAddField(!showAddField)}
                           >
                             <Plus className="w-3.5 h-3.5 mr-1" />
@@ -616,6 +660,20 @@ export function ColonyResultsTab({
           </TabsContent>
         ))}
       </Tabs>
+
+      {/* ─── Import Dialog ─── */}
+      {showImport && (
+        <BehaviorImportDialog
+          open={showImport}
+          onClose={() => setShowImport(false)}
+          animals={animals}
+          timepoints={timepoints}
+          colonyResults={colonyResults}
+          defaultTimepointAge={Number(activeTimepoint)}
+          defaultExperimentType={activeExperiment}
+          batchUpsertColonyResults={batchUpsertColonyResults}
+        />
+      )}
     </div>
   );
 }
