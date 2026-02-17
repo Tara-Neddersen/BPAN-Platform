@@ -250,15 +250,30 @@ export function ColonyResultsTab({
     return detected;
   }, [colonyResults, customFields]);
 
-  // Get the fields for an experiment
+  // Get the fields for an experiment — puts columns with data first, then empty defaults
   const getFields = useCallback(
     (exp: string): MeasureField[] => {
       const defaults = DEFAULT_MEASURES[exp] || [];
       const custom = customFields[exp] || [];
       const autoDetected = detectedFields[exp] || [];
-      return [...defaults, ...custom, ...autoDetected];
+      const allFields = [...defaults, ...custom, ...autoDetected];
+
+      // Determine which field keys actually have data in any colonyResult for the active experiment + timepoint
+      const keysWithData = new Set<string>();
+      for (const r of colonyResults) {
+        if (r.experiment_type !== exp) continue;
+        const m = r.measures as Record<string, unknown>;
+        for (const [k, v] of Object.entries(m)) {
+          if (v !== null && v !== undefined && v !== "") keysWithData.add(k);
+        }
+      }
+
+      // Sort: fields with data first, then empty defaults
+      const withData = allFields.filter((f) => keysWithData.has(f.key));
+      const withoutData = allFields.filter((f) => !keysWithData.has(f.key));
+      return [...withData, ...withoutData];
     },
-    [customFields, detectedFields]
+    [customFields, detectedFields, colonyResults]
   );
 
   // Update a specific measure for an animal

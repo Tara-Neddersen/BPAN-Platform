@@ -462,7 +462,7 @@ export function BehaviorImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="max-w-4xl max-h-[92vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5" />
@@ -537,7 +537,7 @@ export function BehaviorImportDialog({
             </div>
           ) : (
             <>
-              {/* ─── Parsed: show config + measures ─── */}
+              {/* ─── Parsed header bar ─── */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="text-xs">
@@ -566,11 +566,8 @@ export function BehaviorImportDialog({
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <Label className="text-xs mb-1 block">Timepoint</Label>
-                  <Select
-                    value={timepointAge}
-                    onValueChange={setTimepointAge}
-                  >
-                    <SelectTrigger>
+                  <Select value={timepointAge} onValueChange={setTimepointAge}>
+                    <SelectTrigger className="h-9">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -584,11 +581,8 @@ export function BehaviorImportDialog({
                 </div>
                 <div>
                   <Label className="text-xs mb-1 block">Experiment Type</Label>
-                  <Select
-                    value={experimentType}
-                    onValueChange={setExperimentType}
-                  >
-                    <SelectTrigger>
+                  <Select value={experimentType} onValueChange={setExperimentType}>
+                    <SelectTrigger className="h-9">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -602,136 +596,121 @@ export function BehaviorImportDialog({
                 </div>
               </div>
 
-              {/* ─── Measure Selection ─── */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-sm font-medium">
-                    Select Measures to Import
-                  </Label>
-                  <div className="flex gap-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-6 text-[11px]"
-                      onClick={() =>
-                        setSelectedMeasures(
-                          new Set(parsed.map((m) => m.key))
-                        )
-                      }
-                    >
-                      Select All
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-6 text-[11px]"
-                      onClick={() => setSelectedMeasures(new Set())}
-                    >
-                      Clear
-                    </Button>
+              {/* ─── Two-column: Measures | Animals ─── */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* ─── Left: Measure Selection ─── */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm font-medium">Measures</Label>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-[11px]"
+                        onClick={() =>
+                          setSelectedMeasures(new Set(parsed.map((m) => m.key)))
+                        }
+                      >
+                        All
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-[11px]"
+                        onClick={() => setSelectedMeasures(new Set())}
+                      >
+                        None
+                      </Button>
+                    </div>
                   </div>
+
+                  <ScrollArea className="h-[280px] border rounded-lg">
+                    <div className="p-1.5 space-y-0.5">
+                      {parsed.map((measure) => {
+                        const stats = getMeasureStats(measure);
+                        const isSelected = selectedMeasures.has(measure.key);
+
+                        return (
+                          <label
+                            key={measure.key}
+                            className={`flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors ${
+                              isSelected
+                                ? "bg-indigo-50 dark:bg-indigo-950/20 hover:bg-indigo-100 dark:hover:bg-indigo-950/30"
+                                : "hover:bg-muted/50"
+                            } ${stats.allZero && stats.totalAnimals > 0 ? "opacity-50" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                const next = new Set(selectedMeasures);
+                                if (e.target.checked) next.add(measure.key);
+                                else next.delete(measure.key);
+                                setSelectedMeasures(next);
+                              }}
+                              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 shrink-0"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs font-medium truncate">
+                                  {measure.name}
+                                </span>
+                                {measure.unit && (
+                                  <span className="text-[10px] text-muted-foreground shrink-0">
+                                    ({measure.unit})
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground">
+                                {stats.allZero && stats.totalAnimals > 0 ? (
+                                  <span className="text-amber-600 dark:text-amber-400">
+                                    All zeros
+                                  </span>
+                                ) : stats.isText ? (
+                                  <span>{stats.totalAnimals} animals · text</span>
+                                ) : stats.totalAnimals === 0 ? (
+                                  <span className="text-amber-600 dark:text-amber-400">
+                                    No data
+                                  </span>
+                                ) : (
+                                  <span>
+                                    {stats.totalAnimals} animals ·{" "}
+                                    {stats.min !== null
+                                      ? stats.min % 1 === 0
+                                        ? stats.min
+                                        : stats.min.toFixed(2)
+                                      : "?"}{" "}
+                                    –{" "}
+                                    {stats.max !== null
+                                      ? stats.max % 1 === 0
+                                        ? stats.max
+                                        : stats.max.toFixed(2)
+                                      : "?"}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </ScrollArea>
                 </div>
 
-                <ScrollArea className="max-h-[320px] border rounded-lg">
-                  <div className="p-1.5 space-y-0.5">
-                    {parsed.map((measure) => {
-                      const stats = getMeasureStats(measure);
-                      const isSelected = selectedMeasures.has(measure.key);
-
-                      return (
-                        <label
-                          key={measure.key}
-                          className={`flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors ${
-                            isSelected
-                              ? "bg-indigo-50 dark:bg-indigo-950/20 hover:bg-indigo-100 dark:hover:bg-indigo-950/30"
-                              : "hover:bg-muted/50"
-                          } ${stats.allZero && stats.totalAnimals > 0 ? "opacity-50" : ""}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={(e) => {
-                              const next = new Set(selectedMeasures);
-                              if (e.target.checked) next.add(measure.key);
-                              else next.delete(measure.key);
-                              setSelectedMeasures(next);
-                            }}
-                            className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 shrink-0"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium truncate">
-                                {measure.name}
-                              </span>
-                              {measure.unit && (
-                                <span className="text-xs text-muted-foreground shrink-0">
-                                  ({measure.unit})
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground mt-0.5">
-                              {stats.allZero && stats.totalAnimals > 0 ? (
-                                <span className="text-amber-600 dark:text-amber-400">
-                                  All values are 0
-                                </span>
-                              ) : stats.isText ? (
-                                <span>
-                                  {stats.totalAnimals} animals · text values
-                                </span>
-                              ) : stats.totalAnimals === 0 ? (
-                                <span className="text-amber-600 dark:text-amber-400">
-                                  No data
-                                </span>
-                              ) : (
-                                <span>
-                                  {stats.totalAnimals} animals · range:{" "}
-                                  {stats.min !== null
-                                    ? stats.min % 1 === 0
-                                      ? stats.min
-                                      : stats.min.toFixed(2)
-                                    : "?"}{" "}
-                                  –{" "}
-                                  {stats.max !== null
-                                    ? stats.max % 1 === 0
-                                      ? stats.max
-                                      : stats.max.toFixed(2)
-                                    : "?"}
-                                  {stats.nonZeroCount < stats.totalAnimals && (
-                                    <span className="ml-1 text-muted-foreground/70">
-                                      ({stats.nonZeroCount} non-zero)
-                                    </span>
-                                  )}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </ScrollArea>
-              </div>
-
-              {/* ─── Animal Selection ─── */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-sm font-medium">
-                    Select Animals to Import
-                  </Label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      <span className="text-green-600 dark:text-green-400 font-medium">
-                        {matched.size} matched
-                      </span>
-                      {unmatched.length > 0 && (
-                        <>
-                          {" · "}
-                          <span className="text-amber-600 dark:text-amber-400 font-medium">
-                            {unmatched.length} unmatched
+                {/* ─── Right: Animal Selection ─── */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm font-medium">
+                      Animals
+                      <span className="ml-1.5 font-normal text-xs text-muted-foreground">
+                        <span className="text-green-600 dark:text-green-400">{matched.size}</span>
+                        {unmatched.length > 0 && (
+                          <span className="text-amber-600 dark:text-amber-400 ml-1">
+                            +{unmatched.length} unmatched
                           </span>
-                        </>
-                      )}
-                    </span>
+                        )}
+                      </span>
+                    </Label>
                     <div className="flex gap-1">
                       <Button
                         variant="outline"
@@ -741,7 +720,7 @@ export function BehaviorImportDialog({
                           setSelectedAnimals(new Set(Array.from(matched.keys())))
                         }
                       >
-                        Select All
+                        All
                       </Button>
                       <Button
                         variant="outline"
@@ -749,61 +728,59 @@ export function BehaviorImportDialog({
                         className="h-6 text-[11px]"
                         onClick={() => setSelectedAnimals(new Set())}
                       >
-                        Clear
+                        None
                       </Button>
                     </div>
                   </div>
-                </div>
 
-                <ScrollArea className="max-h-[200px] border rounded-lg">
-                  <div className="p-1.5 space-y-0.5">
-                    {allFileIds.map((fileId) => {
-                      const animal = matched.get(fileId);
-                      const isMatched = !!animal;
-                      const isSelected = selectedAnimals.has(fileId);
-                      const cohort = animal
-                        ? cohorts.find((c) => c.id === animal.cohort_id)
-                        : null;
+                  <ScrollArea className="h-[280px] border rounded-lg">
+                    <div className="p-1.5 space-y-0.5">
+                      {allFileIds.map((fileId) => {
+                        const animal = matched.get(fileId);
+                        const isMatched = !!animal;
+                        const isSelected = selectedAnimals.has(fileId);
+                        const cohort = animal
+                          ? cohorts.find((c) => c.id === animal.cohort_id)
+                          : null;
 
-                      return (
-                        <label
-                          key={fileId}
-                          className={`flex items-center gap-3 px-3 py-1.5 rounded-md transition-colors ${
-                            !isMatched
-                              ? "opacity-40 cursor-not-allowed"
-                              : isSelected
-                              ? "bg-green-50 dark:bg-green-950/20 hover:bg-green-100 dark:hover:bg-green-950/30 cursor-pointer"
-                              : "hover:bg-muted/50 cursor-pointer"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected && isMatched}
-                            disabled={!isMatched}
-                            onChange={(e) => {
-                              const next = new Set(selectedAnimals);
-                              if (e.target.checked) next.add(fileId);
-                              else next.delete(fileId);
-                              setSelectedAnimals(next);
-                            }}
-                            className="rounded border-gray-300 text-green-600 focus:ring-green-500 h-4 w-4 shrink-0"
-                          />
-                          <div className="flex-1 min-w-0 flex items-center gap-2">
-                            <span className="text-xs font-mono text-muted-foreground shrink-0">
+                        return (
+                          <label
+                            key={fileId}
+                            className={`flex items-center gap-2 px-2 py-1 rounded-md transition-colors ${
+                              !isMatched
+                                ? "opacity-40 cursor-not-allowed"
+                                : isSelected
+                                ? "bg-green-50 dark:bg-green-950/20 hover:bg-green-100 dark:hover:bg-green-950/30 cursor-pointer"
+                                : "hover:bg-muted/50 cursor-pointer"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected && isMatched}
+                              disabled={!isMatched}
+                              onChange={(e) => {
+                                const next = new Set(selectedAnimals);
+                                if (e.target.checked) next.add(fileId);
+                                else next.delete(fileId);
+                                setSelectedAnimals(next);
+                              }}
+                              className="rounded border-gray-300 text-green-600 focus:ring-green-500 h-3.5 w-3.5 shrink-0"
+                            />
+                            <span className="text-[11px] font-mono text-muted-foreground w-7 shrink-0 text-right">
                               {fileId}
                             </span>
                             {isMatched ? (
-                              <>
-                                <span className="text-xs">→</span>
-                                <span className="text-sm font-medium truncate">
+                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                <span className="text-[11px]">→</span>
+                                <span className="text-xs font-medium truncate">
                                   {animal.identifier}
                                 </span>
                                 {cohort && (
-                                  <Badge variant="secondary" className="text-[10px] h-4 px-1">
+                                  <Badge variant="secondary" className="text-[9px] h-3.5 px-1 shrink-0">
                                     {cohort.name}
                                   </Badge>
                                 )}
-                                <span className="text-[10px] text-muted-foreground">
+                                <span className="text-[10px] text-muted-foreground shrink-0">
                                   {animal.sex === "male" ? "♂" : "♀"}{" "}
                                   {animal.genotype === "hemi"
                                     ? "Hemi"
@@ -811,24 +788,23 @@ export function BehaviorImportDialog({
                                     ? "WT"
                                     : "Het"}
                                 </span>
-                              </>
+                              </div>
                             ) : (
-                              <span className="text-xs text-amber-600 dark:text-amber-400">
-                                No matching animal in colony
+                              <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                                No match
                               </span>
                             )}
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </ScrollArea>
-                {unmatched.length > 0 && (
-                  <p className="text-[11px] text-muted-foreground">
-                    Unmatched animals are shown but cannot be selected. Ensure
-                    identifiers in your colony match the tracking file format.
-                  </p>
-                )}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </ScrollArea>
+                  {unmatched.length > 0 && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Unmatched animals cannot be selected.
+                    </p>
+                  )}
+                </div>
               </div>
             </>
           )}
