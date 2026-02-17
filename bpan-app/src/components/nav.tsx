@@ -58,7 +58,7 @@ export function Nav({ userEmail }: NavProps) {
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
+      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
         <div className="flex items-center gap-4">
           {/* Mobile hamburger */}
           {userEmail && (
@@ -85,12 +85,12 @@ export function Nav({ userEmail }: NavProps) {
 
           {/* Desktop nav */}
           {userEmail && (
-            <nav className="hidden sm:flex items-center gap-1 text-sm ml-2">
+            <nav className="hidden sm:flex items-center gap-0.5 text-sm ml-2">
               {NAV_LINKS.map((link) => (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className={`px-2.5 py-1.5 rounded-md transition-colors ${
+                  className={`px-2 py-1.5 rounded-md transition-colors text-[13px] ${
                     pathname === link.href
                       ? "bg-accent text-foreground font-medium"
                       : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
