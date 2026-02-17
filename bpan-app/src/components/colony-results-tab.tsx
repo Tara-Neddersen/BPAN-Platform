@@ -747,28 +747,28 @@ export function ColonyResultsTab({
                       )}
                     </CardHeader>
 
-                    <CardContent>
+                    <CardContent className="p-0">
                       {/* ─── Data Grid ─────────────────────────── */}
-                      <div className="overflow-x-auto">
+                      <div className="overflow-auto max-h-[70vh]">
                         <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b bg-muted/30">
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground sticky left-0 bg-muted/30 min-w-[140px]">
+                          <thead className="sticky top-0 z-20">
+                            <tr className="border-b bg-background shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground sticky left-0 z-30 bg-background min-w-[140px]">
                                 Animal
                               </th>
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground min-w-[80px]">
+                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[80px]">
                                 Cohort
                               </th>
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground min-w-[60px]">
+                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[60px]">
                                 Sex
                               </th>
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground min-w-[60px]">
+                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[60px]">
                                 GT
                               </th>
                               {currentFields.map((field) => (
                                 <th
                                   key={field.key}
-                                  className="text-left px-2 py-2 font-medium text-xs text-muted-foreground min-w-[100px] group/col"
+                                  className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[100px] group/col"
                                 >
                                   <div className="flex items-center gap-1">
                                     <span className="truncate">{field.label}</span>
@@ -787,10 +787,10 @@ export function ColonyResultsTab({
                                   </div>
                                 </th>
                               ))}
-                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground min-w-[120px]">
+                              <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[120px]">
                                 Notes
                               </th>
-                              <th className="text-center px-2 py-2 font-medium text-xs text-muted-foreground w-[50px]">
+                              <th className="text-center px-2 py-2 font-medium text-xs text-muted-foreground bg-background w-[50px]">
                                 ✓
                               </th>
                             </tr>
