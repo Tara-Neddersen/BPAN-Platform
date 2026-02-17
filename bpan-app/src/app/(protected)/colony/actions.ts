@@ -352,12 +352,26 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
     return { error: "No timepoints configured. Add timepoints first." };
   }
 
+  // Get existing experiments for this animal to avoid duplicates
+  const { data: existingExps } = await supabase
+    .from("animal_experiments")
+    .select("experiment_type, timepoint_age_days")
+    .eq("animal_id", animalId)
+    .eq("user_id", user.id);
+
+  // Build a set of "type::timepoint" keys that already exist
+  const existingKeys = new Set(
+    (existingExps || []).map(e => `${e.experiment_type}::${e.timepoint_age_days}`)
+  );
+
   const birth = new Date(birthDate);
   const DAY = 24 * 60 * 60 * 1000;
   const records: Record<string, unknown>[] = [];
 
   // Track whether EEG implant surgery has been scheduled (only once, at first timepoint)
-  let eegImplantScheduled = false;
+  // Check if one already exists in the DB
+  let eegImplantScheduled = existingKeys.has("eeg_implant::" + timepoints[0]?.age_days) ||
+    (existingExps || []).some(e => e.experiment_type === "eeg_implant");
 
   for (const tp of timepoints) {
     const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
@@ -365,9 +379,11 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
 
     // Schedule each experiment in the protocol that the user selected
     for (const step of PROTOCOL_SCHEDULE) {
+      const key = `${step.type}::${tp.age_days}`;
+
       // "handling" is always included if handling_days_before > 0
       if (step.type === "handling") {
-        if (tp.handling_days_before > 0) {
+        if (tp.handling_days_before > 0 && !existingKeys.has(key)) {
           const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * DAY);
           records.push({
             user_id: user.id,
@@ -384,6 +400,9 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
 
       // Only schedule experiments the user selected in their timepoint config
       if (!selectedExps.has(step.type)) continue;
+
+      // Skip if already exists
+      if (existingKeys.has(key)) continue;
 
       const expDate = new Date(experimentStart.getTime() + step.dayOffset * DAY);
       records.push({
@@ -409,38 +428,45 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
       if (!eegImplantScheduled) {
         // First timepoint with EEG: schedule surgery + recovery + recording
         eegImplantScheduled = true;
-        records.push({
-          user_id: user.id,
-          animal_id: animalId,
-          experiment_type: "eeg_implant",
-          timepoint_age_days: tp.age_days,
-          scheduled_date: afterExperimentsDate.toISOString().split("T")[0],
-          status: "scheduled",
-          notes: "EEG implant surgery (one-time)",
-        });
 
-        const recordingStart = new Date(afterExperimentsDate.getTime() + tp.eeg_recovery_days * DAY);
-        records.push({
-          user_id: user.id,
-          animal_id: animalId,
-          experiment_type: "eeg_recording",
-          timepoint_age_days: tp.age_days,
-          scheduled_date: recordingStart.toISOString().split("T")[0],
-          status: "scheduled",
-          notes: `EEG recording (${tp.eeg_recording_days}d) after ${tp.eeg_recovery_days}d post-surgery recovery`,
-        });
+        if (!existingKeys.has(`eeg_implant::${tp.age_days}`)) {
+          records.push({
+            user_id: user.id,
+            animal_id: animalId,
+            experiment_type: "eeg_implant",
+            timepoint_age_days: tp.age_days,
+            scheduled_date: afterExperimentsDate.toISOString().split("T")[0],
+            status: "scheduled",
+            notes: "EEG implant surgery (one-time)",
+          });
+        }
+
+        if (!existingKeys.has(`eeg_recording::${tp.age_days}`)) {
+          const recordingStart = new Date(afterExperimentsDate.getTime() + tp.eeg_recovery_days * DAY);
+          records.push({
+            user_id: user.id,
+            animal_id: animalId,
+            experiment_type: "eeg_recording",
+            timepoint_age_days: tp.age_days,
+            scheduled_date: recordingStart.toISOString().split("T")[0],
+            status: "scheduled",
+            notes: `EEG recording (${tp.eeg_recording_days}d) after ${tp.eeg_recovery_days}d post-surgery recovery`,
+          });
+        }
       } else {
         // Subsequent timepoints: recording only (7d rest after experiments, no surgery)
-        const recordingStart = new Date(afterExperimentsDate.getTime() + 7 * DAY);
-        records.push({
-          user_id: user.id,
-          animal_id: animalId,
-          experiment_type: "eeg_recording",
-          timepoint_age_days: tp.age_days,
-          scheduled_date: recordingStart.toISOString().split("T")[0],
-          status: "scheduled",
-          notes: `EEG recording (${tp.eeg_recording_days}d) — 7d rest after experiments (no surgery needed)`,
-        });
+        if (!existingKeys.has(`eeg_recording::${tp.age_days}`)) {
+          const recordingStart = new Date(afterExperimentsDate.getTime() + 7 * DAY);
+          records.push({
+            user_id: user.id,
+            animal_id: animalId,
+            experiment_type: "eeg_recording",
+            timepoint_age_days: tp.age_days,
+            scheduled_date: recordingStart.toISOString().split("T")[0],
+            status: "scheduled",
+            notes: `EEG recording (${tp.eeg_recording_days}d) — 7d rest after experiments (no surgery needed)`,
+          });
+        }
       }
     }
   }
@@ -488,41 +514,31 @@ export async function scheduleExperimentsForCohort(cohortId: string) {
     return { error: "No active animals in this cohort." };
   }
 
-  // Find which animals already have experiments scheduled
-  const animalIds = cohortAnimals.map(a => a.id);
-  const { data: existingExps } = await supabase
-    .from("animal_experiments")
-    .select("animal_id")
-    .in("animal_id", animalIds)
-    .eq("user_id", user.id);
-
-  const animalsWithExps = new Set((existingExps || []).map(e => e.animal_id));
-
-  // Schedule for animals that don't have any experiments yet
-  const toSchedule = cohortAnimals.filter(a => !animalsWithExps.has(a.id));
-
-  if (toSchedule.length === 0) {
-    return { error: `All ${cohortAnimals.length} animals already have experiments scheduled. To re-schedule, delete their existing experiments first.` };
-  }
-
   let totalCount = 0;
+  let animalsScheduled = 0;
   const errors: string[] = [];
 
-  for (const animal of toSchedule) {
+  for (const animal of cohortAnimals) {
     const birthDate = animal.birth_date || cohort.birth_date;
     const result = await scheduleExperimentsForAnimal(animal.id, birthDate);
     if (result.error) {
       errors.push(`Animal ${animal.id}: ${result.error}`);
-    } else {
+    } else if ((result.count || 0) > 0) {
       totalCount += result.count || 0;
+      animalsScheduled++;
     }
   }
 
   revalidatePath("/colony");
-  if (errors.length > 0) {
-    return { success: true, scheduled: toSchedule.length, total: totalCount, errors };
+
+  if (totalCount === 0 && errors.length === 0) {
+    return { error: `All experiments for all ${cohortAnimals.length} animals are already scheduled. Nothing new to add.` };
   }
-  return { success: true, scheduled: toSchedule.length, skipped: animalsWithExps.size, total: totalCount };
+
+  if (errors.length > 0) {
+    return { success: true, scheduled: animalsScheduled, total: totalCount, errors };
+  }
+  return { success: true, scheduled: animalsScheduled, total: totalCount };
 }
 
 // ─── Grace Period / Reschedule ──────────────────────────────────────────
