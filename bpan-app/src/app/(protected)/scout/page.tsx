@@ -47,7 +47,7 @@ export default async function ScoutPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">AI Literature Scout</h1>
-        <p className="text-muted-foreground">
+        <p className="text-sm text-muted-foreground mt-0.5">
           Your AI assistant reads ~10 new papers from your research area, summarizes the interesting ones, 
           and brainstorms ideas for your research. Completely free.
         </p>

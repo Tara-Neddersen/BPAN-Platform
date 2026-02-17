@@ -158,42 +158,62 @@ export function TasksClient({
     <>
       {/* ─── Stats Cards ──────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card className={`cursor-pointer transition-colors ${view === "overdue" ? "border-red-400" : ""}`} onClick={() => setView("overdue")}>
-          <CardContent className="py-3 flex items-center gap-3">
-            <AlertTriangle className="h-5 w-5 text-red-500" />
-            <div>
-              <div className="text-2xl font-bold">{stats.overdue.length}</div>
-              <div className="text-xs text-muted-foreground">Overdue</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className={`cursor-pointer transition-colors ${view === "today" ? "border-orange-400" : ""}`} onClick={() => setView("today")}>
-          <CardContent className="py-3 flex items-center gap-3">
-            <Clock className="h-5 w-5 text-orange-500" />
-            <div>
-              <div className="text-2xl font-bold">{stats.dueToday.length}</div>
-              <div className="text-xs text-muted-foreground">Due Today</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className={`cursor-pointer transition-colors ${view === "upcoming" ? "border-blue-400" : ""}`} onClick={() => setView("upcoming")}>
-          <CardContent className="py-3 flex items-center gap-3">
-            <Calendar className="h-5 w-5 text-blue-500" />
-            <div>
-              <div className="text-2xl font-bold">{stats.upcoming.length}</div>
-              <div className="text-xs text-muted-foreground">Upcoming</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className={`cursor-pointer transition-colors ${view === "completed" ? "border-green-400" : ""}`} onClick={() => setView("completed")}>
-          <CardContent className="py-3 flex items-center gap-3">
-            <CheckCircle2 className="h-5 w-5 text-green-500" />
-            <div>
-              <div className="text-2xl font-bold">{stats.completed.length}</div>
-              <div className="text-xs text-muted-foreground">Completed</div>
-            </div>
-          </CardContent>
-        </Card>
+        <button
+          onClick={() => setView("overdue")}
+          className={`flex items-center gap-3 rounded-xl border bg-card p-4 text-left transition-all hover:shadow-md ${
+            view === "overdue" ? "border-red-300 ring-2 ring-red-100 shadow-sm" : ""
+          }`}
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-50 text-red-500">
+            <AlertTriangle className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold tracking-tight">{stats.overdue.length}</div>
+            <div className="text-xs text-muted-foreground">Overdue</div>
+          </div>
+        </button>
+        <button
+          onClick={() => setView("today")}
+          className={`flex items-center gap-3 rounded-xl border bg-card p-4 text-left transition-all hover:shadow-md ${
+            view === "today" ? "border-amber-300 ring-2 ring-amber-100 shadow-sm" : ""
+          }`}
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-500">
+            <Clock className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold tracking-tight">{stats.dueToday.length}</div>
+            <div className="text-xs text-muted-foreground">Due Today</div>
+          </div>
+        </button>
+        <button
+          onClick={() => setView("upcoming")}
+          className={`flex items-center gap-3 rounded-xl border bg-card p-4 text-left transition-all hover:shadow-md ${
+            view === "upcoming" ? "border-blue-300 ring-2 ring-blue-100 shadow-sm" : ""
+          }`}
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-500">
+            <Calendar className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold tracking-tight">{stats.upcoming.length}</div>
+            <div className="text-xs text-muted-foreground">Upcoming</div>
+          </div>
+        </button>
+        <button
+          onClick={() => setView("completed")}
+          className={`flex items-center gap-3 rounded-xl border bg-card p-4 text-left transition-all hover:shadow-md ${
+            view === "completed" ? "border-green-300 ring-2 ring-green-100 shadow-sm" : ""
+          }`}
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-50 text-green-500">
+            <CheckCircle2 className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold tracking-tight">{stats.completed.length}</div>
+            <div className="text-xs text-muted-foreground">Completed</div>
+          </div>
+        </button>
       </div>
 
       {/* ─── Upcoming Experiments (Batched by Cohort) & Other Items ─── */}
@@ -339,12 +359,14 @@ export function TasksClient({
 
       {/* ─── Task List ─────────────────────────────────── */}
       {filteredTasks.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground">
-          <ListChecks className="h-12 w-12 mx-auto mb-4 opacity-30" />
-          <p className="text-lg">
-            {view === "completed" ? "No completed tasks yet" : view === "overdue" ? "Nothing overdue!" : "No tasks here"}
+        <div className="text-center py-16">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/[0.06]">
+            <ListChecks className="h-7 w-7 text-primary/40" />
+          </div>
+          <p className="text-lg font-medium">
+            {view === "completed" ? "No completed tasks yet" : view === "overdue" ? "Nothing overdue — great job!" : "No tasks here"}
           </p>
-          <p className="text-sm mt-1">
+          <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto">
             {view === "all" ? "Add tasks manually, or they\u2019ll appear automatically from meetings and experiments." : ""}
           </p>
         </div>

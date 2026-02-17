@@ -97,7 +97,7 @@ export default function WritingPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Writing Assistant</h1>
-        <p className="text-muted-foreground">
+        <p className="text-sm text-muted-foreground mt-0.5">
           AI-powered drafts from your notes, results, and experiments. Uses all
           your research data as context.
         </p>

@@ -36,13 +36,13 @@ export default async function LibraryPage() {
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Library</h1>
-        <p className="text-muted-foreground">
+        <p className="text-sm text-muted-foreground mt-0.5">
           Your saved papers. Click to read and annotate.
         </p>
       </div>
 
       {typedPapers.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-8 text-center">
+        <div className="rounded-2xl border-2 border-dashed border-primary/20 bg-primary/[0.02] p-12 text-center">
           <p className="text-muted-foreground">
             No saved papers yet. Search for papers and click &ldquo;Save&rdquo; to add them here.
           </p>

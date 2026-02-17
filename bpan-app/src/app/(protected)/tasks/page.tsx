@@ -52,11 +52,13 @@ export default async function TasksPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Tasks & Schedule</h1>
-        <p className="text-muted-foreground">
-          Everything you need to do — meetings, experiments, cage changes, and custom tasks in one place.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Tasks & Schedule</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Meetings, experiments, cage changes, and custom tasks — all in one place.
+          </p>
+        </div>
       </div>
 
       <TasksClient

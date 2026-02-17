@@ -98,7 +98,7 @@ export default function SharePage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Share</h1>
-          <p className="text-muted-foreground">
+          <p className="text-sm text-muted-foreground mt-0.5">
             Create read-only snapshots of your research to share with your PI,
             lab members, or collaborators.
           </p>

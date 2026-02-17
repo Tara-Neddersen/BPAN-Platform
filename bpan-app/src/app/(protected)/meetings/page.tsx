@@ -22,7 +22,7 @@ export default async function MeetingsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Meetings</h1>
-        <p className="text-muted-foreground">
+        <p className="text-sm text-muted-foreground mt-0.5">
           Keep notes from advisor meetings — track action items, decisions, and follow-ups.
         </p>
       </div>

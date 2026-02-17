@@ -57,13 +57,16 @@ export function Nav({ userEmail }: NavProps) {
   }
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <header className="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
+      {/* Subtle accent line at the very top */}
+      <div className="h-[2px] w-full bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-6">
         <div className="flex items-center gap-4">
           {/* Mobile hamburger */}
           {userEmail && (
             <button
-              className="sm:hidden -ml-1 p-1.5 rounded-md hover:bg-accent transition-colors"
+              className="sm:hidden -ml-1 p-1.5 rounded-lg hover:bg-accent transition-colors"
               onClick={() => setMobileOpen(!mobileOpen)}
               aria-label="Toggle navigation"
             >
@@ -77,28 +80,41 @@ export function Nav({ userEmail }: NavProps) {
 
           <Link
             href="/dashboard"
-            className="flex items-center gap-2 font-semibold"
+            className="flex items-center gap-2 group"
           >
-            <span className="text-lg tracking-tight">BPAN</span>
-            <span className="hidden sm:inline text-lg tracking-tight">Platform</span>
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground text-xs font-bold shadow-sm shadow-primary/25 transition-shadow group-hover:shadow-md group-hover:shadow-primary/30">
+              B
+            </div>
+            <span className="text-lg font-semibold tracking-tight">
+              BPAN
+            </span>
+            <span className="hidden sm:inline text-lg font-light tracking-tight text-muted-foreground">
+              Platform
+            </span>
           </Link>
 
           {/* Desktop nav */}
           {userEmail && (
-            <nav className="hidden sm:flex items-center gap-1.5 text-sm ml-4">
-              {NAV_LINKS.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className={`px-2.5 py-1.5 rounded-md transition-colors text-[13px] ${
-                    pathname === link.href
-                      ? "bg-accent text-foreground font-medium"
-                      : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
-                  }`}
-                >
-                  {link.label}
-                </Link>
-              ))}
+            <nav className="hidden sm:flex items-center gap-0.5 text-sm ml-6">
+              {NAV_LINKS.map((link) => {
+                const isActive = pathname === link.href;
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    className={`relative px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${
+                      isActive
+                        ? "text-primary bg-primary/8"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                    }`}
+                  >
+                    {link.label}
+                    {isActive && (
+                      <span className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] w-3/5 bg-primary rounded-full" />
+                    )}
+                  </Link>
+                );
+              })}
             </nav>
           )}
         </div>
@@ -110,14 +126,16 @@ export function Nav({ userEmail }: NavProps) {
           mounted ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="gap-2">
-                  <User className="h-4 w-4" />
-                  <span className="hidden sm:inline text-xs truncate max-w-[140px]">
+                <Button variant="ghost" size="sm" className="gap-2 rounded-lg hover:bg-accent">
+                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <User className="h-3.5 w-3.5" />
+                  </div>
+                  <span className="hidden sm:inline text-xs truncate max-w-[140px] text-muted-foreground">
                     {userEmail}
                   </span>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
+              <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuItem
                   disabled
                   className="text-xs text-muted-foreground"
@@ -127,7 +145,7 @@ export function Nav({ userEmail }: NavProps) {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={handleSignOut}
-                  className="text-destructive"
+                  className="text-destructive focus:text-destructive"
                 >
                   <LogOut className="mr-2 h-4 w-4" />
                   Sign out
@@ -136,15 +154,17 @@ export function Nav({ userEmail }: NavProps) {
             </DropdownMenu>
           ) : (
             <Button variant="ghost" size="sm" className="gap-2">
-              <User className="h-4 w-4" />
+              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <User className="h-3.5 w-3.5" />
+              </div>
             </Button>
           )
         ) : (
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" asChild>
+            <Button variant="ghost" size="sm" asChild className="rounded-lg">
               <Link href="/auth/login">Sign in</Link>
             </Button>
-            <Button size="sm" asChild>
+            <Button size="sm" asChild className="rounded-lg shadow-sm shadow-primary/25">
               <Link href="/auth/signup">Sign up</Link>
             </Button>
           </div>
@@ -154,21 +174,24 @@ export function Nav({ userEmail }: NavProps) {
 
       {/* Mobile nav drawer */}
       {userEmail && mobileOpen && (
-        <div className="sm:hidden border-t bg-background">
+        <div className="sm:hidden border-t bg-background/95 backdrop-blur-lg">
           <nav className="flex flex-col py-2 px-4 space-y-0.5">
-            {NAV_LINKS.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className={`px-3 py-2.5 rounded-md text-sm transition-colors ${
-                  pathname === link.href
-                    ? "bg-accent text-foreground font-medium"
-                    : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
-                }`}
-              >
-                {link.label}
-              </Link>
-            ))}
+            {NAV_LINKS.map((link) => {
+              const isActive = pathname === link.href;
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
+                    isActive
+                      ? "text-primary bg-primary/8"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                  }`}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
           </nav>
         </div>
       )}

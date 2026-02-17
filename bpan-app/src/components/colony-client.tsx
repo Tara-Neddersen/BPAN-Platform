@@ -409,19 +409,19 @@ export function ColonyClient({
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold">{activeCount}</div>
+          <div className="text-2xl font-bold tracking-tight">{activeCount}</div>
           <p className="text-xs text-muted-foreground">Active Animals</p>
         </CardContent></Card>
         <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold">{cohorts.length}</div>
+          <div className="text-2xl font-bold tracking-tight">{cohorts.length}</div>
           <p className="text-xs text-muted-foreground">Cohorts</p>
         </CardContent></Card>
         <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold">{pendingExps}</div>
+          <div className="text-2xl font-bold tracking-tight">{pendingExps}</div>
           <p className="text-xs text-muted-foreground">Scheduled Experiments</p>
         </CardContent></Card>
         <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold">{completedExps}</div>
+          <div className="text-2xl font-bold tracking-tight">{completedExps}</div>
           <p className="text-xs text-muted-foreground">Completed</p>
         </CardContent></Card>
       </div>

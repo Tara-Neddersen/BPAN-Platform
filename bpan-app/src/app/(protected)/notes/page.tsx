@@ -68,7 +68,7 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Notes</h1>
-          <p className="text-muted-foreground">
+          <p className="text-sm text-muted-foreground mt-0.5">
             All your notes across all papers. Filter by tag, type, or search.
           </p>
         </div>

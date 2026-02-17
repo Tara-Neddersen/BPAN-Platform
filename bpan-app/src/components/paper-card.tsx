@@ -105,16 +105,16 @@ export function PaperCard({ paper, isSaved = false, saveAction, unsaveAction }: 
 
         {/* AI Summary */}
         {summary ? (
-          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
-            <p className="text-xs font-medium text-primary mb-0.5 flex items-center gap-1">
+          <div className="rounded-xl border border-primary/15 bg-gradient-to-br from-primary/[0.06] to-primary/[0.02] px-4 py-3">
+            <p className="text-xs font-semibold text-primary mb-1 flex items-center gap-1.5">
               <Sparkles className="h-3 w-3" />
               AI Summary
             </p>
-            <p className="text-sm leading-relaxed">{summary}</p>
+            <p className="text-sm leading-relaxed text-foreground/90">{summary}</p>
           </div>
         ) : paper.tldr ? (
-          <div className="rounded-md bg-muted/50 px-3 py-2">
-            <p className="text-xs font-medium text-muted-foreground mb-0.5">TL;DR</p>
+          <div className="rounded-xl bg-muted/40 px-4 py-3">
+            <p className="text-xs font-semibold text-muted-foreground mb-1">TL;DR</p>
             <p className="text-sm leading-relaxed">{paper.tldr}</p>
           </div>
         ) : null}

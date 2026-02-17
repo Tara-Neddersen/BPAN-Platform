@@ -98,7 +98,7 @@ export function IdeasClient({ ideas, entries, papers, notes }: Props) {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Research Ideas</h1>
-          <p className="text-muted-foreground">
+          <p className="text-sm text-muted-foreground mt-0.5">
             Capture ideas, track what you learn, connect the dots across papers.
           </p>
         </div>

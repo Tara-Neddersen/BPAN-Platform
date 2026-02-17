@@ -45,86 +45,116 @@ export default function SignupPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <Card className="w-full max-w-md">
-          <CardHeader className="text-center">
-            <CardTitle className="text-2xl font-bold">Check your email</CardTitle>
-            <CardDescription>
-              We&apos;ve sent a confirmation link to <strong>{email}</strong>.
-              Click the link to activate your account, then come back and sign in.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              className="w-full"
-              variant="outline"
-              onClick={() => router.push("/auth/login")}
-            >
-              Back to sign in
-            </Button>
-          </CardContent>
-        </Card>
+      <div className="auth-gradient min-h-screen flex items-center justify-center px-4">
+        <div className="w-full max-w-md space-y-6">
+          <div className="text-center space-y-2">
+            <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground text-xl font-bold shadow-lg shadow-primary/25">
+              B
+            </div>
+          </div>
+          <Card className="shadow-xl shadow-black/[0.04] border-border/60">
+            <CardHeader className="text-center">
+              <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-green-100 text-green-600">
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <CardTitle className="text-xl font-semibold">Check your email</CardTitle>
+              <CardDescription>
+                We&apos;ve sent a confirmation link to <strong>{email}</strong>.
+                Click the link to activate your account, then come back and sign in.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button
+                className="w-full h-10 rounded-lg"
+                variant="outline"
+                onClick={() => router.push("/auth/login")}
+              >
+                Back to sign in
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
-          <CardDescription>Get started with the BPAN Research Platform</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSignup} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="displayName">Display name</Label>
-              <Input
-                id="displayName"
-                type="text"
-                placeholder="Your name"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="At least 6 characters"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={6}
-              />
-            </div>
-            {error && (
-              <p className="text-sm text-destructive">{error}</p>
-            )}
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Creating account..." : "Sign up"}
-            </Button>
-          </form>
-          <p className="mt-4 text-center text-sm text-muted-foreground">
-            Already have an account?{" "}
-            <Link href="/auth/login" className="text-primary underline underline-offset-4 hover:text-primary/80">
-              Sign in
-            </Link>
+    <div className="auth-gradient min-h-screen flex items-center justify-center px-4">
+      <div className="w-full max-w-md space-y-6">
+        {/* Logo & Branding */}
+        <div className="text-center space-y-2">
+          <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground text-xl font-bold shadow-lg shadow-primary/25">
+            B
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight">
+            BPAN <span className="font-light text-muted-foreground">Platform</span>
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            AI-powered research assistant
           </p>
-        </CardContent>
-      </Card>
+        </div>
+
+        <Card className="shadow-xl shadow-black/[0.04] border-border/60">
+          <CardHeader className="text-center pb-2">
+            <CardTitle className="text-xl font-semibold">Create an account</CardTitle>
+            <CardDescription>Get started with the BPAN Research Platform</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSignup} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="displayName" className="text-sm font-medium">Display name</Label>
+                <Input
+                  id="displayName"
+                  type="text"
+                  placeholder="Your name"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="h-10 rounded-lg"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="email" className="text-sm font-medium">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="h-10 rounded-lg"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password" className="text-sm font-medium">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="At least 6 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  className="h-10 rounded-lg"
+                />
+              </div>
+              {error && (
+                <p className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{error}</p>
+              )}
+              <Button type="submit" className="w-full h-10 rounded-lg shadow-sm shadow-primary/25" disabled={loading}>
+                {loading ? "Creating account..." : "Sign up"}
+              </Button>
+            </form>
+            <p className="mt-6 text-center text-sm text-muted-foreground">
+              Already have an account?{" "}
+              <Link href="/auth/login" className="text-primary font-medium hover:text-primary/80 transition-colors">
+                Sign in
+              </Link>
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

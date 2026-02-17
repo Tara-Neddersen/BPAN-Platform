@@ -76,7 +76,7 @@ export function ExperimentsClient({ experiments, timepoints, protocols, reagents
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Experiment Planner</h1>
-          <p className="text-muted-foreground">
+          <p className="text-sm text-muted-foreground mt-0.5">
             Plan experiments, track protocols, and manage reagents.
           </p>
         </div>

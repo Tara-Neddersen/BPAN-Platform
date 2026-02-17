@@ -19,7 +19,7 @@ export default async function MemoryPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">AI Memory</h1>
-        <p className="text-muted-foreground">
+        <p className="text-sm text-muted-foreground mt-0.5">
           Everything the AI remembers about your research. Pinned items are always included in every AI interaction.
           Auto-learned facts come from your advisor chats, meetings, and paper analysis.
         </p>

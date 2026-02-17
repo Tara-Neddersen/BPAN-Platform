@@ -157,7 +157,7 @@ export function ResultsClient({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Results Analyzer</h1>
-          <p className="text-muted-foreground">
+          <p className="text-sm text-muted-foreground mt-0.5">
             Import data, run statistics, create publication-ready figures.
           </p>
         </div>

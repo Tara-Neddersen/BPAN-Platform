@@ -16,7 +16,9 @@ export default async function ProtectedLayout({
   return (
     <>
       <Nav userEmail={user?.email ?? null} />
-      <main className="mx-auto max-w-6xl px-6 py-6">{children}</main>
+      <main className="mx-auto max-w-6xl px-6 py-8 min-h-[calc(100vh-3.5rem)]">
+        {children}
+      </main>
       {user && <AdvisorSidebar />}
       {user && <UnifiedSearch />}
     </>
