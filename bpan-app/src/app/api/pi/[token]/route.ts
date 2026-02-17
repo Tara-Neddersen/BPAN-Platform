@@ -31,10 +31,16 @@ export async function GET(
 
     // Fetch live data based on permissions
     let animals: unknown[] = [];
+    let fullAnimals: unknown[] = [];
     let animalExperiments: unknown[] = [];
     let photos: unknown[] = [];
+    let colonyResults: unknown[] = [];
+    let cohorts: unknown[] = [];
+    let timepoints: unknown[] = [];
 
-    if (canSee.includes("animals") || canSee.includes("experiments") || canSee.includes("timeline")) {
+    // Always fetch full animals if any animal-related permission is set
+    const needsAnimals = canSee.includes("animals") || canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("colony_results");
+    if (needsAnimals) {
       const { data: animalsData } = await supabase
         .from("animals")
         .select("*, cohorts(name)")
@@ -51,6 +57,26 @@ export async function GET(
         ear_tag: a.ear_tag,
         cage_number: a.cage_number,
         eeg_implanted: a.eeg_implanted,
+      }));
+
+      // Full animal objects for analysis panel
+      fullAnimals = (animalsData || []).map((a: Record<string, unknown>) => ({
+        id: a.id,
+        user_id: a.user_id,
+        cohort_id: a.cohort_id,
+        identifier: a.identifier,
+        sex: a.sex,
+        genotype: a.genotype,
+        ear_tag: a.ear_tag,
+        birth_date: a.birth_date,
+        cage_number: a.cage_number,
+        housing_cage_id: a.housing_cage_id,
+        status: a.status,
+        eeg_implanted: a.eeg_implanted,
+        eeg_implant_date: a.eeg_implant_date,
+        notes: a.notes,
+        created_at: a.created_at,
+        updated_at: a.updated_at,
       }));
     }
 
@@ -70,6 +96,18 @@ export async function GET(
         status: e.status,
         results_drive_url: canSee.includes("results") ? e.results_drive_url : null,
       }));
+    }
+
+    // Fetch colony results, cohorts, and timepoints for results/analysis views
+    if (canSee.includes("colony_results")) {
+      const [resultsRes, cohortsRes, timepointsRes] = await Promise.all([
+        supabase.from("colony_results").select("*").eq("user_id", userId).order("timepoint_age_days"),
+        supabase.from("cohorts").select("*").eq("user_id", userId).order("name"),
+        supabase.from("colony_timepoints").select("*").eq("user_id", userId).order("sort_order"),
+      ]);
+      colonyResults = resultsRes.data || [];
+      cohorts = cohortsRes.data || [];
+      timepoints = timepointsRes.data || [];
     }
 
     // Fetch photos for gallery (always included if they exist)
@@ -97,7 +135,11 @@ export async function GET(
       advisor_name: portal.advisor_name,
       can_see: canSee,
       animals,
+      full_animals: canSee.includes("colony_results") ? fullAnimals : [],
       experiments: animalExperiments,
+      colony_results: colonyResults,
+      cohorts,
+      timepoints,
       photos,
       stats: {
         total_animals: totalAnimals,

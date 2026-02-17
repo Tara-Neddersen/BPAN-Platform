@@ -1380,10 +1380,10 @@ export function ColonyClient({
             <div>
               <Label className="text-xs mb-1 block">What can they see?</Label>
               <div className="grid grid-cols-2 gap-1.5">
-                {["animals", "experiments", "results", "timeline"].map((item) => (
+                {["animals", "experiments", "results", "timeline", "colony_results"].map((item) => (
                   <label key={item} className="flex items-center gap-1.5 text-xs cursor-pointer">
                     <input type="checkbox" name="can_see" value={item} defaultChecked className="h-3.5 w-3.5" />
-                    {item.charAt(0).toUpperCase() + item.slice(1)}
+                    {item === "colony_results" ? "Data & Analysis" : item.charAt(0).toUpperCase() + item.slice(1)}
                   </label>
                 ))}
               </div>
