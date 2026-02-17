@@ -533,25 +533,45 @@ export function ColonyClient({
                 </Button>
               </div>
             ))}
-            {/* Experiment alerts */}
-            {upcoming.map((exp) => {
-              const animal = animals.find((a) => a.id === exp.animal_id);
-              const dLeft = daysUntil(exp.scheduled_date!);
-              return (
-                <div key={exp.id} className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <Badge className={dLeft <= 3 ? "bg-red-100 text-red-700" : "bg-blue-100 text-blue-700"} variant="secondary">
-                      {dLeft <= 0 ? "TODAY" : `${dLeft}d`}
-                    </Badge>
-                    <span className="font-medium">{animal?.identifier}</span>
-                    <span className="text-muted-foreground">
-                      {EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">{exp.scheduled_date}</span>
-                </div>
-              );
-            })}
+            {/* Experiment alerts — grouped by type + date */}
+            {(() => {
+              // Group upcoming experiments by (experiment_type + scheduled_date)
+              const groups = new Map<string, { type: string; date: string; animalIds: string[] }>();
+              for (const exp of upcoming) {
+                const key = `${exp.experiment_type}::${exp.scheduled_date}`;
+                if (!groups.has(key)) {
+                  groups.set(key, { type: exp.experiment_type, date: exp.scheduled_date!, animalIds: [] });
+                }
+                groups.get(key)!.animalIds.push(exp.animal_id);
+              }
+              return Array.from(groups.values())
+                .sort((a, b) => a.date.localeCompare(b.date) || a.type.localeCompare(b.type))
+                .map((g) => {
+                  const dLeft = daysUntil(g.date);
+                  const animalNames = g.animalIds
+                    .map((id) => animals.find((a) => a.id === id)?.identifier)
+                    .filter(Boolean);
+                  return (
+                    <div key={`${g.type}-${g.date}`} className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2">
+                        <Badge className={dLeft <= 0 ? "bg-red-100 text-red-700" : dLeft <= 3 ? "bg-orange-100 text-orange-700" : "bg-blue-100 text-blue-700"} variant="secondary">
+                          {dLeft <= 0 ? "TODAY" : `${dLeft}d`}
+                        </Badge>
+                        <span className="font-medium">
+                          {EXPERIMENT_LABELS[g.type] || g.type}
+                        </span>
+                        <Badge variant="outline" className="text-xs">
+                          {g.animalIds.length} {g.animalIds.length === 1 ? "animal" : "animals"}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground truncate max-w-[300px]" title={animalNames.join(", ")}>
+                          {animalNames.slice(0, 4).join(", ")}{animalNames.length > 4 ? ` +${animalNames.length - 4}` : ""}
+                        </span>
+                      </div>
+                      <span className="text-xs text-muted-foreground">{g.date}</span>
+                    </div>
+                  );
+                });
+            })()}
           </CardContent>
         </Card>
       )}
