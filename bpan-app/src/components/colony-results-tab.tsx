@@ -683,15 +683,29 @@ function CohortGroup({
           const isDirty = dirtyKeys.has(key);
           const hasData = getExistingResult(animal.id, timepoint, experiment) !== undefined;
 
+          const genotypeRowColor =
+            animal.genotype === "hemi"
+              ? "border-l-4 border-l-red-400 dark:border-l-red-600"
+              : animal.genotype === "het"
+              ? "border-l-4 border-l-orange-400 dark:border-l-orange-600"
+              : "border-l-4 border-l-slate-300 dark:border-l-slate-600";
+
+          const genotypeRowBg =
+            animal.genotype === "hemi"
+              ? "bg-red-50/30 dark:bg-red-950/10"
+              : animal.genotype === "het"
+              ? "bg-orange-50/30 dark:bg-orange-950/10"
+              : "bg-slate-50/30 dark:bg-slate-950/10";
+
           return (
             <tr
               key={animal.id}
-              className={`border-b transition-colors ${
+              className={`border-b transition-colors ${genotypeRowColor} ${
                 isDirty
                   ? "bg-amber-50/50 dark:bg-amber-950/20"
                   : hasData
                   ? "bg-green-50/30 dark:bg-green-950/10"
-                  : ""
+                  : genotypeRowBg
               } hover:bg-muted/20`}
             >
               <td className="px-2 py-1.5 sticky left-0 bg-inherit font-medium text-xs">

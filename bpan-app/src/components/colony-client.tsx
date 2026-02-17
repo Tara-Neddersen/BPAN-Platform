@@ -261,6 +261,8 @@ export function ColonyClient({
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [filterCohort, setFilterCohort] = useState("all");
   const [filterGenotype, setFilterGenotype] = useState("all");
+  const [animalFormCohortId, setAnimalFormCohortId] = useState("");
+  const birthDateRef = useRef<HTMLInputElement>(null);
 
   // Google Drive integration
   const [driveStatus, setDriveStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null }>({ configured: false, connected: false });
@@ -1023,23 +1025,38 @@ export function ColonyClient({
       {/* ─── Dialogs ────────────────────────────────────────────── */}
 
       {/* Add / Edit Animal */}
-      <Dialog open={showAddAnimal || !!editingAnimal} onOpenChange={(v) => { if (!v) { setShowAddAnimal(false); setEditingAnimal(null); } }}>
+      <Dialog open={showAddAnimal || !!editingAnimal} onOpenChange={(v) => { if (!v) { setShowAddAnimal(false); setEditingAnimal(null); setAnimalFormCohortId(""); } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{editingAnimal ? "Edit Animal" : "Add Animal"}</DialogTitle></DialogHeader>
           <form onSubmit={(e) => {
             if (editingAnimal) {
-              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => setEditingAnimal(null));
+              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => { setEditingAnimal(null); setAnimalFormCohortId(""); });
             } else {
-              handleFormAction(actions.createAnimal, e, () => setShowAddAnimal(false));
+              handleFormAction(actions.createAnimal, e, () => { setShowAddAnimal(false); setAnimalFormCohortId(""); });
             }
           }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="text-xs">Cohort *</Label>
-                <Select name="cohort_id" required defaultValue={editingAnimal?.cohort_id || ""}>
+                <Select
+                  name="cohort_id"
+                  required
+                  defaultValue={editingAnimal?.cohort_id || ""}
+                  onValueChange={(val) => {
+                    setAnimalFormCohortId(val);
+                    // Auto-fill birth date from cohort
+                    const selectedCohort = cohorts.find((c) => c.id === val);
+                    if (selectedCohort?.birth_date && birthDateRef.current) {
+                      // Only auto-fill if birth date is empty or user hasn't manually edited it
+                      if (!birthDateRef.current.value || birthDateRef.current.value === (cohorts.find((c) => c.id === animalFormCohortId)?.birth_date || "")) {
+                        birthDateRef.current.value = selectedCohort.birth_date;
+                      }
+                    }
+                  }}
+                >
                   <SelectTrigger><SelectValue placeholder="Select cohort" /></SelectTrigger>
                   <SelectContent>
-                    {cohorts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    {cohorts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}{c.birth_date ? ` (${c.birth_date})` : ""}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -1069,8 +1086,8 @@ export function ColonyClient({
                 </Select>
               </div>
               <div>
-                <Label className="text-xs">Birth Date *</Label>
-                <Input name="birth_date" type="date" required defaultValue={editingAnimal?.birth_date || ""} />
+                <Label className="text-xs">Birth Date * <span className="text-muted-foreground">(auto-filled from cohort)</span></Label>
+                <Input ref={birthDateRef} name="birth_date" type="date" required defaultValue={editingAnimal?.birth_date || ""} />
               </div>
               <div>
                 <Label className="text-xs">Ear Tag</Label>
