@@ -667,6 +667,7 @@ export function ColonyResultsTab({
           open={showImport}
           onClose={() => setShowImport(false)}
           animals={animals}
+          cohorts={cohorts}
           timepoints={timepoints}
           colonyResults={colonyResults}
           defaultTimepointAge={Number(activeTimepoint)}

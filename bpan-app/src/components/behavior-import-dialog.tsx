@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
-import type { Animal, ColonyTimepoint, ColonyResult } from "@/types";
+import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -170,6 +170,7 @@ interface BehaviorImportDialogProps {
   open: boolean;
   onClose: () => void;
   animals: Animal[];
+  cohorts: Cohort[];
   timepoints: ColonyTimepoint[];
   colonyResults: ColonyResult[];
   defaultTimepointAge: number;
@@ -196,6 +197,7 @@ export function BehaviorImportDialog({
   open,
   onClose,
   animals,
+  cohorts,
   timepoints,
   colonyResults,
   defaultTimepointAge,
@@ -280,22 +282,58 @@ export function BehaviorImportDialog({
       for (const id of Object.keys(m.data)) idSet.add(id);
     }
     const allIds = Array.from(idSet).sort((a, b) => {
-      const [aCohort, aNum] = a.split("-").map(Number);
-      const [bCohort, bNum] = b.split("-").map(Number);
-      return aCohort !== bCohort ? aCohort - bNum : aNum - bNum;
+      const na = a.split("-").map(Number);
+      const nb = b.split("-").map(Number);
+      if (na[0] !== nb[0]) return (na[0] || 0) - (nb[0] || 0);
+      return (na[1] || 0) - (nb[1] || 0);
     });
+
+    // Build a lookup: cohort number → cohort id
+    // e.g. "BPAN 3" → extract "3", "BPAN 4" → extract "4"
+    const cohortNumToId = new Map<string, string>();
+    for (const c of cohorts) {
+      const numMatch = c.name.match(/(\d+)/);
+      if (numMatch) cohortNumToId.set(numMatch[1], c.id);
+    }
 
     const matchMap = new Map<string, Animal>();
     const unmatchedIds: string[] = [];
 
     for (const id of allIds) {
-      const animal = animals.find((a) => a.identifier === id);
+      // Strategy 1: Exact identifier match
+      let animal = animals.find((a) => a.identifier === id);
+
+      // Strategy 2: File ID is "X-Y" → find animal with identifier "Y" in cohort with number X
+      if (!animal && id.includes("-")) {
+        const [cohortNum, animalNum] = id.split("-");
+        const cohortId = cohortNumToId.get(cohortNum);
+        if (cohortId) {
+          animal = animals.find(
+            (a) => a.cohort_id === cohortId && a.identifier === animalNum
+          );
+        }
+      }
+
+      // Strategy 3: Try matching just the last part of the ID as identifier (for single-cohort imports)
+      if (!animal && id.includes("-")) {
+        const animalNum = id.split("-").pop()!;
+        const candidates = animals.filter((a) => a.identifier === animalNum);
+        if (candidates.length === 1) animal = candidates[0];
+      }
+
+      // Strategy 4: Try matching the full ID against identifier with different separators
+      if (!animal) {
+        animal = animals.find(
+          (a) => a.identifier.replace(/[-_\s]/g, "") === id.replace(/[-_\s]/g, "")
+        );
+      }
+
       if (animal) matchMap.set(id, animal);
       else unmatchedIds.push(id);
     }
 
     return { matched: matchMap, unmatched: unmatchedIds, allFileIds: allIds };
-  }, [parsed, animals]);
+  }, [parsed, animals, cohorts]);
 
   // ── Measure stats ──
   const getMeasureStats = useCallback((measure: ParsedMeasure) => {
