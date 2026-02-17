@@ -2187,13 +2187,21 @@ function AnimalDetail({
                         <div className="ml-auto flex items-center gap-1">
                           {/* Status quick-actions */}
                           {(exp.status === "scheduled" || exp.status === "pending") && (
+                            <>
+                              <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "completed")}>
+                                <Check className="h-3 w-3 mr-0.5" /> Done
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "in_progress")}>
+                                <Loader2 className="h-3 w-3 mr-0.5" /> In Progress
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "skipped")}>
+                                <X className="h-3 w-3 mr-0.5" /> Skip
+                              </Button>
+                            </>
+                          )}
+                          {exp.status === "in_progress" && (
                             <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "completed")}>
                               <Check className="h-3 w-3 mr-0.5" /> Done
-                            </Button>
-                          )}
-                          {(exp.status === "scheduled" || exp.status === "pending") && (
-                            <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "skipped")}>
-                              <X className="h-3 w-3 mr-0.5" /> Skip
                             </Button>
                           )}
 
