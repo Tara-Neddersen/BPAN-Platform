@@ -439,3 +439,80 @@ ${actionItems ? `ACTION ITEMS:\n${actionItems}` : ""}`;
   );
 }
 
+// ─── AI Literature Scout Analysis ────────────────────────────────────────────
+
+export interface ScoutAnalysis {
+  summary: string;
+  relevance: string;
+  ideas: string;
+  relevance_score: number;
+}
+
+/**
+ * AI reads a paper abstract and explains it to the user as a research assistant,
+ * relating it to their research interests (BPAN / neurodegeneration / iron / mouse models).
+ */
+export async function scoutAnalyzePaper(
+  title: string,
+  abstract: string,
+  matchedKeyword: string,
+  researchContext?: string,
+): Promise<ScoutAnalysis> {
+  const systemInstruction = `You are an AI research assistant for a PhD student studying BPAN (Beta-propeller Protein-Associated Neurodegeneration), a rare neurological disorder. Their research involves mouse models, iron metabolism, neurodegeneration, EEG, behavior experiments, and translational medicine.
+
+${researchContext ? `Additional research context: ${researchContext}` : ""}
+
+Analyze the following paper and provide:
+1. A 2-3 sentence summary of what the paper found (written plainly, as if explaining to a colleague)
+2. Why this paper is relevant to the student's BPAN research
+3. Creative brainstorm: what experiments or ideas could the student pursue based on this paper?
+4. A relevance score from 0-100 (100 = directly about BPAN or their exact model, 50 = related field, 0 = unrelated)
+
+Respond with ONLY valid JSON:
+{
+  "summary": "...",
+  "relevance": "...",
+  "ideas": "...",
+  "relevance_score": 50
+}`;
+
+  const prompt = `Paper matched keyword: "${matchedKeyword}"
+Title: ${title}
+Abstract: ${abstract || "No abstract available."}`;
+
+  let text: string;
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (apiKey) {
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      text = await callGeminiWithFallback(genAI, systemInstruction, prompt);
+    } catch {
+      const orKey = process.env.OPENROUTER_API_KEY;
+      if (!orKey) throw new Error("AI unavailable");
+      text = await callOpenRouterWithFallback(orKey, systemInstruction, prompt, 500);
+    }
+  } else {
+    const orKey = process.env.OPENROUTER_API_KEY;
+    if (!orKey) throw new Error("AI unavailable — no API keys configured.");
+    text = await callOpenRouterWithFallback(orKey, systemInstruction, prompt, 500);
+  }
+
+  try {
+    const json = JSON.parse(extractJSON(text));
+    return {
+      summary: json.summary || "Could not generate summary.",
+      relevance: json.relevance || "Could not assess relevance.",
+      ideas: json.ideas || "No ideas generated.",
+      relevance_score: typeof json.relevance_score === "number" ? json.relevance_score : 50,
+    };
+  } catch {
+    return {
+      summary: text.slice(0, 300),
+      relevance: "AI returned non-JSON response.",
+      ideas: "",
+      relevance_score: 50,
+    };
+  }
+}
+

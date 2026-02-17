@@ -56,10 +56,27 @@ function formatDate(dateStr: string) {
 
 // ─── Interfaces ──────────────────────────────────────────────────────────
 
+// Behavior experiment types (handling → rotarod/stamina/blood_draw) treated as one batch
+const BEHAVIOR_EXP_TYPES = new Set([
+  "handling", "y_maze", "marble", "ldb", "nesting",
+  "data_collection", "core_acclimation", "catwalk",
+  "rotarod_hab", "rotarod", "stamina", "blood_draw",
+]);
+
+const EXP_TYPE_LABELS: Record<string, string> = {
+  handling: "Handling", y_maze: "Y-Maze", marble: "Marble Burying",
+  ldb: "Light-Dark Box", nesting: "Nesting", data_collection: "Data Collection",
+  core_acclimation: "Core Acclimation", catwalk: "CatWalk", rotarod_hab: "Rotarod Hab",
+  rotarod: "Rotarod", stamina: "Stamina", blood_draw: "Plasma Collection",
+  eeg_implant: "EEG Implant", eeg_recording: "EEG Recording",
+};
+
 interface TasksClientProps {
   tasks: Task[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   upcomingExperiments: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  cohorts: any[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   upcomingCageChanges: any[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -79,6 +96,7 @@ type ViewFilter = "all" | "today" | "upcoming" | "overdue" | "completed";
 export function TasksClient({
   tasks: initTasks,
   upcomingExperiments,
+  cohorts,
   upcomingCageChanges,
   recentMeetings,
   actions,
@@ -178,28 +196,98 @@ export function TasksClient({
         </Card>
       </div>
 
-      {/* ─── Upcoming Experiments & Cage Changes Preview ─── */}
-      {(upcomingExperiments.length > 0 || upcomingCageChanges.length > 0) && (
+      {/* ─── Upcoming Experiments (Batched by Cohort) & Other Items ─── */}
+      {(upcomingExperiments.length > 0 || upcomingCageChanges.length > 0 || recentMeetings.length > 0) && (
         <Card>
           <CardHeader className="py-3">
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Beaker className="h-4 w-4" /> Auto-Detected Upcoming Items
+              <Beaker className="h-4 w-4" /> Upcoming Schedule
             </CardTitle>
           </CardHeader>
-          <CardContent className="py-2 space-y-1.5">
-            {upcomingExperiments.slice(0, 5).map((exp) => (
-              <div key={exp.id} className="flex items-center justify-between text-sm">
-                <div className="flex items-center gap-2">
-                  <Beaker className="h-3 w-3 text-purple-500" />
-                  <span>{exp.animals?.identifier || "?"} — {exp.experiment_type?.replace(/_/g, " ")}</span>
-                </div>
-                {exp.scheduled_date && (
-                  <Badge variant="outline" className="text-xs">
-                    {formatDate(exp.scheduled_date)}
-                  </Badge>
-                )}
-              </div>
-            ))}
+          <CardContent className="py-2 space-y-3">
+            {/* Group experiments by cohort + timepoint + behavior vs other */}
+            {(() => {
+              const cohortMap = new Map(cohorts.map((c: { id: string; name: string }) => [c.id, c.name]));
+
+              // Group by: cohort_id + timepoint_age_days + isBehavior
+              type BatchKey = string;
+              const batches = new Map<BatchKey, {
+                cohortName: string;
+                timepointDays: number;
+                isBehavior: boolean;
+                animals: Set<string>;
+                expTypes: Set<string>;
+                firstDate: string;
+                lastDate: string;
+                count: number;
+              }>();
+
+              for (const exp of upcomingExperiments) {
+                const cohortId = exp.animals?.cohort_id || "unknown";
+                const cohortName = cohortMap.get(cohortId) || "Unknown";
+                const tpDays = exp.timepoint_age_days || 0;
+                const isBehavior = BEHAVIOR_EXP_TYPES.has(exp.experiment_type);
+                const key = `${cohortId}|${tpDays}|${isBehavior ? "beh" : "other"}`;
+
+                if (!batches.has(key)) {
+                  batches.set(key, {
+                    cohortName,
+                    timepointDays: tpDays,
+                    isBehavior,
+                    animals: new Set(),
+                    expTypes: new Set(),
+                    firstDate: exp.scheduled_date,
+                    lastDate: exp.scheduled_date,
+                    count: 0,
+                  });
+                }
+
+                const batch = batches.get(key)!;
+                batch.animals.add(exp.animals?.identifier || "?");
+                batch.expTypes.add(exp.experiment_type);
+                if (exp.scheduled_date < batch.firstDate) batch.firstDate = exp.scheduled_date;
+                if (exp.scheduled_date > batch.lastDate) batch.lastDate = exp.scheduled_date;
+                batch.count++;
+              }
+
+              const sortedBatches = [...batches.values()].sort((a, b) => a.firstDate.localeCompare(b.firstDate));
+
+              return sortedBatches.map((batch, i) => {
+                const dateRange = batch.firstDate === batch.lastDate
+                  ? formatDate(batch.firstDate)
+                  : `${formatDate(batch.firstDate)} → ${formatDate(batch.lastDate)}`;
+
+                return (
+                  <div key={i} className="flex items-start justify-between gap-2 text-sm bg-muted/30 rounded-md p-2.5">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Beaker className="h-3.5 w-3.5 text-purple-500 flex-shrink-0" />
+                        <span className="font-semibold">{batch.cohortName}</span>
+                        <Badge variant="outline" className="text-[10px]">{batch.timepointDays}d</Badge>
+                        <Badge className="bg-purple-100 text-purple-700 text-[10px]" variant="secondary">
+                          {batch.animals.size} animals
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1 ml-5">
+                        {batch.isBehavior ? (
+                          <span>Behavior Experiments (Handling → Y-Maze, LDB, Marble, Nesting, CatWalk, Rotarod, Plasma)</span>
+                        ) : (
+                          <span>{[...batch.expTypes].map(t => EXP_TYPE_LABELS[t] || t).join(", ")}</span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5 ml-5">
+                        Animals: {[...batch.animals].join(", ")}
+                      </div>
+                    </div>
+                    <Badge variant="outline" className="text-xs flex-shrink-0 whitespace-nowrap">
+                      {dateRange}
+                    </Badge>
+                  </div>
+                );
+              });
+            })()}
+
+            {/* Cage Changes */}
             {upcomingCageChanges.slice(0, 3).map((cc) => (
               <div key={cc.id} className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-2">
@@ -211,22 +299,20 @@ export function TasksClient({
                 </Badge>
               </div>
             ))}
-            {recentMeetings.length > 0 && (
-              <>
-                {recentMeetings.slice(0, 2).map((m) => {
-                  const pending = (m.action_items || []).filter((a: { done: boolean }) => !a.done).length;
-                  if (pending === 0) return null;
-                  return (
-                    <div key={m.id} className="flex items-center justify-between text-sm">
-                      <div className="flex items-center gap-2">
-                        <MessageSquare className="h-3 w-3 text-blue-500" />
-                        <span>{m.title}: {pending} pending action{pending !== 1 ? "s" : ""}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </>
-            )}
+
+            {/* Meeting action items */}
+            {recentMeetings.slice(0, 2).map((m) => {
+              const pending = (m.action_items || []).filter((a: { done: boolean }) => !a.done).length;
+              if (pending === 0) return null;
+              return (
+                <div key={m.id} className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="h-3 w-3 text-blue-500" />
+                    <span>{m.title}: {pending} pending action{pending !== 1 ? "s" : ""}</span>
+                  </div>
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
       )}

@@ -19,15 +19,21 @@ export default async function TasksPage() {
     .eq("user_id", user.id)
     .order("due_date", { ascending: true, nullsFirst: false });
 
-  // Also get upcoming experiments & cage changes for the overview
+  // Get upcoming experiments with cohort info for batch grouping
   const { data: upcomingExps } = await supabase
     .from("animal_experiments")
-    .select("*, animals(identifier)")
+    .select("*, animals(identifier, cohort_id, birth_date)")
     .eq("user_id", user.id)
     .in("status", ["pending", "scheduled"])
     .not("scheduled_date", "is", null)
     .order("scheduled_date")
-    .limit(20);
+    .limit(100);
+
+  // Get cohort names for display
+  const { data: cohorts } = await supabase
+    .from("cohorts")
+    .select("id, name")
+    .eq("user_id", user.id);
 
   const { data: upcomingCageChanges } = await supabase
     .from("cage_changes")
@@ -56,6 +62,7 @@ export default async function TasksPage() {
       <TasksClient
         tasks={(tasks || []) as Task[]}
         upcomingExperiments={upcomingExps || []}
+        cohorts={cohorts || []}
         upcomingCageChanges={upcomingCageChanges || []}
         recentMeetings={meetings || []}
         actions={{ createTask, updateTask, toggleTask, deleteTask }}
@@ -63,4 +70,3 @@ export default async function TasksPage() {
     </div>
   );
 }
-

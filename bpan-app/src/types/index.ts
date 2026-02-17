@@ -468,3 +468,38 @@ export interface Task {
   created_at: string;
   updated_at: string;
 }
+
+// ─── AI Literature Scout ────────────────────────────────────────────────
+
+export type ScoutStatus = "new" | "saved" | "skipped" | "starred";
+
+export interface ScoutFinding {
+  id: string;
+  user_id: string;
+  pmid: string;
+  title: string;
+  authors: string[];
+  journal: string | null;
+  pub_date: string | null;
+  abstract: string | null;
+  doi: string | null;
+  ai_summary: string | null;
+  ai_relevance: string | null;
+  ai_ideas: string | null;
+  relevance_score: number;
+  status: ScoutStatus;
+  user_notes: string | null;
+  matched_keyword: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScoutRun {
+  id: string;
+  user_id: string;
+  keyword: string;
+  papers_found: number;
+  papers_analyzed: number;
+  last_run_at: string;
+  created_at: string;
+}

@@ -29,6 +29,7 @@ const NAV_LINKS = [
   { href: "/colony", label: "Colony" },
   { href: "/meetings", label: "Meetings" },
   { href: "/ideas", label: "Ideas" },
+  { href: "/scout", label: "Scout" },
   { href: "/writing", label: "Writing" },
 ];
 
