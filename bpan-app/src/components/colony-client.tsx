@@ -1490,6 +1490,21 @@ export function ColonyClient({
                 if (res.error) { toast.error(res.error); }
                 else { toast.success(`Rescheduled ${res.rescheduled} experiments (last: ${res.lastDate})`); await refetchAll(); }
               }}
+              onUpdateExperiment={async (id, fd) => {
+                const res = await actions.updateAnimalExperiment(id, fd);
+                if (res.error) toast.error(res.error);
+                else { toast.success("Experiment updated!"); await refetchAll(); }
+              }}
+              onDeleteExperiment={async (id) => {
+                const res = await actions.deleteAnimalExperiment(id);
+                if (res.error) toast.error(res.error);
+                else { toast.success("Experiment deleted"); await refetchAll(); }
+              }}
+              onCreateExperiment={async (fd) => {
+                const res = await actions.createAnimalExperiment(fd);
+                if (res.error) toast.error(res.error);
+                else { toast.success("Experiment added!"); await refetchAll(); }
+              }}
               onEdit={() => { setEditingAnimal(selectedAnimal); setAnimalFormEarTag(parseEarTag(selectedAnimal.ear_tag)); setSelectedAnimal(null); }}
               onDelete={() => { act(actions.deleteAnimal(selectedAnimal.id)); setSelectedAnimal(null); }}
               busy={busy}
@@ -1513,6 +1528,9 @@ function AnimalDetail({
   onUpdateStatus,
   onSaveResultUrl,
   onReschedule,
+  onUpdateExperiment,
+  onDeleteExperiment,
+  onCreateExperiment,
   onEdit,
   onDelete,
   busy,
@@ -1526,6 +1544,9 @@ function AnimalDetail({
   onUpdateStatus: (id: string, status: string) => void;
   onSaveResultUrl: (id: string, url: string) => void;
   onReschedule: (timepointAgeDays: number, newStartDate: string) => Promise<void>;
+  onUpdateExperiment: (id: string, fd: FormData) => Promise<void>;
+  onDeleteExperiment: (id: string) => Promise<void>;
+  onCreateExperiment: (fd: FormData) => Promise<void>;
   onEdit: () => void;
   onDelete: () => void;
   busy: boolean;
@@ -1533,8 +1554,10 @@ function AnimalDetail({
   const age = daysOld(animal.birth_date);
   const [resultUrls, setResultUrls] = useState<Record<string, string>>({});
   const [uploading, setUploading] = useState<string | null>(null);
-  const [rescheduling, setRescheduling] = useState<number | null>(null); // which timepoint is being rescheduled
+  const [rescheduling, setRescheduling] = useState<number | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState("");
+  const [editingExpId, setEditingExpId] = useState<string | null>(null);
+  const [addingToTimepoint, setAddingToTimepoint] = useState<number | null>(null);
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   async function handleFileUpload(expId: string, experimentType: string, file: File) {
@@ -1715,97 +1738,292 @@ function AnimalDetail({
                 {exps.map((exp) => {
                   const dLeft = exp.scheduled_date ? daysUntil(exp.scheduled_date) : null;
                   const isOverdue = dLeft !== null && dLeft < 0 && exp.status !== "completed" && exp.status !== "skipped";
+                  const isEditing = editingExpId === exp.id;
                   return (
-                    <div key={exp.id} className={`flex items-center gap-2 text-sm rounded-md border p-2 flex-wrap ${isOverdue ? "border-red-300 bg-red-50/50 dark:bg-red-950/20" : ""}`}>
-                      <Badge className={`${STATUS_COLORS[exp.status]} text-xs`} variant="secondary">
-                        {exp.status}
-                      </Badge>
-                      <span className="font-medium min-w-0">
-                        {EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}
-                      </span>
-                      {exp.scheduled_date && (
-                        <span className={`text-xs ${isOverdue ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
-                          {exp.scheduled_date}
-                          {dLeft !== null && dLeft > 0 && ` (in ${dLeft}d)`}
-                          {dLeft !== null && dLeft === 0 && " (TODAY!)"}
-                          {isOverdue && ` (${Math.abs(dLeft!)}d overdue)`}
+                    <div key={exp.id} className={`rounded-md border ${isOverdue ? "border-red-300 bg-red-50/50 dark:bg-red-950/20" : ""}`}>
+                      <div className="flex items-center gap-2 text-sm p-2 flex-wrap">
+                        <Badge className={`${STATUS_COLORS[exp.status]} text-xs`} variant="secondary">
+                          {exp.status}
+                        </Badge>
+                        <span className="font-medium min-w-0">
+                          {EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}
                         </span>
-                      )}
-
-                      <div className="ml-auto flex items-center gap-1">
-                        {/* Status quick-actions */}
-                        {exp.status === "scheduled" && (
-                          <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "completed")}>
-                            <Check className="h-3 w-3 mr-0.5" /> Done
-                          </Button>
+                        {exp.scheduled_date && (
+                          <span className={`text-xs ${isOverdue ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                            {exp.scheduled_date}
+                            {dLeft !== null && dLeft > 0 && ` (in ${dLeft}d)`}
+                            {dLeft !== null && dLeft === 0 && " (TODAY!)"}
+                            {isOverdue && ` (${Math.abs(dLeft!)}d overdue)`}
+                          </span>
                         )}
-                        {exp.status === "scheduled" && (
-                          <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "skipped")}>
-                            <X className="h-3 w-3 mr-0.5" /> Skip
-                          </Button>
-                        )}
+                        {exp.notes && <span className="text-[10px] text-muted-foreground italic truncate max-w-[140px]" title={exp.notes}>{exp.notes}</span>}
 
-                        {/* Results: upload or paste link */}
-                        {exp.status === "completed" && !exp.results_drive_url && (
-                          <div className="flex items-center gap-1">
-                            {/* Upload to Drive button */}
-                            {driveConnected && (
-                              <>
-                                <input
-                                  type="file"
-                                  ref={(el) => { fileInputRefs.current[exp.id] = el; }}
-                                  className="hidden"
-                                  onChange={(e) => {
-                                    const file = e.target.files?.[0];
-                                    if (file) handleFileUpload(exp.id, exp.experiment_type, file);
-                                  }}
-                                />
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-6 text-xs px-2 gap-1"
-                                  onClick={() => fileInputRefs.current[exp.id]?.click()}
-                                  disabled={uploading === exp.id}
-                                >
-                                  {uploading === exp.id ? (
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                  ) : (
-                                    <Upload className="h-3 w-3" />
-                                  )}
-                                  {uploading === exp.id ? "Uploading..." : "Upload"}
-                                </Button>
-                              </>
-                            )}
-                            {/* Manual paste link fallback */}
-                            <Input
-                              className="h-6 text-xs w-36"
-                              placeholder={driveConnected ? "or paste link" : "Google Drive link"}
-                              value={resultUrls[exp.id] || ""}
-                              onChange={(e) => setResultUrls((prev) => ({ ...prev, [exp.id]: e.target.value }))}
-                            />
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 text-xs px-2"
-                              onClick={() => { if (resultUrls[exp.id]) onSaveResultUrl(exp.id, resultUrls[exp.id]); }}
-                            >
-                              <Link2 className="h-3 w-3" />
+                        <div className="ml-auto flex items-center gap-1">
+                          {/* Status quick-actions */}
+                          {(exp.status === "scheduled" || exp.status === "pending") && (
+                            <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "completed")}>
+                              <Check className="h-3 w-3 mr-0.5" /> Done
                             </Button>
-                          </div>
-                        )}
-                        {exp.results_drive_url && (
-                          <a href={exp.results_drive_url} target="_blank" rel="noopener noreferrer" className="text-primary flex items-center gap-1 text-xs">
-                            <ExternalLink className="h-3.5 w-3.5" /> Results
-                          </a>
-                        )}
+                          )}
+                          {(exp.status === "scheduled" || exp.status === "pending") && (
+                            <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => onUpdateStatus(exp.id, "skipped")}>
+                              <X className="h-3 w-3 mr-0.5" /> Skip
+                            </Button>
+                          )}
+
+                          {/* Edit toggle */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-xs px-1.5"
+                            onClick={() => setEditingExpId(isEditing ? null : exp.id)}
+                            title="Edit experiment"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+
+                          {/* Delete */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-xs px-1.5 text-destructive hover:text-destructive"
+                            onClick={() => { if (confirm(`Delete ${EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}?`)) onDeleteExperiment(exp.id); }}
+                            title="Delete experiment"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+
+                          {/* Results: upload or paste link */}
+                          {exp.status === "completed" && !exp.results_drive_url && (
+                            <div className="flex items-center gap-1">
+                              {driveConnected && (
+                                <>
+                                  <input
+                                    type="file"
+                                    ref={(el) => { fileInputRefs.current[exp.id] = el; }}
+                                    className="hidden"
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0];
+                                      if (file) handleFileUpload(exp.id, exp.experiment_type, file);
+                                    }}
+                                  />
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-6 text-xs px-2 gap-1"
+                                    onClick={() => fileInputRefs.current[exp.id]?.click()}
+                                    disabled={uploading === exp.id}
+                                  >
+                                    {uploading === exp.id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Upload className="h-3 w-3" />
+                                    )}
+                                    {uploading === exp.id ? "Uploading..." : "Upload"}
+                                  </Button>
+                                </>
+                              )}
+                              <Input
+                                className="h-6 text-xs w-36"
+                                placeholder={driveConnected ? "or paste link" : "Google Drive link"}
+                                value={resultUrls[exp.id] || ""}
+                                onChange={(e) => setResultUrls((prev) => ({ ...prev, [exp.id]: e.target.value }))}
+                              />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 text-xs px-2"
+                                onClick={() => { if (resultUrls[exp.id]) onSaveResultUrl(exp.id, resultUrls[exp.id]); }}
+                              >
+                                <Link2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          )}
+                          {exp.results_drive_url && (
+                            <a href={exp.results_drive_url} target="_blank" rel="noopener noreferrer" className="text-primary flex items-center gap-1 text-xs">
+                              <ExternalLink className="h-3.5 w-3.5" /> Results
+                            </a>
+                          )}
+                        </div>
                       </div>
+
+                      {/* ─── Inline Edit Panel ──────────────── */}
+                      {isEditing && (
+                        <form
+                          className="border-t bg-muted/30 p-2 grid grid-cols-2 sm:grid-cols-4 gap-2"
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            const fd = new FormData(e.currentTarget);
+                            await onUpdateExperiment(exp.id, fd);
+                            setEditingExpId(null);
+                          }}
+                        >
+                          <div>
+                            <Label className="text-[10px]">Status</Label>
+                            <Select name="status" defaultValue={exp.status}>
+                              <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="pending">Pending</SelectItem>
+                                <SelectItem value="scheduled">Scheduled</SelectItem>
+                                <SelectItem value="in_progress">In Progress</SelectItem>
+                                <SelectItem value="completed">Completed</SelectItem>
+                                <SelectItem value="skipped">Skipped</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label className="text-[10px]">Scheduled Date</Label>
+                            <Input name="scheduled_date" type="date" className="h-7 text-xs" defaultValue={exp.scheduled_date || ""} />
+                          </div>
+                          <div>
+                            <Label className="text-[10px]">Completed Date</Label>
+                            <Input name="completed_date" type="date" className="h-7 text-xs" defaultValue={exp.completed_date || ""} />
+                          </div>
+                          <div>
+                            <Label className="text-[10px]">Notes</Label>
+                            <Input name="notes" className="h-7 text-xs" defaultValue={exp.notes || ""} placeholder="Optional notes" />
+                          </div>
+                          <div className="col-span-full flex gap-2 justify-end">
+                            <Button type="button" variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setEditingExpId(null)}>Cancel</Button>
+                            <Button type="submit" size="sm" className="h-6 text-xs" disabled={busy}>{busy ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}Save</Button>
+                          </div>
+                        </form>
+                      )}
                     </div>
                   );
                 })}
               </div>
+
+              {/* ─── Add Experiment to this Timepoint ──────── */}
+              {addingToTimepoint === ageDays ? (
+                <form
+                  className="mt-2 p-2 bg-muted/30 rounded-md border border-dashed space-y-2"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    const fd = new FormData(e.currentTarget);
+                    fd.set("animal_id", animal.id);
+                    fd.set("timepoint_age_days", String(ageDays));
+                    await onCreateExperiment(fd);
+                    setAddingToTimepoint(null);
+                  }}
+                >
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div>
+                      <Label className="text-[10px]">Experiment</Label>
+                      <Select name="experiment_type" required>
+                        <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Pick test..." /></SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(EXPERIMENT_LABELS).map(([k, v]) => (
+                            <SelectItem key={k} value={k}>{v}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Status</Label>
+                      <Select name="status" defaultValue="scheduled">
+                        <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="pending">Pending</SelectItem>
+                          <SelectItem value="scheduled">Scheduled</SelectItem>
+                          <SelectItem value="completed">Completed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Date</Label>
+                      <Input name="scheduled_date" type="date" className="h-7 text-xs" />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Notes</Label>
+                      <Input name="notes" className="h-7 text-xs" placeholder="Optional" />
+                    </div>
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <Button type="button" variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setAddingToTimepoint(null)}>Cancel</Button>
+                    <Button type="submit" size="sm" className="h-6 text-xs" disabled={busy}>{busy ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}Add</Button>
+                  </div>
+                </form>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-[10px] px-2 mt-1 text-muted-foreground"
+                  onClick={() => setAddingToTimepoint(ageDays)}
+                >
+                  <Plus className="h-3 w-3 mr-0.5" /> Add experiment to {ageDays}d
+                </Button>
+              )}
             </div>
             );
           })}
+
+          {/* ─── Add experiment to a new timepoint ──────── */}
+          {addingToTimepoint === -1 ? (
+            <form
+              className="mt-2 p-2 bg-muted/30 rounded-md border border-dashed space-y-2"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const fd = new FormData(e.currentTarget);
+                fd.set("animal_id", animal.id);
+                await onCreateExperiment(fd);
+                setAddingToTimepoint(null);
+              }}
+            >
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div>
+                  <Label className="text-[10px]">Experiment</Label>
+                  <Select name="experiment_type" required>
+                    <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Pick test..." /></SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(EXPERIMENT_LABELS).map(([k, v]) => (
+                        <SelectItem key={k} value={k}>{v}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[10px]">Timepoint (days)</Label>
+                  <Select name="timepoint_age_days" required>
+                    <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Pick..." /></SelectTrigger>
+                    <SelectContent>
+                      {timepoints.map((tp) => (
+                        <SelectItem key={tp.id} value={String(tp.age_days)}>{tp.name} ({tp.age_days}d)</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[10px]">Date</Label>
+                  <Input name="scheduled_date" type="date" className="h-7 text-xs" />
+                </div>
+                <div>
+                  <Label className="text-[10px]">Status</Label>
+                  <Select name="status" defaultValue="scheduled">
+                    <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="scheduled">Scheduled</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end">
+                <Button type="button" variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setAddingToTimepoint(null)}>Cancel</Button>
+                <Button type="submit" size="sm" className="h-6 text-xs" disabled={busy}>{busy ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}Add</Button>
+              </div>
+            </form>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 text-[10px] px-2 mt-2 text-muted-foreground"
+              onClick={() => setAddingToTimepoint(-1)}
+            >
+              <Plus className="h-3 w-3 mr-0.5" /> Add experiment to another timepoint
+            </Button>
+          )}
         </div>
       )}
 
