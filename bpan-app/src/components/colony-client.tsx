@@ -31,6 +31,7 @@ import type {
 } from "@/types";
 import { ColonyResultsTab } from "@/components/colony-results-tab";
 import { ColonyAnalysisPanel } from "@/components/colony-analysis-panel";
+import { ExperimentTrackerMatrix } from "@/components/experiment-tracker-matrix";
 import { EarTagSelector, MiniEarTag, parseEarTag } from "@/components/ear-tag-selector";
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -549,6 +550,7 @@ export function ColonyClient({
           <TabsTrigger value="cohorts" className="flex-1 min-w-[80px]">Cohorts</TabsTrigger>
           <TabsTrigger value="timepoints" className="flex-1 min-w-[80px]">Timepoints</TabsTrigger>
           <TabsTrigger value="breeders" className="flex-1 min-w-[80px]">Breeders</TabsTrigger>
+          <TabsTrigger value="tracker" className="flex-1 min-w-[80px] font-semibold text-amber-700 dark:text-amber-300">📋 Tracker</TabsTrigger>
           <TabsTrigger value="results" className="flex-1 min-w-[80px] font-semibold text-indigo-700 dark:text-indigo-300">📊 Results</TabsTrigger>
           <TabsTrigger value="analysis" className="flex-1 min-w-[80px] font-semibold text-emerald-700 dark:text-emerald-300">📈 Analysis</TabsTrigger>
           <TabsTrigger value="housing" className="flex-1 min-w-[80px]">Housing</TabsTrigger>
@@ -785,6 +787,16 @@ export function ColonyClient({
               })}
             </div>
           )}
+        </TabsContent>
+
+        {/* ─── Experiment Tracker Tab ─────────────────────────── */}
+        <TabsContent value="tracker" className="space-y-4">
+          <ExperimentTrackerMatrix
+            animals={animals}
+            cohorts={cohorts}
+            timepoints={timepoints}
+            experiments={experiments}
+          />
         </TabsContent>
 
         {/* ─── Colony Results Tab ──────────────────────────────── */}
