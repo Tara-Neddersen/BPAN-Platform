@@ -51,28 +51,30 @@ import {
 } from "./actions";
 import { batchUpsertColonyResults } from "./result-actions";
 
-// Helper: paginate through ALL rows from a Supabase table (default limit is 1000)
-async function fetchAllRows<T>(
+// Cursor-based pagination: fetches ALL rows by using id > lastId (bypasses max_rows limit)
+async function fetchAllRows<T extends { id: string }>(
   supabase: Awaited<ReturnType<typeof createClient>>,
   table: string,
   userId: string,
-  orderCol: string,
-  ascending = true,
 ): Promise<T[]> {
   const PAGE = 1000;
   const allRows: T[] = [];
-  let from = 0;
+  let lastId = "";
   while (true) {
-    const { data, error } = await supabase
+    let query = supabase
       .from(table)
       .select("*")
       .eq("user_id", userId)
-      .order(orderCol, { ascending })
-      .range(from, from + PAGE - 1);
+      .order("id")
+      .limit(PAGE);
+    if (lastId) {
+      query = query.gt("id", lastId);
+    }
+    const { data, error } = await query;
     if (error || !data || data.length === 0) break;
     allRows.push(...(data as T[]));
-    if (data.length < PAGE) break; // last page
-    from += PAGE;
+    lastId = (data[data.length - 1] as { id: string }).id;
+    if (data.length < PAGE) break;
   }
   return allRows;
 }
@@ -103,10 +105,10 @@ export default async function ColonyPage() {
     supabase.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
     supabase.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
-    fetchAllRows<AnimalExperiment>(supabase, "animal_experiments", user.id, "scheduled_date"),
-    fetchAllRows<Animal>(supabase, "animals", user.id, "identifier"),
-    fetchAllRows<CageChange>(supabase, "cage_changes", user.id, "scheduled_date"),
-    fetchAllRows<ColonyResult>(supabase, "colony_results", user.id, "created_at"),
+    fetchAllRows<AnimalExperiment>(supabase, "animal_experiments", user.id),
+    fetchAllRows<Animal>(supabase, "animals", user.id),
+    fetchAllRows<CageChange>(supabase, "cage_changes", user.id),
+    fetchAllRows<ColonyResult>(supabase, "colony_results", user.id),
   ]);
 
   return (

@@ -81,21 +81,23 @@ export async function GET(
     }
 
     if (canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("results")) {
-      // Paginate to avoid 1000-row limit
+      // Cursor-based pagination to bypass 1000-row limit
       const allExpsData: Record<string, unknown>[] = [];
       const PAGE = 1000;
-      let from = 0;
+      let lastId = "";
       while (true) {
-        const { data, error } = await supabase
+        let q = supabase
           .from("animal_experiments")
           .select("*, animals(identifier)")
           .eq("user_id", userId)
-          .order("scheduled_date")
-          .range(from, from + PAGE - 1);
+          .order("id")
+          .limit(PAGE);
+        if (lastId) q = q.gt("id", lastId);
+        const { data, error } = await q;
         if (error || !data || data.length === 0) break;
         allExpsData.push(...(data as Record<string, unknown>[]));
+        lastId = (data[data.length - 1] as { id: string }).id;
         if (data.length < PAGE) break;
-        from += PAGE;
       }
 
       animalExperiments = allExpsData.map((e) => ({

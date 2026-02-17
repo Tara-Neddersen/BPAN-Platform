@@ -251,22 +251,25 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
 
   // If age_days changed, cascade to animal_experiments and colony_results
   if (oldAgeDays != null && oldAgeDays !== newAgeDays) {
-    // Update animal_experiments timepoint_age_days (paginated fetch)
+    // Update animal_experiments timepoint_age_days (cursor pagination)
     const affectedExps: { id: string; animal_id: string }[] = [];
     {
       const PAGE = 1000;
-      let from = 0;
+      let lastId = "";
       while (true) {
-        const { data, error } = await supabase
+        let q = supabase
           .from("animal_experiments")
           .select("id, animal_id")
           .eq("user_id", user.id)
           .eq("timepoint_age_days", oldAgeDays)
-          .range(from, from + PAGE - 1);
+          .order("id")
+          .limit(PAGE);
+        if (lastId) q = q.gt("id", lastId);
+        const { data, error } = await q;
         if (error || !data || data.length === 0) break;
         affectedExps.push(...data);
+        lastId = data[data.length - 1].id;
         if (data.length < PAGE) break;
-        from += PAGE;
       }
     }
 
@@ -611,23 +614,26 @@ export async function scheduleExperimentsForCohort(
 
   if (timepoints.length === 0) return { error: "No matching timepoints found." };
 
-  // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (paginated) ──
+  // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (cursor pagination) ──
   const animalIds = cohortAnimals.map(a => a.id);
-  const allExisting: { animal_id: string; experiment_type: string; timepoint_age_days: number }[] = [];
+  const allExisting: { id: string; animal_id: string; experiment_type: string; timepoint_age_days: number }[] = [];
   {
     const PAGE = 1000;
-    let from = 0;
+    let lastId = "";
     while (true) {
-      const { data, error } = await supabase
+      let q = supabase
         .from("animal_experiments")
-        .select("animal_id, experiment_type, timepoint_age_days")
+        .select("id, animal_id, experiment_type, timepoint_age_days")
         .in("animal_id", animalIds)
         .eq("user_id", user.id)
-        .range(from, from + PAGE - 1);
+        .order("id")
+        .limit(PAGE);
+      if (lastId) q = q.gt("id", lastId);
+      const { data, error } = await q;
       if (error || !data || data.length === 0) break;
       allExisting.push(...data);
+      lastId = data[data.length - 1].id;
       if (data.length < PAGE) break;
-      from += PAGE;
     }
   }
 
@@ -835,28 +841,31 @@ export async function deleteExperimentsForCohort(
 
   const animalIds = cohortAnimals.map(a => a.id);
 
-  // Get IDs of experiments to delete (paginated to avoid 1000-row limit)
+  // Get IDs of experiments to delete (cursor pagination to bypass 1000-row limit)
   const allIds: string[] = [];
   {
     const PAGE = 1000;
-    let from = 0;
+    let lastId = "";
     while (true) {
       let q = supabase
         .from("animal_experiments")
         .select("id")
         .in("animal_id", animalIds)
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        .order("id")
+        .limit(PAGE);
+      if (lastId) q = q.gt("id", lastId);
       if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
         q = q.in("timepoint_age_days", onlyTimepointAgeDays);
       }
       if (onlyStatuses && onlyStatuses.length > 0) {
         q = q.in("status", onlyStatuses);
       }
-      const { data, error } = await q.range(from, from + PAGE - 1);
+      const { data, error } = await q;
       if (error || !data || data.length === 0) break;
       allIds.push(...data.map(r => r.id));
+      lastId = data[data.length - 1].id;
       if (data.length < PAGE) break;
-      from += PAGE;
     }
   }
 
