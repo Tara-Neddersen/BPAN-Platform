@@ -130,7 +130,7 @@ interface ColonyClientProps {
     updateAnimalExperiment: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     deleteAnimalExperiment: (id: string) => Promise<{ success?: boolean; error?: string }>;
     scheduleExperimentsForAnimal: (animalId: string, birthDate: string, onlyTimepointAgeDays?: number[]) => Promise<{ success?: boolean; error?: string; count?: number }>;
-    scheduleExperimentsForCohort: (cohortId: string, onlyTimepointAgeDays?: number[]) => Promise<{ success?: boolean; error?: string; scheduled?: number; skipped?: number; total?: number }>;
+    scheduleExperimentsForCohort: (cohortId: string, onlyTimepointAgeDays?: number[]) => Promise<{ success?: boolean; error?: string; scheduled?: number; skipped?: number; total?: number; errors?: string[] }>;
     deleteExperimentsForAnimal: (animalId: string, onlyTimepointAgeDays?: number[], onlyStatuses?: string[]) => Promise<{ success?: boolean; error?: string; deleted?: number }>;
     deleteExperimentsForCohort: (cohortId: string, onlyTimepointAgeDays?: number[], onlyStatuses?: string[]) => Promise<{ success?: boolean; error?: string; deleted?: number; animals?: number }>;
     createAdvisorAccess: (fd: FormData) => Promise<{ success?: boolean; error?: string; token?: string }>;
@@ -1642,7 +1642,12 @@ export function ColonyClient({
                     if (scheduleDialog.type === "cohort") {
                       const res = await actions.scheduleExperimentsForCohort(scheduleDialog.id, tpAges);
                       if (res.error) toast.error(res.error);
-                      else toast.success(`Scheduled ${res.total} experiments for ${res.scheduled} animals!`);
+                      else {
+                        toast.success(`Scheduled ${res.total} experiments for ${res.scheduled} animals!`);
+                        if (res.errors && res.errors.length > 0) {
+                          toast.error(`${res.errors.length} errors: ${res.errors[0]}`);
+                        }
+                      }
                     } else {
                       const res = await actions.scheduleExperimentsForAnimal(scheduleDialog.id, scheduleDialog.birthDate!, tpAges);
                       if (res.error) toast.error(res.error);

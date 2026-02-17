@@ -449,7 +449,11 @@ export async function scheduleExperimentsForAnimal(
 
   for (const tp of timepoints) {
     const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
-    const selectedExps = new Set((tp.experiments as string[]) || []);
+    // If no experiments are explicitly selected, default to ALL from the protocol
+    const expList = (tp.experiments as string[]) || [];
+    const selectedExps = new Set(
+      expList.length > 0 ? expList : PROTOCOL_SCHEDULE.map(s => s.type).filter(t => t !== "handling")
+    );
 
     // Schedule each experiment in the protocol that the user selected
     for (const step of PROTOCOL_SCHEDULE) {
@@ -546,8 +550,12 @@ export async function scheduleExperimentsForAnimal(
   }
 
   if (records.length > 0) {
-    const { error } = await supabase.from("animal_experiments").insert(records);
-    if (error) return { error: error.message };
+    // Insert in batches of 50 to avoid Supabase payload limits
+    for (let i = 0; i < records.length; i += 50) {
+      const batch = records.slice(i, i + 50);
+      const { error } = await supabase.from("animal_experiments").insert(batch);
+      if (error) return { error: `Batch insert failed: ${error.message}` };
+    }
   }
 
   revalidatePath("/colony");
