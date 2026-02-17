@@ -216,6 +216,7 @@ export function BehaviorImportDialog({
     defaultExperimentType
   );
   const [importing, setImporting] = useState(false);
+  const [selectedAnimals, setSelectedAnimals] = useState<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Reset when dialog closes/opens
@@ -224,6 +225,7 @@ export function BehaviorImportDialog({
       setRawText("");
       setParsed(null);
       setSelectedMeasures(new Set());
+      setSelectedAnimals(new Set());
       setImporting(false);
       setTimepointAge(String(defaultTimepointAge));
       setExperimentType(defaultExperimentType);
@@ -335,6 +337,13 @@ export function BehaviorImportDialog({
     return { matched: matchMap, unmatched: unmatchedIds, allFileIds: allIds };
   }, [parsed, animals, cohorts]);
 
+  // ── Auto-select all matched animals when matching changes ──
+  useEffect(() => {
+    if (matched.size > 0) {
+      setSelectedAnimals(new Set(Array.from(matched.keys())));
+    }
+  }, [matched]);
+
   // ── Measure stats ──
   const getMeasureStats = useCallback((measure: ParsedMeasure) => {
     const values = Object.values(measure.data);
@@ -378,6 +387,7 @@ export function BehaviorImportDialog({
         if (!selectedMeasures.has(measure.key)) continue;
 
         for (const [fileId, value] of Object.entries(measure.data)) {
+          if (!selectedAnimals.has(fileId)) continue;
           const animal = matched.get(fileId);
           if (!animal) continue;
 
@@ -430,6 +440,7 @@ export function BehaviorImportDialog({
   }, [
     parsed,
     selectedMeasures,
+    selectedAnimals,
     matched,
     timepointAge,
     experimentType,
@@ -446,7 +457,7 @@ export function BehaviorImportDialog({
   }, [timepoints]);
 
   // ── Selected count that have actual matching animals ──
-  const matchedAnimalCount = matched.size;
+  const selectedAnimalCount = Array.from(selectedAnimals).filter((id) => matched.has(id)).length;
   const selectedCount = selectedMeasures.size;
 
   return (
@@ -544,6 +555,7 @@ export function BehaviorImportDialog({
                     setRawText("");
                     setParsed(null);
                     setSelectedMeasures(new Set());
+                    setSelectedAnimals(new Set());
                   }}
                 >
                   <X className="h-3 w-3" /> Clear & Re-paste
@@ -700,35 +712,121 @@ export function BehaviorImportDialog({
                 </ScrollArea>
               </div>
 
-              {/* ─── Animal Matching ─── */}
-              <div className="rounded-lg border p-3 space-y-2">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  {unmatched.length === 0 ? (
-                    <Check className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <AlertTriangle className="h-4 w-4 text-amber-500" />
-                  )}
-                  Animal Matching
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  <span className="text-green-600 dark:text-green-400 font-medium">
-                    {matchedAnimalCount} matched
-                  </span>
-                  {unmatched.length > 0 && (
-                    <>
-                      {" · "}
-                      <span className="text-amber-600 dark:text-amber-400 font-medium">
-                        {unmatched.length} unmatched
+              {/* ─── Animal Selection ─── */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-medium">
+                    Select Animals to Import
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      <span className="text-green-600 dark:text-green-400 font-medium">
+                        {matched.size} matched
                       </span>
-                      <span className="ml-1">({unmatched.join(", ")})</span>
-                    </>
-                  )}
+                      {unmatched.length > 0 && (
+                        <>
+                          {" · "}
+                          <span className="text-amber-600 dark:text-amber-400 font-medium">
+                            {unmatched.length} unmatched
+                          </span>
+                        </>
+                      )}
+                    </span>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-[11px]"
+                        onClick={() =>
+                          setSelectedAnimals(new Set(Array.from(matched.keys())))
+                        }
+                      >
+                        Select All
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-[11px]"
+                        onClick={() => setSelectedAnimals(new Set())}
+                      >
+                        Clear
+                      </Button>
+                    </div>
+                  </div>
                 </div>
+
+                <ScrollArea className="max-h-[200px] border rounded-lg">
+                  <div className="p-1.5 space-y-0.5">
+                    {allFileIds.map((fileId) => {
+                      const animal = matched.get(fileId);
+                      const isMatched = !!animal;
+                      const isSelected = selectedAnimals.has(fileId);
+                      const cohort = animal
+                        ? cohorts.find((c) => c.id === animal.cohort_id)
+                        : null;
+
+                      return (
+                        <label
+                          key={fileId}
+                          className={`flex items-center gap-3 px-3 py-1.5 rounded-md transition-colors ${
+                            !isMatched
+                              ? "opacity-40 cursor-not-allowed"
+                              : isSelected
+                              ? "bg-green-50 dark:bg-green-950/20 hover:bg-green-100 dark:hover:bg-green-950/30 cursor-pointer"
+                              : "hover:bg-muted/50 cursor-pointer"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected && isMatched}
+                            disabled={!isMatched}
+                            onChange={(e) => {
+                              const next = new Set(selectedAnimals);
+                              if (e.target.checked) next.add(fileId);
+                              else next.delete(fileId);
+                              setSelectedAnimals(next);
+                            }}
+                            className="rounded border-gray-300 text-green-600 focus:ring-green-500 h-4 w-4 shrink-0"
+                          />
+                          <div className="flex-1 min-w-0 flex items-center gap-2">
+                            <span className="text-xs font-mono text-muted-foreground shrink-0">
+                              {fileId}
+                            </span>
+                            {isMatched ? (
+                              <>
+                                <span className="text-xs">→</span>
+                                <span className="text-sm font-medium truncate">
+                                  {animal.identifier}
+                                </span>
+                                {cohort && (
+                                  <Badge variant="secondary" className="text-[10px] h-4 px-1">
+                                    {cohort.name}
+                                  </Badge>
+                                )}
+                                <span className="text-[10px] text-muted-foreground">
+                                  {animal.sex === "male" ? "♂" : "♀"}{" "}
+                                  {animal.genotype === "hemi"
+                                    ? "Hemi"
+                                    : animal.genotype === "wt"
+                                    ? "WT"
+                                    : "Het"}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-xs text-amber-600 dark:text-amber-400">
+                                No matching animal in colony
+                              </span>
+                            )}
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </ScrollArea>
                 {unmatched.length > 0 && (
                   <p className="text-[11px] text-muted-foreground">
-                    Unmatched animals will be skipped. Make sure animal
-                    identifiers in your colony (e.g. &quot;6-1&quot;,
-                    &quot;7-3&quot;) match the tracking file.
+                    Unmatched animals are shown but cannot be selected. Ensure
+                    identifiers in your colony match the tracking file format.
                   </p>
                 )}
               </div>
@@ -745,7 +843,7 @@ export function BehaviorImportDialog({
             <Button
               onClick={handleImport}
               disabled={
-                importing || selectedCount === 0 || matchedAnimalCount === 0
+                importing || selectedCount === 0 || selectedAnimalCount === 0
               }
               className="gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white"
             >
@@ -755,7 +853,7 @@ export function BehaviorImportDialog({
                 <Upload className="h-4 w-4" />
               )}
               Import {selectedCount} measure{selectedCount !== 1 ? "s" : ""} for{" "}
-              {matchedAnimalCount} animal{matchedAnimalCount !== 1 ? "s" : ""}
+              {selectedAnimalCount} animal{selectedAnimalCount !== 1 ? "s" : ""}
             </Button>
           </DialogFooter>
         )}
