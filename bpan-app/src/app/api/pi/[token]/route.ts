@@ -81,14 +81,24 @@ export async function GET(
     }
 
     if (canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("results")) {
-      const { data: expsData } = await supabase
-        .from("animal_experiments")
-        .select("*, animals(identifier)")
-        .eq("user_id", userId)
-        .order("scheduled_date")
-        .range(0, 9999);
+      // Paginate to avoid 1000-row limit
+      const allExpsData: Record<string, unknown>[] = [];
+      const PAGE = 1000;
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("animal_experiments")
+          .select("*, animals(identifier)")
+          .eq("user_id", userId)
+          .order("scheduled_date")
+          .range(from, from + PAGE - 1);
+        if (error || !data || data.length === 0) break;
+        allExpsData.push(...(data as Record<string, unknown>[]));
+        if (data.length < PAGE) break;
+        from += PAGE;
+      }
 
-      animalExperiments = (expsData || []).map((e: Record<string, unknown>) => ({
+      animalExperiments = allExpsData.map((e) => ({
         animal_identifier: (e.animals as { identifier: string } | null)?.identifier || "?",
         experiment_type: e.experiment_type,
         timepoint_age_days: e.timepoint_age_days,

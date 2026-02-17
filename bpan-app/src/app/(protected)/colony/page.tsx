@@ -51,35 +51,62 @@ import {
 } from "./actions";
 import { batchUpsertColonyResults } from "./result-actions";
 
+// Helper: paginate through ALL rows from a Supabase table (default limit is 1000)
+async function fetchAllRows<T>(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  table: string,
+  userId: string,
+  orderCol: string,
+  ascending = true,
+): Promise<T[]> {
+  const PAGE = 1000;
+  const allRows: T[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("*")
+      .eq("user_id", userId)
+      .order(orderCol, { ascending })
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    allRows.push(...(data as T[]));
+    if (data.length < PAGE) break; // last page
+    from += PAGE;
+  }
+  return allRows;
+}
+
 export default async function ColonyPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
+  // Fetch small tables normally, paginate large tables
   const [
     { data: breederCages },
     { data: cohorts },
-    { data: animals },
-    { data: animalExperiments },
     { data: timepoints },
     { data: advisorPortals },
     { data: meetingNotes },
-    { data: cageChanges },
     { data: colonyPhotos },
     { data: housingCages },
-    { data: colonyResults },
+    animalExperiments,
+    animals,
+    cageChanges,
+    colonyResults,
   ] = await Promise.all([
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
-    supabase.from("animals").select("*").eq("user_id", user.id).order("identifier").range(0, 4999),
-    supabase.from("animal_experiments").select("*").eq("user_id", user.id).order("scheduled_date").range(0, 9999),
     supabase.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
     supabase.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
-    supabase.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date").range(0, 4999),
     supabase.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
-    supabase.from("colony_results").select("*").eq("user_id", user.id).order("created_at").range(0, 9999),
+    fetchAllRows<AnimalExperiment>(supabase, "animal_experiments", user.id, "scheduled_date"),
+    fetchAllRows<Animal>(supabase, "animals", user.id, "identifier"),
+    fetchAllRows<CageChange>(supabase, "cage_changes", user.id, "scheduled_date"),
+    fetchAllRows<ColonyResult>(supabase, "colony_results", user.id, "created_at"),
   ]);
 
   return (

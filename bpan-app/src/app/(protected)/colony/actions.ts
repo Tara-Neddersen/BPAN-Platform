@@ -251,14 +251,26 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
 
   // If age_days changed, cascade to animal_experiments and colony_results
   if (oldAgeDays != null && oldAgeDays !== newAgeDays) {
-    // Update animal_experiments timepoint_age_days
-    const { data: affectedExps } = await supabase
-      .from("animal_experiments")
-      .select("id, animal_id")
-      .eq("user_id", user.id)
-      .eq("timepoint_age_days", oldAgeDays);
+    // Update animal_experiments timepoint_age_days (paginated fetch)
+    const affectedExps: { id: string; animal_id: string }[] = [];
+    {
+      const PAGE = 1000;
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("animal_experiments")
+          .select("id, animal_id")
+          .eq("user_id", user.id)
+          .eq("timepoint_age_days", oldAgeDays)
+          .range(from, from + PAGE - 1);
+        if (error || !data || data.length === 0) break;
+        affectedExps.push(...data);
+        if (data.length < PAGE) break;
+        from += PAGE;
+      }
+    }
 
-    if (affectedExps && affectedExps.length > 0) {
+    if (affectedExps.length > 0) {
       // Get birth dates for all affected animals to recalculate scheduled_date
       const animalIds = [...new Set(affectedExps.map(e => e.animal_id))];
       const { data: animalData } = await supabase
@@ -599,17 +611,29 @@ export async function scheduleExperimentsForCohort(
 
   if (timepoints.length === 0) return { error: "No matching timepoints found." };
 
-  // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (one query) ──
+  // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (paginated) ──
   const animalIds = cohortAnimals.map(a => a.id);
-  const { data: allExisting } = await supabase
-    .from("animal_experiments")
-    .select("animal_id, experiment_type, timepoint_age_days")
-    .in("animal_id", animalIds)
-    .eq("user_id", user.id);
+  const allExisting: { animal_id: string; experiment_type: string; timepoint_age_days: number }[] = [];
+  {
+    const PAGE = 1000;
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from("animal_experiments")
+        .select("animal_id, experiment_type, timepoint_age_days")
+        .in("animal_id", animalIds)
+        .eq("user_id", user.id)
+        .range(from, from + PAGE - 1);
+      if (error || !data || data.length === 0) break;
+      allExisting.push(...data);
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+  }
 
   // Build a set of "animalId::type::tp" for quick lookup
   const existingSet = new Set(
-    (allExisting || []).map(e => `${e.animal_id}::${e.experiment_type}::${e.timepoint_age_days}`)
+    allExisting.map(e => `${e.animal_id}::${e.experiment_type}::${e.timepoint_age_days}`)
   );
   // Track if EEG implant exists per animal
   const animalHasEegImplant = new Set(
@@ -811,27 +835,34 @@ export async function deleteExperimentsForCohort(
 
   const animalIds = cohortAnimals.map(a => a.id);
 
-  // Get IDs of experiments to delete
-  let idsQuery = supabase
-    .from("animal_experiments")
-    .select("id")
-    .in("animal_id", animalIds)
-    .eq("user_id", user.id);
-
-  if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
-    idsQuery = idsQuery.in("timepoint_age_days", onlyTimepointAgeDays);
+  // Get IDs of experiments to delete (paginated to avoid 1000-row limit)
+  const allIds: string[] = [];
+  {
+    const PAGE = 1000;
+    let from = 0;
+    while (true) {
+      let q = supabase
+        .from("animal_experiments")
+        .select("id")
+        .in("animal_id", animalIds)
+        .eq("user_id", user.id);
+      if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
+        q = q.in("timepoint_age_days", onlyTimepointAgeDays);
+      }
+      if (onlyStatuses && onlyStatuses.length > 0) {
+        q = q.in("status", onlyStatuses);
+      }
+      const { data, error } = await q.range(from, from + PAGE - 1);
+      if (error || !data || data.length === 0) break;
+      allIds.push(...data.map(r => r.id));
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
   }
-  if (onlyStatuses && onlyStatuses.length > 0) {
-    idsQuery = idsQuery.in("status", onlyStatuses);
-  }
 
-  const { data: rows } = await idsQuery;
-  const deleteCount = rows?.length ?? 0;
-
-  if (rows && rows.length > 0) {
-    // Delete in batches of 100 to avoid query size limits
-    for (let i = 0; i < rows.length; i += 100) {
-      const batch = rows.slice(i, i + 100).map(r => r.id);
+  if (allIds.length > 0) {
+    for (let i = 0; i < allIds.length; i += 100) {
+      const batch = allIds.slice(i, i + 100);
       const { error } = await supabase
         .from("animal_experiments")
         .delete()
@@ -841,7 +872,7 @@ export async function deleteExperimentsForCohort(
   }
 
   revalidatePath("/colony");
-  return { success: true, deleted: deleteCount, animals: cohortAnimals.length };
+  return { success: true, deleted: allIds.length, animals: cohortAnimals.length };
 }
 
 // ─── Grace Period / Reschedule ──────────────────────────────────────────
