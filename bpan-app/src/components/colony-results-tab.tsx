@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Loader2, Save, ChevronDown, ChevronRight, Plus, Trash2, Check, Upload, Eye, EyeOff, X } from "lucide-react";
+import { Loader2, Save, ChevronDown, ChevronRight, Plus, Trash2, Check, Upload, Eye, EyeOff, X, Camera, ExternalLink, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -113,6 +113,9 @@ const GENOTYPE_LABELS: Record<string, string> = {
   wt: "WT",
   het: "Het",
 };
+
+// Experiments that use cage image uploads vs raw data URL links
+const IMAGE_EXPERIMENTS = new Set(["nesting", "marble"]);
 
 // ─── Props ───────────────────────────────────────────────────────────
 
@@ -259,6 +262,7 @@ export function ColonyResultsTab({
 
       const measures = result.measures as Record<string, unknown>;
       for (const key of Object.keys(measures)) {
+        if (key.startsWith("__")) continue; // Skip internal fields (__cage_image, __raw_data_url)
         if (measures[key] === null) continue;
         if (defaultKeys.has(key) || customKeys.has(key) || detectedKeys.has(key)) continue;
 
@@ -299,6 +303,7 @@ export function ColonyResultsTab({
         if (r.experiment_type !== exp) continue;
         const m = r.measures as Record<string, unknown>;
         for (const [k, v] of Object.entries(m)) {
+          if (k.startsWith("__")) continue; // Skip internal fields
           if (v !== null && v !== undefined && v !== "") keysWithData.add(k);
         }
       }
@@ -790,6 +795,9 @@ export function ColonyResultsTab({
                               <th className="text-left px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[120px]">
                                 Notes
                               </th>
+                              <th className="text-center px-2 py-2 font-medium text-xs text-muted-foreground bg-background min-w-[80px]">
+                                {IMAGE_EXPERIMENTS.has(exp) ? "📷 Cage" : "🔗 Data"}
+                              </th>
                               <th className="text-center px-2 py-2 font-medium text-xs text-muted-foreground bg-background w-[50px]">
                                 ✓
                               </th>
@@ -809,6 +817,7 @@ export function ColonyResultsTab({
                                 updateMeasure={updateMeasure}
                                 updateNotes={updateNotes}
                                 dirtyKeys={dirtyKeys}
+                                isImageExperiment={IMAGE_EXPERIMENTS.has(exp)}
                               />
                             ))}
                           </tbody>
@@ -855,6 +864,7 @@ interface CohortGroupProps {
   updateMeasure: (animalId: string, tp: number, exp: string, fieldKey: string, value: string) => void;
   updateNotes: (animalId: string, tp: number, exp: string, notes: string) => void;
   dirtyKeys: Set<string>;
+  isImageExperiment: boolean;
 }
 
 function CohortGroup({
@@ -868,6 +878,7 @@ function CohortGroup({
   updateMeasure,
   updateNotes,
   dirtyKeys,
+  isImageExperiment,
 }: CohortGroupProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -883,7 +894,7 @@ function CohortGroup({
         className="border-b bg-muted/20 cursor-pointer hover:bg-muted/40 transition-colors"
         onClick={() => setCollapsed(!collapsed)}
       >
-        <td colSpan={fields.length + 5} className="px-2 py-1.5">
+        <td colSpan={fields.length + 6} className="px-2 py-1.5">
           <div className="flex items-center gap-2">
             {collapsed ? (
               <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
@@ -981,6 +992,26 @@ function CohortGroup({
                   onChange={(e) => updateNotes(animal.id, timepoint, experiment, e.target.value)}
                 />
               </td>
+              <td className="px-1 py-1">
+                {isImageExperiment ? (
+                  <CageImageCell
+                    animalId={animal.id}
+                    experiment={experiment}
+                    timepoint={timepoint}
+                    currentPath={data.measures.__cage_image as string | null}
+                    onUploaded={(path) =>
+                      updateMeasure(animal.id, timepoint, experiment, "__cage_image", path)
+                    }
+                  />
+                ) : (
+                  <RawDataLinkCell
+                    currentUrl={data.measures.__raw_data_url as string | null}
+                    onChange={(url) =>
+                      updateMeasure(animal.id, timepoint, experiment, "__raw_data_url", url)
+                    }
+                  />
+                )}
+              </td>
               <td className="px-2 py-1.5 text-center">
                 {hasData ? (
                   <span className="text-green-600">
@@ -996,6 +1027,230 @@ function CohortGroup({
           );
         })}
     </>
+  );
+}
+
+// ─── Cage Image Upload Cell (nesting/marble burying) ────────────────
+
+function CageImageCell({
+  animalId,
+  experiment,
+  timepoint,
+  currentPath,
+  onUploaded,
+}: {
+  animalId: string;
+  experiment: string;
+  timepoint: number;
+  currentPath: string | null;
+  onUploaded: (path: string) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const fileRef = useCallback((input: HTMLInputElement | null) => {
+    if (input) input.value = "";
+  }, []);
+
+  const handleUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      setUploading(true);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("animal_id", animalId);
+        formData.append("experiment_type", experiment);
+        formData.append("timepoint_age", String(timepoint));
+
+        const res = await fetch("/api/colony-image", {
+          method: "POST",
+          body: formData,
+        });
+
+        const json = await res.json();
+        if (json.error) {
+          toast.error(json.error);
+        } else {
+          toast.success("Image uploaded!");
+          onUploaded(json.path);
+          if (json.url) setPreviewUrl(json.url);
+        }
+      } catch {
+        toast.error("Upload failed");
+      } finally {
+        setUploading(false);
+      }
+    },
+    [animalId, experiment, timepoint, onUploaded]
+  );
+
+  const handleView = useCallback(async () => {
+    if (previewUrl) {
+      setShowPreview(true);
+      return;
+    }
+    if (!currentPath) return;
+
+    try {
+      const res = await fetch(`/api/colony-image?path=${encodeURIComponent(currentPath)}`);
+      const json = await res.json();
+      if (json.url) {
+        setPreviewUrl(json.url);
+        setShowPreview(true);
+      }
+    } catch {
+      toast.error("Could not load image");
+    }
+  }, [currentPath, previewUrl]);
+
+  return (
+    <div className="flex items-center gap-1 min-w-[70px]">
+      {currentPath ? (
+        <>
+          <button
+            onClick={handleView}
+            className="text-green-600 hover:text-green-800 transition-colors"
+            title="View cage image"
+          >
+            <ImageIcon className="w-4 h-4" />
+          </button>
+          <label className="cursor-pointer text-muted-foreground hover:text-foreground transition-colors" title="Replace image">
+            <Camera className="w-3.5 h-3.5" />
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleUpload}
+              disabled={uploading}
+            />
+          </label>
+        </>
+      ) : (
+        <label className="cursor-pointer flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors" title="Upload cage image">
+          {uploading ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Camera className="w-4 h-4" />
+          )}
+          <span className="text-[10px]">Upload</span>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleUpload}
+            disabled={uploading}
+          />
+        </label>
+      )}
+
+      {/* Image preview modal */}
+      {showPreview && previewUrl && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setShowPreview(false)}
+        >
+          <div
+            className="relative max-w-3xl max-h-[85vh] bg-white dark:bg-zinc-900 rounded-lg overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="absolute top-2 right-2 z-10 bg-black/60 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-black/80"
+              onClick={() => setShowPreview(false)}
+            >
+              ✕
+            </button>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={previewUrl}
+              alt="Cage image"
+              className="max-w-full max-h-[80vh] object-contain"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Raw Data URL Link Cell (all other tests) ───────────────────────
+
+function RawDataLinkCell({
+  currentUrl,
+  onChange,
+}: {
+  currentUrl: string | null;
+  onChange: (url: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [inputVal, setInputVal] = useState(currentUrl || "");
+
+  const hasUrl = !!(currentUrl && currentUrl.trim());
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1 min-w-[70px]">
+        <Input
+          className="h-6 text-[10px] w-full min-w-[120px]"
+          placeholder="Paste Google Drive URL..."
+          value={inputVal}
+          autoFocus
+          onChange={(e) => setInputVal(e.target.value)}
+          onBlur={() => {
+            onChange(inputVal);
+            setEditing(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onChange(inputVal);
+              setEditing(false);
+            }
+            if (e.key === "Escape") setEditing(false);
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1 min-w-[70px]">
+      {hasUrl ? (
+        <>
+          <a
+            href={currentUrl!}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-800 transition-colors"
+            title={currentUrl!}
+          >
+            <ExternalLink className="w-4 h-4" />
+          </a>
+          <button
+            onClick={() => {
+              setInputVal(currentUrl || "");
+              setEditing(true);
+            }}
+            className="text-muted-foreground hover:text-foreground text-[10px]"
+            title="Edit URL"
+          >
+            ✎
+          </button>
+        </>
+      ) : (
+        <button
+          onClick={() => setEditing(true)}
+          className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+          title="Add Google Drive or data URL"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          <span className="text-[10px]">Add link</span>
+        </button>
+      )}
+    </div>
   );
 }
 

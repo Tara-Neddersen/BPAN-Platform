@@ -254,6 +254,7 @@ function ColonyResultsView({
     for (const r of filteredResults) {
       if (r.measures && typeof r.measures === "object") {
         for (const k of Object.keys(r.measures as Record<string, unknown>)) {
+          if (k.startsWith("__")) continue; // Skip internal fields
           keys.add(k);
         }
       }
@@ -490,6 +491,7 @@ function PIAnalysisPanel({
       const m = r.measures as Record<string, unknown> | null;
       if (!m) continue;
       for (const [k, v] of Object.entries(m)) {
+        if (k.startsWith("__")) continue; // Skip internal fields
         if (typeof v === "number") keys.add(k);
       }
     }

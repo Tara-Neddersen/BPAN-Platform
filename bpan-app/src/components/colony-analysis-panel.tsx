@@ -286,6 +286,7 @@ export function ColonyAnalysisPanel({
 
       const measures = result.measures as Record<string, string | number | null>;
       for (const [key, value] of Object.entries(measures)) {
+        if (key.startsWith("__")) continue; // Skip internal fields (__cage_image, __raw_data_url)
         if (value !== null && value !== undefined) {
           row[key] = typeof value === "string" && !isNaN(Number(value)) ? Number(value) : value;
           keySet.add(key);
