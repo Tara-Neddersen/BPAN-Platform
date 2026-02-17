@@ -544,7 +544,7 @@ export function ColonyClient({
       </Card>
 
       <Tabs defaultValue="animals">
-        <TabsList className="w-full flex flex-wrap h-auto gap-1 p-1">
+        <TabsList className="w-full flex flex-wrap gap-1 p-1" style={{ height: "auto" }}>
           <TabsTrigger value="animals" className="flex-1 min-w-[80px]">Animals</TabsTrigger>
           <TabsTrigger value="cohorts" className="flex-1 min-w-[80px]">Cohorts</TabsTrigger>
           <TabsTrigger value="timepoints" className="flex-1 min-w-[80px]">Timepoints</TabsTrigger>
