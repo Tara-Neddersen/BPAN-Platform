@@ -922,5 +922,15 @@ CREATE POLICY "Users manage own tasks" ON public.tasks FOR ALL USING (auth.uid()
 CREATE OR REPLACE TRIGGER on_tasks_updated BEFORE UPDATE ON public.tasks FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 -- ============================================================
+-- 017: Grace Period for experiment timepoints
+-- ============================================================
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'colony_timepoints' AND column_name = 'grace_period_days') THEN
+    ALTER TABLE public.colony_timepoints ADD COLUMN grace_period_days int DEFAULT 30;
+  END IF;
+END $$;
+
+-- ============================================================
 -- DONE! All tables created successfully.
 -- ============================================================

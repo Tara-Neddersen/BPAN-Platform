@@ -43,6 +43,7 @@ import {
   updateHousingCage,
   deleteHousingCage,
   assignAnimalToCage,
+  rescheduleTimepointExperiments,
 } from "./actions";
 
 export default async function ColonyPage() {
@@ -125,6 +126,7 @@ export default async function ColonyPage() {
           updateHousingCage,
           deleteHousingCage,
           assignAnimalToCage,
+          rescheduleTimepointExperiments,
         }}
       />
     </div>

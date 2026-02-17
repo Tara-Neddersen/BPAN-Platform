@@ -360,6 +360,7 @@ export interface ColonyTimepoint {
   includes_eeg_implant: boolean;
   eeg_recovery_days: number;
   eeg_recording_days: number;
+  grace_period_days: number;
   sort_order: number;
   notes: string | null;
   created_at: string;

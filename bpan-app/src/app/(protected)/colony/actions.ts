@@ -193,6 +193,7 @@ export async function createColonyTimepoint(formData: FormData) {
     includes_eeg_implant: formData.get("includes_eeg_implant") === "true",
     eeg_recovery_days: parseInt(formData.get("eeg_recovery_days") as string) || 14,
     eeg_recording_days: parseInt(formData.get("eeg_recording_days") as string) || 3,
+    grace_period_days: parseInt(formData.get("grace_period_days") as string) || 30,
     sort_order: parseInt(formData.get("sort_order") as string) || 0,
     notes: (formData.get("notes") as string) || null,
   });
@@ -219,6 +220,7 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
       includes_eeg_implant: formData.get("includes_eeg_implant") === "true",
       eeg_recovery_days: parseInt(formData.get("eeg_recovery_days") as string) || 14,
       eeg_recording_days: parseInt(formData.get("eeg_recording_days") as string) || 3,
+      grace_period_days: parseInt(formData.get("grace_period_days") as string) || 30,
       sort_order: parseInt(formData.get("sort_order") as string) || 0,
       notes: (formData.get("notes") as string) || null,
     })
@@ -415,6 +417,106 @@ export async function scheduleExperimentsForAnimal(animalId: string, birthDate: 
 
   revalidatePath("/colony");
   return { success: true, count: records.length };
+}
+
+// ─── Grace Period / Reschedule ──────────────────────────────────────────
+
+/**
+ * Reschedule remaining experiments for an animal at a specific timepoint.
+ * When experiments fall behind, this shifts all incomplete experiments forward
+ * so they run in sequence starting from `newStartDate`.
+ *
+ * Rules:
+ *  - Grace period is AFTER the timepoint only (e.g. 60-day TP → must finish by day 90 if grace=30)
+ *  - Completed/skipped experiments are not moved
+ *  - Only incomplete (pending/scheduled/in_progress) experiments are shifted
+ */
+export async function rescheduleTimepointExperiments(
+  animalId: string,
+  timepointAgeDays: number,
+  newStartDate: string,
+  birthDate: string,
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  // Get the timepoint config to check grace period
+  const { data: tp } = await supabase
+    .from("colony_timepoints")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("age_days", timepointAgeDays)
+    .single();
+
+  if (!tp) return { error: "Timepoint not found" };
+
+  const graceDays = tp.grace_period_days ?? 30;
+  const birth = new Date(birthDate);
+  const DAY = 24 * 60 * 60 * 1000;
+
+  // Hard deadline = birth + age_days + grace_period_days
+  const deadline = new Date(birth.getTime() + (timepointAgeDays + graceDays) * DAY);
+  const newStart = new Date(newStartDate);
+
+  // Get all incomplete experiments for this animal + timepoint
+  const { data: exps } = await supabase
+    .from("animal_experiments")
+    .select("*")
+    .eq("animal_id", animalId)
+    .eq("user_id", user.id)
+    .eq("timepoint_age_days", timepointAgeDays)
+    .in("status", ["pending", "scheduled", "in_progress"])
+    .order("scheduled_date", { ascending: true });
+
+  if (!exps || exps.length === 0) return { success: true, message: "No experiments to reschedule" };
+
+  // Build the offset map from PROTOCOL_SCHEDULE
+  const offsetMap = new Map<string, number>();
+  for (const step of PROTOCOL_SCHEDULE) {
+    offsetMap.set(step.type, step.dayOffset);
+  }
+
+  // Sort experiments by their protocol order (dayOffset)
+  const sorted = [...exps].sort((a, b) => {
+    const oa = offsetMap.get(a.experiment_type) ?? 99;
+    const ob = offsetMap.get(b.experiment_type) ?? 99;
+    return oa - ob;
+  });
+
+  // Reschedule: sequential from newStartDate, maintaining relative offsets
+  const firstOffset = offsetMap.get(sorted[0].experiment_type) ?? 0;
+  const updates: { id: string; scheduled_date: string }[] = [];
+  let lastDate = newStart;
+
+  for (const exp of sorted) {
+    const origOffset = offsetMap.get(exp.experiment_type) ?? 0;
+    // Days after the first incomplete experiment in the original protocol
+    const relOffset = origOffset - firstOffset;
+    const newDate = new Date(newStart.getTime() + Math.max(0, relOffset) * DAY);
+
+    // Check against deadline
+    if (newDate > deadline) {
+      return {
+        error: `Cannot reschedule — "${exp.experiment_type.replace(/_/g, " ")}" would fall on ${newDate.toISOString().split("T")[0]}, past the grace deadline of ${deadline.toISOString().split("T")[0]} (${timepointAgeDays}d + ${graceDays}d grace).`,
+      };
+    }
+
+    updates.push({ id: exp.id, scheduled_date: newDate.toISOString().split("T")[0] });
+    lastDate = newDate;
+  }
+
+  // Apply all updates
+  for (const u of updates) {
+    await supabase
+      .from("animal_experiments")
+      .update({ scheduled_date: u.scheduled_date, status: "scheduled" })
+      .eq("id", u.id)
+      .eq("user_id", user.id);
+  }
+
+  revalidatePath("/colony");
+  return { success: true, rescheduled: updates.length, lastDate: lastDate.toISOString().split("T")[0] };
 }
 
 // ─── Advisor Portal ─────────────────────────────────────────────────────

@@ -130,6 +130,7 @@ interface ColonyClientProps {
     updateHousingCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     deleteHousingCage: (id: string) => Promise<{ success?: boolean; error?: string }>;
     assignAnimalToCage: (animalId: string, housingCageId: string | null) => Promise<{ success?: boolean; error?: string }>;
+    rescheduleTimepointExperiments: (animalId: string, timepointAgeDays: number, newStartDate: string, birthDate: string) => Promise<{ success?: boolean; error?: string; rescheduled?: number; lastDate?: string; message?: string }>;
   };
 }
 
@@ -689,6 +690,7 @@ export function ColonyClient({
                         </div>
                         <div className="text-xs text-muted-foreground mt-1.5 flex flex-wrap gap-3">
                           <span>Handle {tp.handling_days_before}d before</span>
+                          <span>Grace: {tp.grace_period_days ?? 30}d after</span>
                           {tp.includes_eeg_implant && (
                             <span className="text-purple-600">
                               + EEG implant → {tp.eeg_recovery_days}d recovery → {tp.eeg_recording_days}d recording
@@ -1173,6 +1175,10 @@ export function ColonyClient({
                 <Input name="handling_days_before" type="number" defaultValue={editingTP?.handling_days_before ?? 5} />
               </div>
               <div>
+                <Label className="text-xs">Grace Period (days)</Label>
+                <Input name="grace_period_days" type="number" defaultValue={editingTP?.grace_period_days ?? 30} min={0} />
+              </div>
+              <div>
                 <Label className="text-xs">Sort Order</Label>
                 <Input name="sort_order" type="number" defaultValue={editingTP?.sort_order ?? 0} />
               </div>
@@ -1387,6 +1393,16 @@ export function ColonyClient({
               onSchedule={() => handleScheduleAll(selectedAnimal)}
               onUpdateStatus={handleUpdateExpStatus}
               onSaveResultUrl={handleSaveResultUrl}
+              onReschedule={async (timepointAgeDays: number, newStartDate: string) => {
+                const res = await actions.rescheduleTimepointExperiments(
+                  selectedAnimal.id,
+                  timepointAgeDays,
+                  newStartDate,
+                  selectedAnimal.birth_date,
+                );
+                if (res.error) { toast.error(res.error); }
+                else { toast.success(`Rescheduled ${res.rescheduled} experiments (last: ${res.lastDate})`); await refetchAll(); }
+              }}
               onEdit={() => { setEditingAnimal(selectedAnimal); setSelectedAnimal(null); }}
               onDelete={() => { act(actions.deleteAnimal(selectedAnimal.id)); setSelectedAnimal(null); }}
               busy={busy}
@@ -1409,6 +1425,7 @@ function AnimalDetail({
   onSchedule,
   onUpdateStatus,
   onSaveResultUrl,
+  onReschedule,
   onEdit,
   onDelete,
   busy,
@@ -1421,6 +1438,7 @@ function AnimalDetail({
   onSchedule: () => void;
   onUpdateStatus: (id: string, status: string) => void;
   onSaveResultUrl: (id: string, url: string) => void;
+  onReschedule: (timepointAgeDays: number, newStartDate: string) => Promise<void>;
   onEdit: () => void;
   onDelete: () => void;
   busy: boolean;
@@ -1428,6 +1446,8 @@ function AnimalDetail({
   const age = daysOld(animal.birth_date);
   const [resultUrls, setResultUrls] = useState<Record<string, string>>({});
   const [uploading, setUploading] = useState<string | null>(null);
+  const [rescheduling, setRescheduling] = useState<number | null>(null); // which timepoint is being rescheduled
+  const [rescheduleDate, setRescheduleDate] = useState("");
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   async function handleFileUpload(expId: string, experimentType: string, file: File) {
@@ -1520,16 +1540,91 @@ function AnimalDetail({
         </div>
       ) : (
         <div className="space-y-4">
-          {grouped.map(({ ageDays, experiments: exps }) => (
+          {grouped.map(({ ageDays, experiments: exps }) => {
+            const tp = timepoints.find((t) => t.age_days === ageDays);
+            const graceDays = tp?.grace_period_days ?? 30;
+            const birth = new Date(animal.birth_date);
+            const DAY = 24 * 60 * 60 * 1000;
+            const tpDate = new Date(birth.getTime() + ageDays * DAY);
+            const deadlineDate = new Date(birth.getTime() + (ageDays + graceDays) * DAY);
+            const today = new Date();
+            const incomplete = exps.filter((e) => e.status !== "completed" && e.status !== "skipped");
+            const allDone = incomplete.length === 0;
+            const pastDeadline = !allDone && today > deadlineDate;
+            const inGracePeriod = !allDone && today > tpDate && today <= deadlineDate;
+            const daysLeft = Math.ceil((deadlineDate.getTime() - today.getTime()) / DAY);
+
+            return (
             <div key={ageDays}>
-              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                {ageDays}-Day Timepoint
-              </h4>
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {ageDays}-Day Timepoint
+                </h4>
+                {allDone && (
+                  <Badge className="bg-green-100 text-green-700 text-[10px]">
+                    <CheckCircle2 className="h-3 w-3 mr-0.5" /> All Complete
+                  </Badge>
+                )}
+                {inGracePeriod && (
+                  <Badge className="bg-amber-100 text-amber-700 text-[10px]">
+                    <AlertTriangle className="h-3 w-3 mr-0.5" /> Grace Period ({daysLeft}d left)
+                  </Badge>
+                )}
+                {pastDeadline && (
+                  <Badge className="bg-red-100 text-red-700 text-[10px]">
+                    <AlertTriangle className="h-3 w-3 mr-0.5" /> Past Deadline!
+                  </Badge>
+                )}
+                {!allDone && !pastDeadline && (
+                  <span className="text-[10px] text-muted-foreground">
+                    Deadline: {deadlineDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </span>
+                )}
+                {incomplete.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-5 text-[10px] px-2 ml-auto"
+                    onClick={() => { setRescheduling(rescheduling === ageDays ? null : ageDays); setRescheduleDate(new Date().toISOString().split("T")[0]); }}
+                  >
+                    <RefreshCw className="h-3 w-3 mr-0.5" /> Reschedule
+                  </Button>
+                )}
+              </div>
+              {rescheduling === ageDays && (
+                <div className="flex items-center gap-2 mb-2 bg-muted/50 rounded-md p-2">
+                  <span className="text-xs text-muted-foreground">New start date:</span>
+                  <Input
+                    type="date"
+                    className="h-7 text-xs w-40"
+                    value={rescheduleDate}
+                    onChange={(e) => setRescheduleDate(e.target.value)}
+                    min={new Date().toISOString().split("T")[0]}
+                    max={deadlineDate.toISOString().split("T")[0]}
+                  />
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={!rescheduleDate || busy}
+                    onClick={async () => {
+                      await onReschedule(ageDays, rescheduleDate);
+                      setRescheduling(null);
+                    }}
+                  >
+                    {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : "Apply"}
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setRescheduling(null)}>Cancel</Button>
+                  <span className="text-[10px] text-muted-foreground">
+                    Must finish by {deadlineDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ({graceDays}d grace)
+                  </span>
+                </div>
+              )}
               <div className="space-y-1.5">
                 {exps.map((exp) => {
                   const dLeft = exp.scheduled_date ? daysUntil(exp.scheduled_date) : null;
+                  const isOverdue = dLeft !== null && dLeft < 0 && exp.status !== "completed" && exp.status !== "skipped";
                   return (
-                    <div key={exp.id} className="flex items-center gap-2 text-sm rounded-md border p-2 flex-wrap">
+                    <div key={exp.id} className={`flex items-center gap-2 text-sm rounded-md border p-2 flex-wrap ${isOverdue ? "border-red-300 bg-red-50/50 dark:bg-red-950/20" : ""}`}>
                       <Badge className={`${STATUS_COLORS[exp.status]} text-xs`} variant="secondary">
                         {exp.status}
                       </Badge>
@@ -1537,10 +1632,11 @@ function AnimalDetail({
                         {EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}
                       </span>
                       {exp.scheduled_date && (
-                        <span className="text-xs text-muted-foreground">
+                        <span className={`text-xs ${isOverdue ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
                           {exp.scheduled_date}
-                          {dLeft !== null && dLeft > 0 && ` (${dLeft}d)`}
-                          {dLeft !== null && dLeft <= 0 && dLeft >= -1 && " (TODAY!)"}
+                          {dLeft !== null && dLeft > 0 && ` (in ${dLeft}d)`}
+                          {dLeft !== null && dLeft === 0 && " (TODAY!)"}
+                          {isOverdue && ` (${Math.abs(dLeft!)}d overdue)`}
                         </span>
                       )}
 
@@ -1616,7 +1712,8 @@ function AnimalDetail({
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
