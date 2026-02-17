@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { summarizePaper } from "@/lib/ai";
+import { createClient } from "@/lib/supabase/server";
+import { buildLightContext } from "@/lib/ai-context";
 
 export async function POST(request: Request) {
   try {
@@ -12,7 +14,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const summary = await summarizePaper(title, abstract);
+    // Get user context for personalized summaries
+    let researchContext: string | undefined;
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        researchContext = await buildLightContext(user.id);
+      }
+    } catch {
+      // If context fetch fails, proceed without it
+    }
+
+    const summary = await summarizePaper(title, abstract, researchContext);
     return NextResponse.json({ summary });
   } catch (err) {
     console.error("Summarize error:", err);

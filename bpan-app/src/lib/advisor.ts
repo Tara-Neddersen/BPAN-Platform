@@ -18,6 +18,7 @@ export interface AdvisorContext {
   recentNotes: NoteWithPaper[];
   savedPapers: SavedPaper[];
   hypotheses: Hypothesis[];
+  aiMemories?: Array<{ category: string; content: string; confidence: string }>;
   currentPage?: string; // e.g. "paper:uuid", "notes", "dashboard"
 }
 
@@ -67,6 +68,19 @@ If you don't know something, say so clearly rather than guessing.`);
       return line;
     }).join("\n");
     parts.push(`\n--- ACTIVE HYPOTHESES ---\n${hypoText}`);
+  }
+
+  // AI Memory — accumulated learnings from all interactions
+  if (ctx.aiMemories?.length) {
+    const grouped = new Map<string, string[]>();
+    for (const m of ctx.aiMemories) {
+      if (!grouped.has(m.category)) grouped.set(m.category, []);
+      grouped.get(m.category)!.push(`  • ${m.content} [${m.confidence}]`);
+    }
+    const memText = [...grouped.entries()]
+      .map(([cat, items]) => `${cat.replace(/_/g, " ").toUpperCase()}:\n${items.join("\n")}`)
+      .join("\n\n");
+    parts.push(`\n--- ACCUMULATED AI MEMORY (${ctx.aiMemories.length} remembered facts) ---\nThese are facts, preferences, and insights you've learned about this student over time. Use them to give more personalized, relevant advice.\n${memText}`);
   }
 
   // Recent notes (last 15 for context window management)

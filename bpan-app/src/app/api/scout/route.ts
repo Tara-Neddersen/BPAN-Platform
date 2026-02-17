@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { searchPubMed } from "@/lib/pubmed";
 import { scoutAnalyzePaper } from "@/lib/ai";
+import { buildLightContext } from "@/lib/ai-context";
 
 /**
  * POST /api/scout
@@ -63,14 +64,8 @@ export async function POST(request: Request) {
 
     const savedPmids = new Set(savedPapers?.map((p) => p.pmid).filter(Boolean) || []);
 
-    // 4. Get user's research context if available
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("research_context")
-      .eq("id", user.id)
-      .single();
-
-    const researchContext = profile?.research_context || "";
+    // 4. Get unified AI context (includes research context, memories, hypotheses, etc.)
+    const researchContext = await buildLightContext(user.id);
 
     // 5. Search & analyze
     const findings: Array<{

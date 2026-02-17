@@ -503,3 +503,33 @@ export interface ScoutRun {
   last_run_at: string;
   created_at: string;
 }
+
+// ─── AI Memory ──────────────────────────────────────────────────────────
+
+export type MemoryCategory =
+  | "research_fact"
+  | "hypothesis"
+  | "experiment_insight"
+  | "preference"
+  | "meeting_decision"
+  | "literature_pattern"
+  | "troubleshooting"
+  | "goal"
+  | "connection"
+  | "important_date";
+
+export type MemoryConfidence = "low" | "medium" | "high" | "confirmed";
+
+export interface AIMemory {
+  id: string;
+  user_id: string;
+  category: MemoryCategory;
+  content: string;
+  source: string | null;
+  confidence: MemoryConfidence;
+  tags: string[];
+  is_auto: boolean;
+  is_pinned: boolean;
+  created_at: string;
+  updated_at: string;
+}

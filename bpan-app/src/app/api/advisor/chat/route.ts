@@ -8,6 +8,7 @@ import type {
   NoteWithPaper,
   SavedPaper,
 } from "@/types";
+import { extractAndStoreMemories } from "@/lib/ai-context";
 
 /**
  * POST /api/advisor/chat
@@ -33,12 +34,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Fetch user's full research context in parallel
+    // 1. Fetch user's full research context in parallel (including AI memories)
     const [
       { data: researchContext },
       { data: hypotheses },
       { data: recentNotes },
       { data: savedPapers },
+      { data: aiMemories },
     ] = await Promise.all([
       supabase
         .from("research_context")
@@ -62,6 +64,13 @@ export async function POST(request: Request) {
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .limit(20),
+      supabase
+        .from("ai_memory")
+        .select("category, content, confidence")
+        .eq("user_id", user.id)
+        .order("is_pinned", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(40),
     ]);
 
     const advisorContext: AdvisorContext = {
@@ -69,6 +78,7 @@ export async function POST(request: Request) {
       recentNotes: (recentNotes as NoteWithPaper[]) || [],
       savedPapers: (savedPapers as SavedPaper[]) || [],
       hypotheses: (hypotheses as Hypothesis[]) || [],
+      aiMemories: (aiMemories as Array<{ category: string; content: string; confidence: string }>) || [],
     };
 
     // 2. Handle conversation — create or reuse
@@ -126,6 +136,14 @@ export async function POST(request: Request) {
       role: "assistant",
       content: response,
     });
+
+    // 7. Auto-extract key facts into AI memory (background, don't block response)
+    extractAndStoreMemories(
+      user.id,
+      message,
+      response,
+      `advisor_chat:${convId}`,
+    ).catch((err) => console.warn("Memory extraction failed:", err));
 
     return NextResponse.json({
       response,

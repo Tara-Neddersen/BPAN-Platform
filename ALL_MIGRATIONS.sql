@@ -976,5 +976,34 @@ DROP POLICY IF EXISTS "Users manage own scout runs" ON public.scout_runs;
 CREATE POLICY "Users manage own scout runs" ON public.scout_runs FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
 -- ============================================================
+-- 019: AI Memory (Unified memory for all AI agents)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.ai_memory (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  category text NOT NULL CHECK (category IN (
+    'research_fact', 'hypothesis', 'experiment_insight', 'preference',
+    'meeting_decision', 'literature_pattern', 'troubleshooting',
+    'goal', 'connection', 'important_date'
+  )),
+  content text NOT NULL,
+  source text,
+  confidence text DEFAULT 'medium' CHECK (confidence IN ('low', 'medium', 'high', 'confirmed')),
+  tags text[] DEFAULT '{}',
+  is_auto boolean DEFAULT true,
+  is_pinned boolean DEFAULT false,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+ALTER TABLE public.ai_memory ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Users manage own ai memory" ON public.ai_memory;
+CREATE POLICY "Users manage own ai memory" ON public.ai_memory FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+CREATE OR REPLACE TRIGGER on_ai_memory_updated BEFORE UPDATE ON public.ai_memory FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+CREATE INDEX IF NOT EXISTS idx_ai_memory_user_category ON public.ai_memory(user_id, category);
+CREATE INDEX IF NOT EXISTS idx_ai_memory_user_pinned ON public.ai_memory(user_id, is_pinned) WHERE is_pinned = true;
+
+-- ============================================================
 -- DONE! All tables created successfully.
 -- ============================================================

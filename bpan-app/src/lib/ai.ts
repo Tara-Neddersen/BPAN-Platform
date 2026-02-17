@@ -10,6 +10,13 @@ const OPENROUTER_FREE_MODELS = [
   "nvidia/nemotron-nano-9b-v2:free",
 ];
 
+// Groq free tier models — very fast inference, generous free limits
+const GROQ_FREE_MODELS = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "gemma2-9b-it",
+];
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -137,6 +144,90 @@ async function callOpenRouterWithFallback(
   );
 }
 
+/**
+ * Call Groq API with automatic retry across multiple free models.
+ * Groq offers very fast inference with generous free-tier limits.
+ * Set GROQ_API_KEY in env to enable. Get free key at https://console.groq.com
+ */
+async function callGroqWithFallback(
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string,
+  maxTokens = 400
+): Promise<string> {
+  const OpenAI = (await import("openai")).default;
+  const groq = new OpenAI({
+    baseURL: "https://api.groq.com/openai/v1",
+    apiKey,
+  });
+
+  for (const model of GROQ_FREE_MODELS) {
+    try {
+      console.log(`Trying Groq model: ${model}`);
+      const completion = await groq.chat.completions.create({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.3,
+      });
+
+      const text = completion.choices[0]?.message?.content?.trim();
+      if (text) return text;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("429") || msg.includes("rate limit")) {
+        console.warn(`Groq model ${model} rate limited, trying next...`);
+        await sleep(1000);
+        continue;
+      }
+      console.warn(`Groq model ${model} failed:`, msg);
+      continue;
+    }
+  }
+
+  throw new Error("All Groq models failed");
+}
+
+/**
+ * Universal AI call: tries Gemini → Groq → OpenRouter in order.
+ * This is the preferred way to make AI calls — it automatically handles
+ * rate limits and provider failures.
+ */
+export async function callAI(
+  systemPrompt: string,
+  userMessage: string,
+  maxTokens = 400,
+): Promise<string> {
+  // 1. Try Gemini (free, good quality)
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+      return await callGeminiWithFallback(genAI, systemPrompt, userMessage);
+    } catch {
+      console.warn("Gemini failed, trying next provider...");
+    }
+  }
+
+  // 2. Try Groq (free, very fast)
+  if (process.env.GROQ_API_KEY) {
+    try {
+      return await callGroqWithFallback(process.env.GROQ_API_KEY, systemPrompt, userMessage, maxTokens);
+    } catch {
+      console.warn("Groq failed, trying next provider...");
+    }
+  }
+
+  // 3. Try OpenRouter (free models)
+  if (process.env.OPENROUTER_API_KEY) {
+    return await callOpenRouterWithFallback(process.env.OPENROUTER_API_KEY, systemPrompt, userMessage, maxTokens);
+  }
+
+  throw new Error("No AI providers available. Please configure at least one API key.");
+}
+
 // ─── Prompts ─────────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are a biomedical research assistant. Given a paper's title and abstract, provide a concise summary in 2-3 sentences that captures:
@@ -148,40 +239,19 @@ Be precise and use accessible scientific language. Do not start with "This paper
 
 /**
  * Generate a short AI summary of a paper given its title and abstract.
- * Uses Google Gemini (free tier) by default, falls back to OpenRouter if needed.
+ * Now uses unified callAI with Gemini → Groq → OpenRouter fallback chain.
+ * Accepts optional research context for personalized summaries.
  */
 export async function summarizePaper(
   title: string,
-  abstract: string
+  abstract: string,
+  researchContext?: string,
 ): Promise<string> {
-  // Try Gemini first (free tier, with retry on rate limits)
-  if (process.env.GEMINI_API_KEY) {
-    try {
-      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-      const summary = await callGeminiWithFallback(
-        genAI,
-        SYSTEM_PROMPT,
-        `Title: ${title}\n\nAbstract: ${abstract}`
-      );
-      if (summary) return summary;
-    } catch (err) {
-      console.warn("Gemini failed, trying OpenRouter fallback:", err);
-    }
-  }
+  const contextAugmented = researchContext
+    ? `${SYSTEM_PROMPT}\n\nThe student's research context:\n${researchContext}\n\nHighlight any relevance to their work if applicable.`
+    : SYSTEM_PROMPT;
 
-  // Fallback to OpenRouter free models
-  if (process.env.OPENROUTER_API_KEY) {
-    return callOpenRouterWithFallback(
-      process.env.OPENROUTER_API_KEY,
-      SYSTEM_PROMPT,
-      `Title: ${title}\n\nAbstract: ${abstract}`,
-      200
-    );
-  }
-
-  throw new Error(
-    "AI unavailable — Gemini quota exhausted and no OPENROUTER_API_KEY set."
-  );
+  return callAI(contextAugmented, `Title: ${title}\n\nAbstract: ${abstract}`, 250);
 }
 
 const NOTE_SYSTEM_PROMPT = `You are a biomedical research assistant helping a PhD student take structured notes on papers.
@@ -205,6 +275,7 @@ export interface StructuredNote {
 
 /**
  * Generate a structured note from a highlight using AI.
+ * Now uses unified callAI and accepts optional research context.
  */
 export async function structureNote(
   highlight: string,
@@ -212,7 +283,8 @@ export async function structureNote(
   paperAbstract: string,
   authors?: string[],
   journal?: string,
-  pubDate?: string
+  pubDate?: string,
+  researchContext?: string,
 ): Promise<StructuredNote> {
   const authorStr = authors?.length ? authors.join(", ") : "Unknown authors";
   const journalStr = journal || "Unknown journal";
@@ -226,33 +298,12 @@ Abstract: ${paperAbstract}
 
 Highlighted text: "${highlight}"`;
 
-  if (process.env.GEMINI_API_KEY) {
-    try {
-      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-      const text = await callGeminiWithFallback(
-        genAI,
-        NOTE_SYSTEM_PROMPT,
-        userMessage
-      );
-      return JSON.parse(extractJSON(text)) as StructuredNote;
-    } catch (err) {
-      console.warn("Gemini note structuring failed:", err);
-    }
-  }
+  const systemPrompt = researchContext
+    ? `${NOTE_SYSTEM_PROMPT}\n\nStudent's research context:\n${researchContext}\n\nIncorporate relevant connections to their work in the note.`
+    : NOTE_SYSTEM_PROMPT;
 
-  if (process.env.OPENROUTER_API_KEY) {
-    const text = await callOpenRouterWithFallback(
-      process.env.OPENROUTER_API_KEY,
-      NOTE_SYSTEM_PROMPT,
-      userMessage,
-      300
-    );
-    return JSON.parse(extractJSON(text)) as StructuredNote;
-  }
-
-  throw new Error(
-    "AI unavailable — Gemini quota exhausted and no OPENROUTER_API_KEY set."
-  );
+  const text = await callAI(systemPrompt, userMessage, 300);
+  return JSON.parse(extractJSON(text)) as StructuredNote;
 }
 
 // ─── Embeddings ──────────────────────────────────────────────────────────────
@@ -307,11 +358,13 @@ export interface ExtractedMethods {
 
 /**
  * Extract structured protocol/methods details from highlighted text.
+ * Now uses unified callAI with Gemini → Groq → OpenRouter chain.
  */
 export async function extractMethods(
   highlight: string,
   paperTitle: string,
-  paperAbstract: string
+  paperAbstract: string,
+  researchContext?: string,
 ): Promise<ExtractedMethods> {
   const userMessage = `Paper: "${paperTitle}"
 
@@ -319,40 +372,20 @@ Abstract: ${paperAbstract}
 
 Highlighted text to extract methods from: "${highlight}"`;
 
-  if (process.env.GEMINI_API_KEY) {
-    try {
-      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-      const text = await callGeminiWithFallback(
-        genAI,
-        METHODS_SYSTEM_PROMPT,
-        userMessage
-      );
-      return JSON.parse(extractJSON(text)) as ExtractedMethods;
-    } catch (err) {
-      console.warn("Gemini methods extraction failed:", err);
-    }
-  }
+  const systemPrompt = researchContext
+    ? `${METHODS_SYSTEM_PROMPT}\n\nStudent's research context:\n${researchContext}\n\nNote any relevance to their model systems or techniques.`
+    : METHODS_SYSTEM_PROMPT;
 
-  if (process.env.OPENROUTER_API_KEY) {
-    const text = await callOpenRouterWithFallback(
-      process.env.OPENROUTER_API_KEY,
-      METHODS_SYSTEM_PROMPT,
-      userMessage,
-      500
-    );
-    return JSON.parse(extractJSON(text)) as ExtractedMethods;
-  }
-
-  throw new Error(
-    "AI unavailable — Gemini quota exhausted and no OPENROUTER_API_KEY set."
-  );
+  const text = await callAI(systemPrompt, userMessage, 500);
+  return JSON.parse(extractJSON(text)) as ExtractedMethods;
 }
 
 // ─── Extract Action Items from Meeting Notes ────────────────────────────────
 
-export async function extractActionItems(notes: string): Promise<string[]> {
-  const systemInstruction =
-    "You are a research assistant helping a biomedical PhD student extract action items from advisor meeting notes.";
+export async function extractActionItems(notes: string, researchContext?: string): Promise<string[]> {
+  const systemInstruction = researchContext
+    ? `You are a research assistant helping a biomedical PhD student extract action items from advisor meeting notes.\n\nStudent's research context:\n${researchContext}\n\nUse this context to better understand abbreviations and project-specific terms in the notes.`
+    : "You are a research assistant helping a biomedical PhD student extract action items from advisor meeting notes.";
 
   const prompt = `Read the following meeting notes and extract ALL action items, tasks, to-dos, follow-ups, and things that need to be done. Each action item should be a short, clear, actionable sentence.
 
@@ -363,28 +396,14 @@ If there are no action items, return an empty array: []
 MEETING NOTES:
 ${notes}`;
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  let raw = "";
-  if (apiKey) {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    raw = await callGeminiWithFallback(genAI, systemInstruction, prompt);
-  } else {
-    const orKey = process.env.OPENROUTER_API_KEY;
-    if (orKey) {
-      raw = await callOpenRouterWithFallback(orKey, systemInstruction, prompt, 600);
-    } else {
-      throw new Error("AI unavailable — no API keys configured.");
-    }
-  }
+  const raw = await callAI(systemInstruction, prompt, 600);
 
   // Parse the JSON array from the AI response
   try {
-    // Strip markdown code fences if present
     const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
     const parsed = JSON.parse(cleaned);
     if (Array.isArray(parsed)) return parsed.map(String);
   } catch {
-    // Fallback: split by newlines and clean up
     return raw
       .split("\n")
       .map((l) => l.replace(/^[-•*\d.)\]]+\s*/, "").trim())
@@ -397,10 +416,12 @@ ${notes}`;
 
 export async function summarizeMeetingNotes(
   notes: string,
-  actionItems: string
+  actionItems: string,
+  researchContext?: string,
 ): Promise<string> {
-  const systemInstruction =
-    "You are a research assistant helping a biomedical PhD student. Summarize their advisor meeting notes into a clear, concise summary.";
+  const systemInstruction = researchContext
+    ? `You are a research assistant helping a biomedical PhD student. Summarize their advisor meeting notes into a clear, concise summary.\n\nStudent's research context:\n${researchContext}\n\nUse this context to better understand project-specific terms and connect discussion points to their research.`
+    : "You are a research assistant helping a biomedical PhD student. Summarize their advisor meeting notes into a clear, concise summary.";
 
   const prompt = `Summarize the following meeting notes into a structured summary with these sections:
 
@@ -423,20 +444,7 @@ ${notes}
 
 ${actionItems ? `ACTION ITEMS:\n${actionItems}` : ""}`;
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (apiKey) {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    return callGeminiWithFallback(genAI, systemInstruction, prompt);
-  }
-
-  const orKey = process.env.OPENROUTER_API_KEY;
-  if (orKey) {
-    return callOpenRouterWithFallback(orKey, systemInstruction, prompt, 800);
-  }
-
-  throw new Error(
-    "AI unavailable — no API keys configured."
-  );
+  return callAI(systemInstruction, prompt, 800);
 }
 
 // ─── AI Literature Scout Analysis ────────────────────────────────────────────
@@ -460,7 +468,7 @@ export async function scoutAnalyzePaper(
 ): Promise<ScoutAnalysis> {
   const systemInstruction = `You are an AI research assistant for a PhD student studying BPAN (Beta-propeller Protein-Associated Neurodegeneration), a rare neurological disorder. Their research involves mouse models, iron metabolism, neurodegeneration, EEG, behavior experiments, and translational medicine.
 
-${researchContext ? `Additional research context: ${researchContext}` : ""}
+${researchContext ? `Additional research context:\n${researchContext}` : ""}
 
 Analyze the following paper and provide:
 1. A 2-3 sentence summary of what the paper found (written plainly, as if explaining to a colleague)
@@ -480,23 +488,7 @@ Respond with ONLY valid JSON:
 Title: ${title}
 Abstract: ${abstract || "No abstract available."}`;
 
-  let text: string;
-
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (apiKey) {
-    try {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      text = await callGeminiWithFallback(genAI, systemInstruction, prompt);
-    } catch {
-      const orKey = process.env.OPENROUTER_API_KEY;
-      if (!orKey) throw new Error("AI unavailable");
-      text = await callOpenRouterWithFallback(orKey, systemInstruction, prompt, 500);
-    }
-  } else {
-    const orKey = process.env.OPENROUTER_API_KEY;
-    if (!orKey) throw new Error("AI unavailable — no API keys configured.");
-    text = await callOpenRouterWithFallback(orKey, systemInstruction, prompt, 500);
-  }
+  const text = await callAI(systemInstruction, prompt, 500);
 
   try {
     const json = JSON.parse(extractJSON(text));
