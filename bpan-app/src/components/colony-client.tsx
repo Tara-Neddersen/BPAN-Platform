@@ -30,7 +30,7 @@ import type {
   HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AnimalStatus,
 } from "@/types";
 import { ColonyResultsTab } from "@/components/colony-results-tab";
-import { EarTagSelector, MiniEarTag, formatEarTag, parseEarTag } from "@/components/ear-tag-selector";
+import { EarTagSelector, MiniEarTag, parseEarTag } from "@/components/ear-tag-selector";
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -596,7 +596,13 @@ export function ColonyClient({
                 return (
                   <Card
                     key={animal.id}
-                    className="cursor-pointer hover:border-primary/50 transition-colors"
+                    className={`cursor-pointer hover:border-primary/50 transition-colors border-l-4 ${
+                      animal.genotype === "hemi"
+                        ? "border-l-red-500"
+                        : animal.genotype === "het"
+                        ? "border-l-orange-500"
+                        : "border-l-gray-300"
+                    }`}
                     onClick={() => setSelectedAnimal(animal)}
                   >
                     <CardContent className="py-3 flex items-center gap-3">
@@ -613,10 +619,7 @@ export function ColonyClient({
                         <div className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
                           <span>{age} days old</span>
                           {animal.ear_tag && animal.ear_tag !== "0000" && (
-                            <span className="flex items-center gap-1">
-                              <MiniEarTag earTag={animal.ear_tag} size={22} />
-                              <span>{formatEarTag(animal.ear_tag)}</span>
-                            </span>
+                            <MiniEarTag earTag={animal.ear_tag} size={22} />
                           )}
                           {animal.cage_number && <span>Cage: {animal.cage_number}</span>}
                           {totalCount > 0 && (
@@ -1579,7 +1582,6 @@ function AnimalDetail({
           <span className="text-muted-foreground text-xs block">Ear Tag</span>
           <div className="flex items-center gap-1">
             <MiniEarTag earTag={animal.ear_tag} size={26} />
-            <span>{formatEarTag(animal.ear_tag)}</span>
           </div>
         </div>
         <div><span className="text-muted-foreground text-xs block">Cage</span>{animal.cage_number || "—"}</div>
