@@ -1273,6 +1273,14 @@ function VisualizationPanel({
   const [showPoints, setShowPoints] = useState(true);
   const plotRef = useRef<HTMLDivElement>(null);
 
+  // Significance annotations
+  type SigAnnotation = { group1: string; group2: string; label: string };
+  const SIG_LABELS = ["ns", "*", "**", "***", "****"];
+  const [sigAnnotations, setSigAnnotations] = useState<SigAnnotation[]>([]);
+  const [pendingGroup1, setPendingGroup1] = useState("");
+  const [pendingGroup2, setPendingGroup2] = useState("");
+  const [pendingLabel, setPendingLabel] = useState("*");
+
   const CHART_OPTIONS = [
     { value: "bar_sem", label: "Bar + SEM" },
     { value: "bar_sd", label: "Bar + SD" },
@@ -1536,6 +1544,106 @@ function VisualizationPanel({
     }
   }, [chartType, measureKey, measureKey2, groupBy, flatData, groups, measureLabels, title, showPoints]);
 
+  // Build Plotly shapes + annotations for significance brackets
+  const sigShapesAndAnnotations = useMemo(() => {
+    if (!plotData || sigAnnotations.length === 0) return { shapes: [], annotations: [] };
+    if (chartType === "scatter" || chartType === "timepoint_line") return { shapes: [], annotations: [] };
+
+    const getGrouping = (row: FlatRow): string => {
+      switch (groupBy) {
+        case "sex": return row.sex;
+        case "genotype": return row.genotype;
+        case "cohort": return row.cohort;
+        default: return row.group;
+      }
+    };
+
+    const groupLabels = groupBy === "group"
+      ? groups
+      : Array.from(new Set(flatData.map(getGrouping))).sort();
+
+    // Compute max Y per group for bracket positioning
+    const groupMaxY: Record<string, number> = {};
+    for (const g of groupLabels) {
+      const values = flatData
+        .filter((r) => getGrouping(r) === g)
+        .map((r) => Number(r[measureKey]))
+        .filter((v) => !isNaN(v));
+      const m = mean(values);
+      const s = (chartType === "bar_sem" ? sem(values) : chartType === "bar_sd" ? stdDev(values) : 0);
+      groupMaxY[g] = Math.max(m + s, ...values);
+    }
+
+    const overallMax = Math.max(...Object.values(groupMaxY), 0);
+    const step = overallMax * 0.08; // spacing between stacked brackets
+
+    const shapes: Partial<Plotly.Shape>[] = [];
+    const annotations: Partial<Plotly.Annotations>[] = [];
+
+    // Sort annotations by the span width (narrow first) to stack properly
+    const sorted = [...sigAnnotations].sort((a, b) => {
+      const spanA = Math.abs(groupLabels.indexOf(a.group2) - groupLabels.indexOf(a.group1));
+      const spanB = Math.abs(groupLabels.indexOf(b.group2) - groupLabels.indexOf(b.group1));
+      return spanA - spanB;
+    });
+
+    let currentY = overallMax + step;
+
+    for (const ann of sorted) {
+      const idx1 = groupLabels.indexOf(ann.group1);
+      const idx2 = groupLabels.indexOf(ann.group2);
+      if (idx1 < 0 || idx2 < 0) continue;
+
+      const x0 = Math.min(idx1, idx2);
+      const x1 = Math.max(idx1, idx2);
+      const bracketY = currentY;
+      const tickDown = step * 0.3;
+
+      // Left vertical tick
+      shapes.push({
+        type: "line",
+        x0: groupLabels[x0], x1: groupLabels[x0],
+        y0: bracketY - tickDown, y1: bracketY,
+        xref: "x", yref: "y",
+        line: { color: "black", width: 1.5 },
+      });
+      // Horizontal bar
+      shapes.push({
+        type: "line",
+        x0: groupLabels[x0], x1: groupLabels[x1],
+        y0: bracketY, y1: bracketY,
+        xref: "x", yref: "y",
+        line: { color: "black", width: 1.5 },
+      });
+      // Right vertical tick
+      shapes.push({
+        type: "line",
+        x0: groupLabels[x1], x1: groupLabels[x1],
+        y0: bracketY - tickDown, y1: bracketY,
+        xref: "x", yref: "y",
+        line: { color: "black", width: 1.5 },
+      });
+
+      // Label
+      const midIdx = (x0 + x1) / 2;
+      annotations.push({
+        x: groupLabels[Math.round(midIdx)] || groupLabels[x0],
+        y: bracketY + step * 0.15,
+        xref: "x",
+        yref: "y",
+        text: ann.label === "ns" ? "<i>ns</i>" : ann.label,
+        showarrow: false,
+        font: { size: ann.label === "ns" ? 11 : 14, color: "black" },
+        xanchor: "center",
+        yanchor: "bottom",
+      });
+
+      currentY += step;
+    }
+
+    return { shapes, annotations };
+  }, [plotData, sigAnnotations, chartType, groupBy, flatData, groups, measureKey]);
+
   const handleExport = useCallback(
     async (format: "svg" | "png") => {
       const plotlyModule = await import("plotly.js-dist-min");
@@ -1639,6 +1747,110 @@ function VisualizationPanel({
               Show individual data points
             </label>
           </div>
+
+          {/* ─── Significance Annotations ─────────────── */}
+          {chartType !== "scatter" && chartType !== "timepoint_line" && (
+            <div className="border-t pt-3 space-y-2">
+              <Label className="text-xs font-medium">Significance Annotations</Label>
+              <div className="flex flex-wrap items-end gap-2">
+                <div>
+                  <Label className="text-[10px] text-muted-foreground block mb-0.5">Group 1</Label>
+                  <Select value={pendingGroup1} onValueChange={setPendingGroup1}>
+                    <SelectTrigger className="h-8 text-xs w-[140px]">
+                      <SelectValue placeholder="Select group" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(groupBy === "group" ? groups : Array.from(new Set(flatData.map((r) => {
+                        switch (groupBy) {
+                          case "sex": return r.sex;
+                          case "genotype": return r.genotype;
+                          case "cohort": return r.cohort;
+                          default: return r.group;
+                        }
+                      }))).sort()).map((g) => (
+                        <SelectItem key={g} value={g}>{g}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[10px] text-muted-foreground block mb-0.5">Group 2</Label>
+                  <Select value={pendingGroup2} onValueChange={setPendingGroup2}>
+                    <SelectTrigger className="h-8 text-xs w-[140px]">
+                      <SelectValue placeholder="Select group" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(groupBy === "group" ? groups : Array.from(new Set(flatData.map((r) => {
+                        switch (groupBy) {
+                          case "sex": return r.sex;
+                          case "genotype": return r.genotype;
+                          case "cohort": return r.cohort;
+                          default: return r.group;
+                        }
+                      }))).sort()).filter((g) => g !== pendingGroup1).map((g) => (
+                        <SelectItem key={g} value={g}>{g}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-[10px] text-muted-foreground block mb-0.5">Significance</Label>
+                  <Select value={pendingLabel} onValueChange={setPendingLabel}>
+                    <SelectTrigger className="h-8 text-xs w-[90px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SIG_LABELS.map((l) => (
+                        <SelectItem key={l} value={l}>{l === "ns" ? "ns" : l} {l === "ns" ? "(p≥0.05)" : l === "*" ? "(p<0.05)" : l === "**" ? "(p<0.01)" : l === "***" ? "(p<0.001)" : "(p<0.0001)"}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                  disabled={!pendingGroup1 || !pendingGroup2 || pendingGroup1 === pendingGroup2}
+                  onClick={() => {
+                    setSigAnnotations((prev) => [
+                      ...prev,
+                      { group1: pendingGroup1, group2: pendingGroup2, label: pendingLabel },
+                    ]);
+                    setPendingGroup1("");
+                    setPendingGroup2("");
+                  }}
+                >
+                  + Add
+                </Button>
+              </div>
+
+              {sigAnnotations.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {sigAnnotations.map((ann, i) => (
+                    <Badge
+                      key={i}
+                      variant="secondary"
+                      className="text-xs gap-1 pl-2 pr-1 py-0.5 cursor-pointer hover:bg-destructive/10"
+                      onClick={() => setSigAnnotations((prev) => prev.filter((_, j) => j !== i))}
+                    >
+                      {ann.group1} vs {ann.group2}: <strong>{ann.label}</strong>
+                      <span className="text-muted-foreground hover:text-destructive ml-0.5">✕</span>
+                    </Badge>
+                  ))}
+                  {sigAnnotations.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-5 text-[10px] text-muted-foreground px-1.5"
+                      onClick={() => setSigAnnotations([])}
+                    >
+                      Clear all
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -1664,7 +1876,15 @@ function VisualizationPanel({
                 layout={{
                   ...plotData.layout,
                   autosize: true,
-                  margin: { l: 70, r: 30, t: 60, b: 60 },
+                  margin: { l: 70, r: 30, t: sigAnnotations.length > 0 ? 80 + sigAnnotations.length * 20 : 60, b: 60 },
+                  shapes: [
+                    ...((plotData.layout as Record<string, unknown>).shapes as Partial<Plotly.Shape>[] || []),
+                    ...sigShapesAndAnnotations.shapes,
+                  ],
+                  annotations: [
+                    ...((plotData.layout as Record<string, unknown>).annotations as Partial<Plotly.Annotations>[] || []),
+                    ...sigShapesAndAnnotations.annotations,
+                  ],
                 } as Partial<Plotly.Layout>}
                 config={{
                   responsive: true,

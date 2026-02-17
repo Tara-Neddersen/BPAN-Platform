@@ -439,6 +439,14 @@ function PIAnalysisPanel({
   const [selectedMeasure, setSelectedMeasure] = useState<string>("");
   const [chartType, setChartType] = useState<string>("bar");
 
+  // Significance annotations
+  type SigAnnotation = { group1: string; group2: string; label: string };
+  const SIG_LABELS = ["ns", "*", "**", "***", "****"];
+  const [sigAnnotations, setSigAnnotations] = useState<SigAnnotation[]>([]);
+  const [pendingGroup1, setPendingGroup1] = useState("");
+  const [pendingGroup2, setPendingGroup2] = useState("");
+  const [pendingLabel, setPendingLabel] = useState("*");
+
   const availableExperiments = useMemo(() => {
     const exps = new Set(colonyResults.map((r) => r.experiment_type));
     return Array.from(exps).sort();
@@ -634,6 +642,59 @@ function PIAnalysisPanel({
     }));
   }, [groupData]);
 
+  // Build significance bracket shapes + annotations
+  const sigShapesAndAnnotations = useMemo(() => {
+    if (groupData.length === 0 || sigAnnotations.length === 0)
+      return { shapes: [] as Partial<Plotly.Shape>[], annotations: [] as Partial<Plotly.Annotations>[] };
+
+    const labels = groupData.map((g) => g.label);
+    const overallMax = Math.max(...groupData.flatMap((g) => [g.mean + g.sem, ...g.values]), 0);
+    const step = overallMax * 0.08;
+
+    const shapes: Partial<Plotly.Shape>[] = [];
+    const annotations: Partial<Plotly.Annotations>[] = [];
+
+    const sorted = [...sigAnnotations].sort((a, b) => {
+      const spanA = Math.abs(labels.indexOf(a.group2) - labels.indexOf(a.group1));
+      const spanB = Math.abs(labels.indexOf(b.group2) - labels.indexOf(b.group1));
+      return spanA - spanB;
+    });
+
+    let currentY = overallMax + step;
+
+    for (const ann of sorted) {
+      const idx1 = labels.indexOf(ann.group1);
+      const idx2 = labels.indexOf(ann.group2);
+      if (idx1 < 0 || idx2 < 0) continue;
+
+      const x0 = Math.min(idx1, idx2);
+      const x1 = Math.max(idx1, idx2);
+      const bracketY = currentY;
+      const tickDown = step * 0.3;
+
+      shapes.push(
+        { type: "line", x0: labels[x0], x1: labels[x0], y0: bracketY - tickDown, y1: bracketY, xref: "x", yref: "y", line: { color: "black", width: 1.5 } },
+        { type: "line", x0: labels[x0], x1: labels[x1], y0: bracketY, y1: bracketY, xref: "x", yref: "y", line: { color: "black", width: 1.5 } },
+        { type: "line", x0: labels[x1], x1: labels[x1], y0: bracketY - tickDown, y1: bracketY, xref: "x", yref: "y", line: { color: "black", width: 1.5 } },
+      );
+
+      const midIdx = (x0 + x1) / 2;
+      annotations.push({
+        x: labels[Math.round(midIdx)] || labels[x0],
+        y: bracketY + step * 0.15,
+        xref: "x", yref: "y",
+        text: ann.label === "ns" ? "<i>ns</i>" : ann.label,
+        showarrow: false,
+        font: { size: ann.label === "ns" ? 11 : 14, color: "black" },
+        xanchor: "center", yanchor: "bottom",
+      });
+
+      currentY += step;
+    }
+
+    return { shapes, annotations };
+  }, [groupData, sigAnnotations]);
+
   if (colonyResults.length === 0) {
     return (
       <Card>
@@ -696,6 +757,81 @@ function PIAnalysisPanel({
               </Select>
             </div>
           </div>
+
+          {/* Significance annotations */}
+          {chartType !== "scatter" && groupData.length > 0 && (
+            <div className="border-t mt-3 pt-3 space-y-2">
+              <label className="text-[11px] font-medium text-muted-foreground">Significance Annotations</label>
+              <div className="flex flex-wrap items-end gap-2">
+                <div>
+                  <label className="text-[10px] text-muted-foreground block mb-0.5">Group 1</label>
+                  <Select value={pendingGroup1} onValueChange={setPendingGroup1}>
+                    <SelectTrigger className="h-7 text-xs w-[130px]"><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectContent>
+                      {groupData.map((g) => (
+                        <SelectItem key={g.label} value={g.label}>{g.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground block mb-0.5">Group 2</label>
+                  <Select value={pendingGroup2} onValueChange={setPendingGroup2}>
+                    <SelectTrigger className="h-7 text-xs w-[130px]"><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectContent>
+                      {groupData.filter((g) => g.label !== pendingGroup1).map((g) => (
+                        <SelectItem key={g.label} value={g.label}>{g.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground block mb-0.5">Significance</label>
+                  <Select value={pendingLabel} onValueChange={setPendingLabel}>
+                    <SelectTrigger className="h-7 text-xs w-[80px]"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {SIG_LABELS.map((l) => (
+                        <SelectItem key={l} value={l}>{l === "ns" ? "ns" : l}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  disabled={!pendingGroup1 || !pendingGroup2 || pendingGroup1 === pendingGroup2}
+                  onClick={() => {
+                    setSigAnnotations((prev) => [...prev, { group1: pendingGroup1, group2: pendingGroup2, label: pendingLabel }]);
+                    setPendingGroup1("");
+                    setPendingGroup2("");
+                  }}
+                >
+                  + Add
+                </Button>
+              </div>
+              {sigAnnotations.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {sigAnnotations.map((ann, i) => (
+                    <Badge
+                      key={i}
+                      variant="secondary"
+                      className="text-[10px] gap-1 pl-1.5 pr-1 py-0 cursor-pointer hover:bg-destructive/10"
+                      onClick={() => setSigAnnotations((prev) => prev.filter((_, j) => j !== i))}
+                    >
+                      {ann.group1} vs {ann.group2}: <strong>{ann.label}</strong>
+                      <span className="text-muted-foreground hover:text-destructive ml-0.5">✕</span>
+                    </Badge>
+                  ))}
+                  {sigAnnotations.length > 1 && (
+                    <button className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => setSigAnnotations([])}>
+                      Clear all
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -711,6 +847,9 @@ function PIAnalysisPanel({
                 paper_bgcolor: "transparent",
                 plot_bgcolor: "transparent",
                 font: { size: 11 },
+                margin: { ...(plotData.layout as Record<string, unknown>).margin as Record<string, number> || { t: 40, r: 20, b: 60, l: 60 }, t: sigAnnotations.length > 0 ? 60 + sigAnnotations.length * 20 : 40 },
+                shapes: [...sigShapesAndAnnotations.shapes],
+                annotations: [...sigShapesAndAnnotations.annotations],
               } as Partial<Plotly.Layout>}
               config={{ responsive: true, displayModeBar: false }}
               style={{ width: "100%", height: "400px" }}
