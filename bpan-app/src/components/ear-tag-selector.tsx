@@ -2,48 +2,64 @@
 
 import { useState, useCallback, useEffect } from "react";
 
-// ─── Ear punch positions (2x2 grid) ────────────────────────────────
-// Positions: TL (top-left), TR (top-right), BL (bottom-left), BR (bottom-right)
-// Stored as 4-char string: "0000" to "1111"
-// Maps to standard ear punch numbering 1–15
+// ─── Standard Ear Punch System ──────────────────────────────────────
+//
+// Grid layout (viewing the mouse from the FRONT):
+//
+//   Right Ear (R)    Left Ear (L)
+//   ┌──────────┐    ┌──────────┐
+//   │  Top = 1 │    │  Top = 4 │
+//   │  Bot = 2 │    │  Bot = 8 │
+//   └──────────┘    └──────────┘
+//
+// Mouse number = sum of punched position values (1–15)
+//
+// Pattern string "ABCD" → A=R-top, B=L-top, C=R-bottom, D=L-bottom
+// Grid positions:  [0]=TL(R-top,1)  [1]=TR(L-top,4)
+//                  [2]=BL(R-bot,2)  [3]=BR(L-bot,8)
 
-const POSITION_LABELS = ["TL", "TR", "BL", "BR"] as const;
+/** Value assigned to each grid position: TL, TR, BL, BR */
+const POSITION_VALUES = [1, 4, 2, 8] as const;
 
-// Standard ear punch number mapping (binary → number)
-const PUNCH_TO_NUMBER: Record<string, number> = {
-  "1000": 1,  // TL
-  "0001": 2,  // BR
-  "1001": 3,  // TL + BR
-  "0100": 4,  // TR
-  "0010": 5,  // BL
-  "0110": 6,  // TR + BL
-  "1100": 7,  // TL + TR
-  "1010": 8,  // TL + BL
-  "0011": 9,  // BL + BR
-  "0101": 10, // TR + BR
-  "1011": 11, // TL + BL + BR
-  "0111": 12, // TR + BL + BR
-  "1101": 13, // TL + TR + BR
-  "1110": 14, // TL + TR + BL
-  "1111": 15, // All
-};
+/** Ear labels for each COLUMN */
+const COLUMN_LABELS = ["R", "L"] as const; // Left col = Right ear, Right col = Left ear
 
-const NUMBER_TO_PUNCH: Record<number, string> = {};
-for (const [k, v] of Object.entries(PUNCH_TO_NUMBER)) {
-  NUMBER_TO_PUNCH[v] = k;
+/** Row labels */
+const ROW_LABELS = ["Top", "Bot"] as const;
+
+/**
+ * Convert a punch pattern to its ear tag number (1–15).
+ */
+export function punchPatternToNumber(pattern: string): number {
+  let sum = 0;
+  for (let i = 0; i < 4; i++) {
+    if (pattern[i] === "1") sum += POSITION_VALUES[i];
+  }
+  return sum;
 }
 
-export function punchPatternToNumber(pattern: string): number | null {
-  return PUNCH_TO_NUMBER[pattern] ?? null;
-}
-
-export function numberToPunchPattern(num: number): string | null {
-  return NUMBER_TO_PUNCH[num] ?? null;
+/**
+ * Convert an ear tag number (1–15) to a punch pattern.
+ */
+export function numberToPunchPattern(num: number): string {
+  if (num < 1 || num > 15) return "0000";
+  const arr = ["0", "0", "0", "0"];
+  let remaining = num;
+  // Decompose from highest value down: 8, 4, 2, 1
+  // Position indices sorted by value descending: BR(3)=8, TR(1)=4, BL(2)=2, TL(0)=1
+  const order = [3, 1, 2, 0]; // indices sorted by POSITION_VALUES descending
+  for (const idx of order) {
+    if (remaining >= POSITION_VALUES[idx]) {
+      arr[idx] = "1";
+      remaining -= POSITION_VALUES[idx];
+    }
+  }
+  return arr.join("");
 }
 
 /**
  * Parse an ear_tag value into a punch pattern.
- * Accepts: "1010" (binary), "8" (number), or "TL,BL" (position labels)
+ * Accepts: "1010" (binary pattern), "8" (number 1–15)
  */
 export function parseEarTag(earTag: string | null): string {
   if (!earTag) return "0000";
@@ -52,30 +68,18 @@ export function parseEarTag(earTag: string | null): string {
   if (/^[01]{4}$/.test(trimmed)) return trimmed;
   // Number (1–15)
   const num = parseInt(trimmed, 10);
-  if (!isNaN(num) && num >= 1 && num <= 15) return NUMBER_TO_PUNCH[num] || "0000";
-  // Position labels
-  const labels = trimmed.toUpperCase().split(/[,\s]+/);
-  let pattern = "0000";
-  for (const label of labels) {
-    const idx = POSITION_LABELS.indexOf(label as typeof POSITION_LABELS[number]);
-    if (idx >= 0) {
-      const arr = pattern.split("");
-      arr[idx] = "1";
-      pattern = arr.join("");
-    }
-  }
-  return pattern;
+  if (!isNaN(num) && num >= 1 && num <= 15) return numberToPunchPattern(num);
+  return "0000";
 }
 
 /**
- * Format a punch pattern for display
+ * Format a punch pattern for display (e.g., "#7")
  */
 export function formatEarTag(earTag: string | null): string {
   const pattern = parseEarTag(earTag);
   const num = punchPatternToNumber(pattern);
-  if (num !== null) return `#${num}`;
-  if (pattern === "0000") return "None";
-  return pattern;
+  if (num > 0) return `#${num}`;
+  return "None";
 }
 
 // ─── Mouse Head SVG ────────────────────────────────────────────────
@@ -83,10 +87,10 @@ export function formatEarTag(earTag: string | null): string {
 function MouseHeadSVG({ size = 60 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-      {/* Left ear */}
+      {/* Left ear (mouse's right ear from viewer) */}
       <ellipse cx="25" cy="25" rx="18" ry="22" fill="#F5E6D3" stroke="#D4A574" strokeWidth="2" />
       <ellipse cx="25" cy="25" rx="10" ry="14" fill="#F0C4A8" />
-      {/* Right ear */}
+      {/* Right ear (mouse's left ear from viewer) */}
       <ellipse cx="75" cy="25" rx="18" ry="22" fill="#F5E6D3" stroke="#D4A574" strokeWidth="2" />
       <ellipse cx="75" cy="25" rx="10" ry="14" fill="#F0C4A8" />
       {/* Head */}
@@ -117,13 +121,12 @@ export function MiniEarTag({
   size?: number;
 }) {
   const pattern = parseEarTag(earTag);
-  if (pattern === "0000") return null;
+  if (punchPatternToNumber(pattern) === 0) return null;
 
   const circleR = size * 0.09;
-  const gridSize = size * 0.3;
   const gridX = size * 0.65;
   const gridY = size * 0.15;
-  const gap = gridSize * 0.55;
+  const gap = size * 0.3 * 0.55;
 
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} fill="none" className="inline-block">
@@ -205,23 +208,36 @@ export function EarTagSelector({ value, onChange, showNumber = true }: EarTagSel
       </div>
 
       {/* Punch grid */}
-      <div className="flex flex-col items-center gap-1">
+      <div className="flex flex-col items-center gap-0.5">
         <span className="text-[10px] text-muted-foreground font-medium mb-0.5">Click to punch</span>
+
+        {/* Column headers — R.Ear / L.Ear */}
+        <div className="grid grid-cols-2 gap-1.5 mb-0.5">
+          {COLUMN_LABELS.map((label) => (
+            <div key={label} className="text-center text-[10px] font-semibold text-muted-foreground">
+              {label === "R" ? "R.Ear" : "L.Ear"}
+            </div>
+          ))}
+        </div>
+
+        {/* Grid with value labels */}
         <div className="grid grid-cols-2 gap-1.5">
           {[0, 1, 2, 3].map((i) => {
             const isPunched = pattern[i] === "1";
+            const posValue = POSITION_VALUES[i];
+            const row = Math.floor(i / 2);
             return (
               <button
                 key={i}
                 type="button"
                 onClick={() => togglePosition(i)}
-                className={`w-8 h-8 rounded-full border-2 transition-all duration-150 flex items-center justify-center
+                className={`w-9 h-9 rounded-full border-2 transition-all duration-150 flex items-center justify-center relative
                   ${
                     isPunched
                       ? "bg-red-500 border-red-600 text-white shadow-md scale-105"
                       : "bg-gray-100 border-gray-300 text-gray-400 hover:bg-gray-200 hover:border-gray-400 dark:bg-gray-800 dark:border-gray-600 dark:hover:bg-gray-700"
                   }`}
-                title={`${POSITION_LABELS[i]} — ${isPunched ? "Punched" : "Not punched"}`}
+                title={`${COLUMN_LABELS[i % 2]}.Ear ${ROW_LABELS[row]} (=${posValue}) — ${isPunched ? "Punched" : "Not punched"}`}
               >
                 {isPunched ? (
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -229,19 +245,20 @@ export function EarTagSelector({ value, onChange, showNumber = true }: EarTagSel
                     <line x1="11" y1="3" x2="3" y2="11" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
                   </svg>
                 ) : (
-                  <span className="text-xs">○</span>
+                  <span className="text-[10px] font-bold">{posValue}</span>
                 )}
               </button>
             );
           })}
         </div>
+
         <div className="flex items-center gap-2 mt-1">
-          {showNumber && num !== null && (
+          {showNumber && num > 0 && (
             <span className="text-sm font-bold text-indigo-600 dark:text-indigo-400">
               #{num}
             </span>
           )}
-          {pattern !== "0000" && (
+          {num > 0 && (
             <button
               type="button"
               onClick={clearAll}
@@ -255,4 +272,3 @@ export function EarTagSelector({ value, onChange, showNumber = true }: EarTagSel
     </div>
   );
 }
-
