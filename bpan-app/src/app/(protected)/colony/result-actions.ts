@@ -5,8 +5,56 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 
 /**
+ * Helper: when results are saved for an animal+timepoint+experiment,
+ * automatically mark the matching animal_experiment row as "completed".
+ * If no matching experiment row exists, create one with status "completed".
+ */
+async function markExperimentCompleted(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  animalId: string,
+  timepointAgeDays: number,
+  experimentType: string
+) {
+  // Find ANY matching experiment row for this animal+timepoint+type
+  const { data: exp } = await supabase
+    .from("animal_experiments")
+    .select("id, status")
+    .eq("user_id", userId)
+    .eq("animal_id", animalId)
+    .eq("experiment_type", experimentType)
+    .eq("timepoint_age_days", timepointAgeDays)
+    .maybeSingle();
+
+  if (exp) {
+    // Only update if not already completed
+    if (exp.status !== "completed") {
+      await supabase
+        .from("animal_experiments")
+        .update({
+          status: "completed",
+          completed_date: new Date().toISOString().split("T")[0],
+        })
+        .eq("id", exp.id);
+    }
+  } else {
+    // No experiment row exists — create one as completed
+    await supabase.from("animal_experiments").insert({
+      user_id: userId,
+      animal_id: animalId,
+      experiment_type: experimentType,
+      timepoint_age_days: timepointAgeDays,
+      scheduled_date: new Date().toISOString().split("T")[0],
+      completed_date: new Date().toISOString().split("T")[0],
+      status: "completed",
+    });
+  }
+}
+
+/**
  * Upsert a colony result for a specific animal / timepoint / experiment.
  * Uses the unique index to insert or update.
+ * Also auto-marks the matching animal_experiment as completed.
  */
 export async function upsertColonyResult(
   animalId: string,
@@ -53,12 +101,16 @@ export async function upsertColonyResult(
     if (error) return { error: error.message };
   }
 
+  // Auto-mark the matching experiment as completed
+  await markExperimentCompleted(supabase, user.id, animalId, timepointAgeDays, experimentType);
+
   revalidatePath("/colony");
   return { success: true };
 }
 
 /**
  * Batch upsert results for multiple animals at once (same timepoint + experiment).
+ * Also auto-marks matching animal_experiments as completed.
  */
 export async function batchUpsertColonyResults(
   timepointAgeDays: number,
@@ -112,6 +164,9 @@ export async function batchUpsertColonyResults(
       if (error) errors.push(`${entry.animalId}: ${error.message}`);
       else successCount++;
     }
+
+    // Auto-mark the matching experiment as completed
+    await markExperimentCompleted(supabase, user.id, entry.animalId, timepointAgeDays, experimentType);
   }
 
   revalidatePath("/colony");
