@@ -11,6 +11,7 @@ import type {
   CageChange,
   ColonyPhoto,
   HousingCage,
+  ColonyResult,
 } from "@/types";
 import {
   createBreederCage,
@@ -45,6 +46,7 @@ import {
   assignAnimalToCage,
   rescheduleTimepointExperiments,
 } from "./actions";
+import { batchUpsertColonyResults } from "./result-actions";
 
 export default async function ColonyPage() {
   const supabase = await createClient();
@@ -62,6 +64,7 @@ export default async function ColonyPage() {
     { data: cageChanges },
     { data: colonyPhotos },
     { data: housingCages },
+    { data: colonyResults },
   ] = await Promise.all([
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
@@ -73,6 +76,7 @@ export default async function ColonyPage() {
     supabase.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
     supabase.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
+    supabase.from("colony_results").select("*").eq("user_id", user.id).order("created_at"),
   ]);
 
   return (
@@ -95,6 +99,8 @@ export default async function ColonyPage() {
         cageChanges={(cageChanges || []) as CageChange[]}
         colonyPhotos={(colonyPhotos || []) as ColonyPhoto[]}
         housingCages={(housingCages || []) as HousingCage[]}
+        colonyResults={(colonyResults || []) as ColonyResult[]}
+        batchUpsertColonyResults={batchUpsertColonyResults}
         actions={{
           createBreederCage,
           updateBreederCage,

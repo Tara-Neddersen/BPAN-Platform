@@ -27,8 +27,9 @@ import { toast } from "sonner";
 import type {
   BreederCage, Cohort, Animal, AnimalExperiment,
   ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange, ColonyPhoto,
-  HousingCage, AnimalSex, AnimalGenotype, AnimalStatus,
+  HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AnimalStatus,
 } from "@/types";
+import { ColonyResultsTab } from "@/components/colony-results-tab";
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -99,6 +100,16 @@ interface ColonyClientProps {
   cageChanges: CageChange[];
   colonyPhotos: ColonyPhoto[];
   housingCages: HousingCage[];
+  colonyResults: ColonyResult[];
+  batchUpsertColonyResults: (
+    timepointAgeDays: number,
+    experimentType: string,
+    entries: {
+      animalId: string;
+      measures: Record<string, string | number | null>;
+      notes?: string;
+    }[]
+  ) => Promise<{ success?: boolean; error?: string; saved?: number; errors?: string[] }>;
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -172,6 +183,8 @@ export function ColonyClient({
   cageChanges: initCageChanges,
   colonyPhotos: initPhotos,
   housingCages: initHousingCages,
+  colonyResults: initColonyResults,
+  batchUpsertColonyResults,
   actions,
 }: ColonyClientProps) {
   const supabaseRef = useRef(createBrowserClient());
@@ -187,6 +200,7 @@ export function ColonyClient({
   const [cageChanges, setCageChanges] = useState(initCageChanges);
   const [photos, setPhotos] = useState(initPhotos);
   const [housingCages, setHousingCages] = useState(initHousingCages);
+  const [colonyResults, setColonyResults] = useState(initColonyResults);
 
   // Refetch all colony data directly from Supabase (bypasses all caching)
   const refetchAll = useCallback(async () => {
@@ -199,7 +213,7 @@ export function ColonyClient({
         window.location.reload();
         return;
       }
-      const [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10] = await Promise.all([
+      const [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11] = await Promise.all([
         sb.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
         sb.from("cohorts").select("*").eq("user_id", user.id).order("name"),
         sb.from("animals").select("*").eq("user_id", user.id).order("identifier"),
@@ -210,6 +224,7 @@ export function ColonyClient({
         sb.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
         sb.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
         sb.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
+        sb.from("colony_results").select("*").eq("user_id", user.id).order("created_at"),
       ]);
       setCages((r1.data || []) as BreederCage[]);
       setCohorts((r2.data || []) as Cohort[]);
@@ -221,6 +236,7 @@ export function ColonyClient({
       setCageChanges((r8.data || []) as CageChange[]);
       setPhotos((r9.data || []) as ColonyPhoto[]);
       setHousingCages((r10.data || []) as HousingCage[]);
+      setColonyResults((r11.data || []) as ColonyResult[]);
     } catch (err) {
       console.error("refetchAll error:", err);
       // Fallback: force full page reload
@@ -528,6 +544,7 @@ export function ColonyClient({
           <TabsTrigger value="cohorts" className="flex-1 min-w-[80px]">Cohorts</TabsTrigger>
           <TabsTrigger value="timepoints" className="flex-1 min-w-[80px]">Timepoints</TabsTrigger>
           <TabsTrigger value="breeders" className="flex-1 min-w-[80px]">Breeders</TabsTrigger>
+          <TabsTrigger value="results" className="flex-1 min-w-[80px] font-semibold text-indigo-700 dark:text-indigo-300">📊 Results</TabsTrigger>
           <TabsTrigger value="housing" className="flex-1 min-w-[80px]">Housing</TabsTrigger>
           <TabsTrigger value="cages" className="flex-1 min-w-[80px]">Cage Changes</TabsTrigger>
           <TabsTrigger value="pi" className="flex-1 min-w-[80px]">PI Access</TabsTrigger>
@@ -754,6 +771,21 @@ export function ColonyClient({
               })}
             </div>
           )}
+        </TabsContent>
+
+        {/* ─── Colony Results Tab ──────────────────────────────── */}
+        <TabsContent value="results" className="space-y-4">
+          <ColonyResultsTab
+            animals={animals}
+            cohorts={cohorts}
+            timepoints={timepoints}
+            colonyResults={colonyResults}
+            batchUpsertColonyResults={async (tp, exp, entries) => {
+              const result = await batchUpsertColonyResults(tp, exp, entries);
+              if (result.success) await refetchAll();
+              return result;
+            }}
+          />
         </TabsContent>
 
         {/* ─── Housing Cages Tab ──────────────────────────────── */}

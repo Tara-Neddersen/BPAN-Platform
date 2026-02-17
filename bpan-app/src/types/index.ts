@@ -442,6 +442,21 @@ export interface HousingCage {
   updated_at: string;
 }
 
+// ─── Colony Results (per-animal per-experiment) ─────────────────────────────
+
+export interface ColonyResult {
+  id: string;
+  user_id: string;
+  animal_id: string;
+  timepoint_age_days: number;
+  experiment_type: string;
+  measures: Record<string, string | number | null>;
+  notes: string | null;
+  recorded_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // ─── Unified Tasks ──────────────────────────────────────────────────────────
 
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
