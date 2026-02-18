@@ -1,6 +1,27 @@
 import { createClient } from "@/lib/supabase/server";
 import { ExperimentsClient } from "@/components/experiments-client";
-import type { Experiment, ExperimentTimepoint, Protocol, Reagent } from "@/types";
+import type { Experiment, ExperimentTimepoint, Protocol, Reagent, AnimalExperiment, Animal, Cohort, ColonyTimepoint } from "@/types";
+
+// Cursor-based pagination helper (same as colony)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAllRows(supabase: any, table: string, userId: string): Promise<any[]> {
+  const PAGE = 900;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let all: any[] = [];
+  let lastId: string | null = null;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let q = supabase.from(table).select("*").eq("user_id", userId).order("id", { ascending: true }).limit(PAGE);
+    if (lastId) q = q.gt("id", lastId);
+    const { data, error } = await q;
+    if (error) break;
+    if (!data || data.length === 0) break;
+    all = all.concat(data);
+    lastId = data[data.length - 1].id;
+    if (data.length < PAGE) break;
+  }
+  return all;
+}
 
 export default async function ExperimentsPage() {
   const supabase = await createClient();
@@ -13,6 +34,10 @@ export default async function ExperimentsPage() {
     { data: timepoints },
     { data: protocols },
     { data: reagents },
+    animalExperiments,
+    animals,
+    { data: cohorts },
+    { data: colonyTimepoints },
   ] = await Promise.all([
     supabase
       .from("experiments")
@@ -34,6 +59,18 @@ export default async function ExperimentsPage() {
       .select("*")
       .eq("user_id", user!.id)
       .order("name", { ascending: true }),
+    fetchAllRows(supabase, "animal_experiments", user!.id),
+    fetchAllRows(supabase, "animals", user!.id),
+    supabase
+      .from("cohorts")
+      .select("*")
+      .eq("user_id", user!.id)
+      .order("name"),
+    supabase
+      .from("colony_timepoints")
+      .select("*")
+      .eq("user_id", user!.id)
+      .order("sort_order"),
   ]);
 
   return (
@@ -42,7 +79,10 @@ export default async function ExperimentsPage() {
       timepoints={(timepoints as ExperimentTimepoint[]) || []}
       protocols={(protocols as Protocol[]) || []}
       reagents={(reagents as Reagent[]) || []}
+      animalExperiments={(animalExperiments as AnimalExperiment[]) || []}
+      animals={(animals as Animal[]) || []}
+      cohorts={(cohorts as Cohort[]) || []}
+      colonyTimepoints={(colonyTimepoints as ColonyTimepoint[]) || []}
     />
   );
 }
-

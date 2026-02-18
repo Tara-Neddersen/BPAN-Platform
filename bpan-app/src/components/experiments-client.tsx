@@ -38,11 +38,33 @@ import {
   updateReagent,
   deleteReagent,
 } from "@/app/(protected)/experiments/actions";
-import type { Experiment, ExperimentTimepoint, Protocol, Reagent, ProtocolStep } from "@/types";
+import type { Experiment, ExperimentTimepoint, Protocol, Reagent, ProtocolStep, AnimalExperiment, Animal, Cohort, ColonyTimepoint } from "@/types";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 type TabKey = "calendar" | "gantt" | "protocols" | "reagents";
+
+const COLONY_EXP_LABELS: Record<string, string> = {
+  handling: "Handling",
+  y_maze: "Y-Maze",
+  ldb: "Light-Dark Box",
+  marble: "Marble Burying",
+  nesting: "Nesting",
+  data_collection: "Data Collection",
+  core_acclimation: "Core Acclim.",
+  catwalk: "CatWalk",
+  rotarod_hab: "Rotarod Hab.",
+  rotarod: "Rotarod",
+  stamina: "Stamina",
+  blood_draw: "Blood Draw",
+  eeg_implant: "EEG Implant",
+  eeg_recording: "EEG Recording",
+};
+
+const COLONY_STATUS_COLORS: Record<string, string> = {
+  scheduled: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300 border-l-2 border-l-indigo-500",
+  in_progress: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border-l-2 border-l-amber-500",
+};
 
 const STATUS_STYLES: Record<string, { bg: string; icon: React.ReactNode }> = {
   planned: { bg: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400", icon: <Clock className="h-3 w-3" /> },
@@ -64,9 +86,22 @@ interface Props {
   timepoints: ExperimentTimepoint[];
   protocols: Protocol[];
   reagents: Reagent[];
+  animalExperiments?: AnimalExperiment[];
+  animals?: Animal[];
+  cohorts?: Cohort[];
+  colonyTimepoints?: ColonyTimepoint[];
 }
 
-export function ExperimentsClient({ experiments, timepoints, protocols, reagents }: Props) {
+export function ExperimentsClient({
+  experiments,
+  timepoints,
+  protocols,
+  reagents,
+  animalExperiments = [],
+  animals = [],
+  cohorts = [],
+  colonyTimepoints = [],
+}: Props) {
   const [tab, setTab] = useState<TabKey>("calendar");
   const [showNewExperiment, setShowNewExperiment] = useState(false);
   const [editingExperiment, setEditingExperiment] = useState<Experiment | null>(null);
@@ -86,12 +121,14 @@ export function ExperimentsClient({ experiments, timepoints, protocols, reagents
       </div>
 
       {/* Quick stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
           { label: "Planned", count: experiments.filter((e) => e.status === "planned").length, color: "text-blue-600" },
           { label: "In Progress", count: experiments.filter((e) => e.status === "in_progress").length, color: "text-yellow-600" },
           { label: "Completed", count: experiments.filter((e) => e.status === "completed").length, color: "text-green-600" },
           { label: "Upcoming Timepoints", count: timepoints.filter((t) => !t.completed_at).length, color: "text-purple-600" },
+          { label: "Colony Scheduled", count: animalExperiments.filter((e) => e.status === "scheduled").length, color: "text-indigo-600" },
+          { label: "Colony In Progress", count: animalExperiments.filter((e) => e.status === "in_progress").length, color: "text-amber-600" },
         ].map((s) => (
           <Card key={s.label}>
             <CardContent className="pt-4 pb-3 text-center">
@@ -143,6 +180,10 @@ export function ExperimentsClient({ experiments, timepoints, protocols, reagents
           experiments={experiments}
           timepoints={timepoints}
           onEdit={setEditingExperiment}
+          animalExperiments={animalExperiments}
+          animals={animals}
+          cohorts={cohorts}
+          colonyTimepoints={colonyTimepoints}
         />
       )}
       {tab === "gantt" && (
@@ -295,12 +336,23 @@ function CalendarView({
   experiments,
   timepoints,
   onEdit,
+  animalExperiments = [],
+  animals = [],
+  cohorts = [],
+  colonyTimepoints = [],
 }: {
   experiments: Experiment[];
   timepoints: ExperimentTimepoint[];
   onEdit: (e: Experiment) => void;
+  animalExperiments?: AnimalExperiment[];
+  animals?: Animal[];
+  cohorts?: Cohort[];
+  colonyTimepoints?: ColonyTimepoint[];
 }) {
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [showColonyExps, setShowColonyExps] = useState(true);
+  const [filterCohort, setFilterCohort] = useState<string>("all");
+  const [expandedDay, setExpandedDay] = useState<string | null>(null);
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
@@ -316,6 +368,22 @@ function CalendarView({
   for (let i = 0; i < startPad; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
   while (cells.length % 7 !== 0) cells.push(null);
+
+  // Lookups
+  const animalMap = new Map(animals.map(a => [a.id, a]));
+  const cohortMap = new Map(cohorts.map(c => [c.id, c]));
+  const tpMap = new Map(colonyTimepoints.map(tp => [tp.age_days, tp]));
+
+  // Filter colony experiments: only scheduled & in_progress
+  const filteredColonyExps = animalExperiments.filter(ae => {
+    if (ae.status !== "scheduled" && ae.status !== "in_progress") return false;
+    if (!ae.scheduled_date) return false;
+    if (filterCohort !== "all") {
+      const animal = animalMap.get(ae.animal_id);
+      if (!animal || animal.cohort_id !== filterCohort) return false;
+    }
+    return true;
+  });
 
   // Map experiments to dates
   function getExperimentsForDay(day: number) {
@@ -333,6 +401,36 @@ function CalendarView({
     return timepoints.filter((t) => t.scheduled_at.startsWith(dateStr));
   }
 
+  // Group colony experiments by date → experiment_type → list of animals
+  function getColonyExpsForDay(day: number) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const dayExps = filteredColonyExps.filter(ae => ae.scheduled_date === dateStr);
+
+    // Group by experiment_type + status
+    const groups = new Map<string, { type: string; status: string; animals: { id: string; identifier: string; cohortName: string; tpName: string }[] }>();
+    for (const ae of dayExps) {
+      const key = `${ae.experiment_type}::${ae.status}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          type: ae.experiment_type,
+          status: ae.status,
+          animals: [],
+        });
+      }
+      const animal = animalMap.get(ae.animal_id);
+      const cohort = animal ? cohortMap.get(animal.cohort_id) : null;
+      const tp = ae.timepoint_age_days != null ? tpMap.get(ae.timepoint_age_days) : null;
+      groups.get(key)!.animals.push({
+        id: ae.animal_id,
+        identifier: animal?.identifier || "?",
+        cohortName: cohort?.name || "",
+        tpName: tp?.name || `${ae.timepoint_age_days}d`,
+      });
+    }
+
+    return Array.from(groups.values()).sort((a, b) => a.type.localeCompare(b.type));
+  }
+
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
@@ -341,26 +439,97 @@ function CalendarView({
     .filter((t) => !t.completed_at && new Date(t.scheduled_at) >= new Date())
     .slice(0, 5);
 
+  // This month colony experiment summary
+  const monthStart = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+  const monthEnd = `${year}-${String(month + 1).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+  const thisMonthColony = filteredColonyExps.filter(ae =>
+    ae.scheduled_date! >= monthStart && ae.scheduled_date! <= monthEnd
+  );
+  const scheduledThisMonth = thisMonthColony.filter(ae => ae.status === "scheduled").length;
+  const inProgressThisMonth = thisMonthColony.filter(ae => ae.status === "in_progress").length;
+
   return (
     <div className="space-y-4">
-      {/* Month navigation */}
-      <div className="flex items-center justify-between">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setCurrentDate(new Date(year, month - 1, 1))}
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        <h3 className="text-lg font-semibold">{monthName}</h3>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setCurrentDate(new Date(year, month + 1, 1))}
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
+      {/* Month navigation + colony toggle */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentDate(new Date(year, month - 1, 1))}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <h3 className="text-lg font-semibold">{monthName}</h3>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentDate(new Date(year, month + 1, 1))}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Colony experiment toggle */}
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showColonyExps}
+              onChange={(e) => setShowColonyExps(e.target.checked)}
+              className="rounded"
+            />
+            <span>Colony Experiments</span>
+          </label>
+
+          {/* Cohort filter */}
+          {showColonyExps && cohorts.length > 0 && (
+            <select
+              value={filterCohort}
+              onChange={(e) => setFilterCohort(e.target.value)}
+              className="text-xs border rounded-md px-2 py-1 bg-background"
+            >
+              <option value="all">All Cohorts</option>
+              {cohorts.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
+
+      {/* This-month colony summary */}
+      {showColonyExps && (scheduledThisMonth + inProgressThisMonth) > 0 && (
+        <div className="flex items-center gap-4 text-xs px-3 py-2 rounded-lg border bg-muted/30">
+          <span className="font-medium text-foreground">This month:</span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-indigo-500 inline-block" />
+            {scheduledThisMonth} scheduled
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-amber-500 inline-block" />
+            {inProgressThisMonth} in progress
+          </span>
+        </div>
+      )}
+
+      {/* Legend */}
+      {showColonyExps && (
+        <div className="flex flex-wrap gap-3 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded bg-blue-200 inline-block border border-blue-400" /> Planner experiments
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded bg-indigo-200 inline-block border border-indigo-400" /> Colony scheduled
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded bg-amber-200 inline-block border border-amber-400" /> Colony in progress
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded bg-purple-200 inline-block border border-purple-400" /> Timepoints
+          </span>
+        </div>
+      )}
 
       {/* Calendar grid */}
       <div className="border rounded-lg overflow-hidden">
@@ -376,27 +545,42 @@ function CalendarView({
         <div className="grid grid-cols-7">
           {cells.map((day, i) => {
             if (day === null) {
-              return <div key={i} className="border-t border-r min-h-[80px] bg-muted/30" />;
+              return <div key={i} className="border-t border-r min-h-[90px] bg-muted/30" />;
             }
 
             const dayStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
             const dayExperiments = getExperimentsForDay(day);
             const dayTimepoints = getTimepointsForDay(day);
+            const colonyGroups = showColonyExps ? getColonyExpsForDay(day) : [];
             const isToday = dayStr === todayStr;
+            const hasContent = dayExperiments.length > 0 || dayTimepoints.length > 0 || colonyGroups.length > 0;
+            const isExpanded = expandedDay === dayStr;
+            const totalColonyAnimals = colonyGroups.reduce((sum, g) => sum + g.animals.length, 0);
 
             return (
               <div
                 key={i}
-                className={`border-t border-r min-h-[80px] p-1 ${isToday ? "bg-primary/5" : ""}`}
+                className={`border-t border-r min-h-[90px] p-1 relative group transition-colors ${
+                  isToday ? "bg-primary/5" : ""
+                } ${hasContent ? "cursor-pointer hover:bg-muted/20" : ""}`}
+                onClick={() => {
+                  if (hasContent) setExpandedDay(isExpanded ? null : dayStr);
+                }}
               >
-                <span className={`text-xs font-medium inline-flex h-5 w-5 items-center justify-center rounded-full ${isToday ? "bg-primary text-primary-foreground" : ""}`}>
-                  {day}
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className={`text-xs font-medium inline-flex h-5 w-5 items-center justify-center rounded-full ${isToday ? "bg-primary text-primary-foreground" : ""}`}>
+                    {day}
+                  </span>
+                  {totalColonyAnimals > 0 && !isExpanded && (
+                    <span className="text-[9px] text-muted-foreground">{totalColonyAnimals} 🐭</span>
+                  )}
+                </div>
                 <div className="mt-0.5 space-y-0.5">
+                  {/* Regular experiments */}
                   {dayExperiments.slice(0, 2).map((e) => (
                     <button
                       key={e.id}
-                      onClick={() => onEdit(e)}
+                      onClick={(ev) => { ev.stopPropagation(); onEdit(e); }}
                       className={`w-full text-left text-[10px] leading-tight px-1 py-0.5 rounded truncate ${STATUS_STYLES[e.status]?.bg || "bg-gray-100"}`}
                     >
                       {e.title}
@@ -405,17 +589,139 @@ function CalendarView({
                   {dayExperiments.length > 2 && (
                     <span className="text-[10px] text-muted-foreground">+{dayExperiments.length - 2} more</span>
                   )}
+
+                  {/* Planner timepoints */}
                   {dayTimepoints.map((t) => (
                     <div key={t.id} className="text-[10px] text-purple-600 truncate flex items-center gap-0.5">
                       <Clock className="h-2 w-2" /> {t.label}
                     </div>
                   ))}
+
+                  {/* Colony experiments — collapsed view */}
+                  {!isExpanded && colonyGroups.length > 0 && (
+                    <div className="space-y-0.5">
+                      {colonyGroups.slice(0, 3).map((g) => (
+                        <div
+                          key={g.type + g.status}
+                          className={`text-[10px] leading-tight px-1 py-0.5 rounded truncate ${COLONY_STATUS_COLORS[g.status] || "bg-gray-100 text-gray-700"}`}
+                        >
+                          {COLONY_EXP_LABELS[g.type] || g.type} · {g.animals.length}
+                        </div>
+                      ))}
+                      {colonyGroups.length > 3 && (
+                        <span className="text-[9px] text-muted-foreground">+{colonyGroups.length - 3} more</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Colony experiments — expanded view */}
+                  {isExpanded && colonyGroups.length > 0 && (
+                    <div className="space-y-1 mt-1">
+                      {colonyGroups.map((g) => (
+                        <div
+                          key={g.type + g.status}
+                          className={`text-[10px] leading-tight px-1.5 py-1 rounded ${COLONY_STATUS_COLORS[g.status] || "bg-gray-100 text-gray-700"}`}
+                        >
+                          <div className="font-medium flex items-center justify-between">
+                            <span>{COLONY_EXP_LABELS[g.type] || g.type}</span>
+                            <Badge variant="outline" className="h-3.5 px-1 text-[8px]">{g.status === "in_progress" ? "IP" : "Sched"}</Badge>
+                          </div>
+                          <div className="flex flex-wrap gap-x-1 mt-0.5 text-[9px] opacity-80">
+                            {g.animals.slice(0, 6).map((a) => (
+                              <span key={a.id} title={`${a.cohortName} #${a.identifier} (${a.tpName})`}>
+                                {a.cohortName ? `${a.cohortName.replace("BPAN ", "B")}-` : ""}{a.identifier}
+                              </span>
+                            ))}
+                            {g.animals.length > 6 && (
+                              <span className="text-muted-foreground">+{g.animals.length - 6}</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })}
         </div>
       </div>
+
+      {/* Day detail panel — shown below calendar when a day is expanded */}
+      {expandedDay && (() => {
+        const day = parseInt(expandedDay.split("-")[2]);
+        const colonyGroups = showColonyExps ? getColonyExpsForDay(day) : [];
+        const dayExperiments = getExperimentsForDay(day);
+        const totalAnimals = colonyGroups.reduce((s, g) => s + g.animals.length, 0);
+        if (colonyGroups.length === 0 && dayExperiments.length === 0) return null;
+
+        return (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center justify-between">
+                <span>{new Date(expandedDay + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</span>
+                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setExpandedDay(null)}>
+                  Close
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {/* Regular planner experiments */}
+              {dayExperiments.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Planner Experiments</p>
+                  {dayExperiments.map(e => (
+                    <div key={e.id} className="flex items-center justify-between text-sm border rounded-md p-2 mb-1">
+                      <div className="flex items-center gap-2">
+                        <Badge className={`text-[10px] ${STATUS_STYLES[e.status]?.bg || ""}`}>{e.status}</Badge>
+                        <span className="font-medium">{e.title}</span>
+                      </div>
+                      <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => onEdit(e)}>
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Colony experiments */}
+              {colonyGroups.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Colony Experiments ({totalAnimals} total)</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {colonyGroups.map((g) => (
+                      <div
+                        key={g.type + g.status}
+                        className={`rounded-lg p-2.5 ${COLONY_STATUS_COLORS[g.status] || "bg-gray-100"}`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-semibold">{COLONY_EXP_LABELS[g.type] || g.type}</span>
+                          <Badge variant="outline" className="text-[10px] h-4 px-1.5">
+                            {g.animals.length} animal{g.animals.length !== 1 ? "s" : ""} · {g.status === "in_progress" ? "In Progress" : "Scheduled"}
+                          </Badge>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {g.animals.map((a) => (
+                            <span
+                              key={a.id}
+                              className="inline-flex items-center text-[10px] bg-white/60 dark:bg-black/20 rounded px-1.5 py-0.5"
+                              title={`${a.cohortName} #${a.identifier} (${a.tpName})`}
+                            >
+                              {a.cohortName && <span className="font-medium mr-0.5">{a.cohortName.replace("BPAN ", "B")}</span>}
+                              #{a.identifier}
+                              <span className="ml-1 opacity-60">{a.tpName}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Upcoming timepoints */}
       {upcoming.length > 0 && (
