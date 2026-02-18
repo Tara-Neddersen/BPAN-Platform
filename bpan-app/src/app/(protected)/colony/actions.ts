@@ -385,39 +385,49 @@ export async function batchUpdateExperimentStatus(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  // Get animal IDs (optionally filtered by cohort)
-  let animalQuery = supabase.from("animals").select("id").eq("user_id", user.id).eq("status", "active");
+  // Step 1: Get animal IDs (optionally filtered by cohort)
+  let animalQuery = supabase.from("animals").select("id").eq("user_id", user.id);
   if (cohortId) animalQuery = animalQuery.eq("cohort_id", cohortId);
-  const { data: animals } = await animalQuery;
-  if (!animals || animals.length === 0) return { error: "No animals found." };
+  const { data: animals, error: animalErr } = await animalQuery;
+  if (animalErr) return { error: `Animal fetch: ${animalErr.message}` };
+  if (!animals || animals.length === 0) return { error: "No animals found for this cohort." };
 
   const animalIds = animals.map(a => a.id);
 
-  // Fetch matching experiment IDs (paginated RPC)
-  const allExps = await fetchAllViaRpc(supabase, "get_cohort_experiments", {
-    p_user_id: user.id,
-    p_animal_ids: animalIds,
-  });
-  const matching = (allExps as { id: string; animal_id: string; experiment_type: string; timepoint_age_days: number }[])
-    .filter(e => e.experiment_type === experimentType && e.timepoint_age_days === timepointAgeDays);
+  // Step 2: Directly query matching experiments (paginated to handle >1000)
+  let allMatchingIds: string[] = [];
+  for (let i = 0; i < animalIds.length; i += 50) {
+    const batch = animalIds.slice(i, i + 50);
+    const { data: exps, error: expErr } = await supabase
+      .from("animal_experiments")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("experiment_type", experimentType)
+      .eq("timepoint_age_days", timepointAgeDays)
+      .in("animal_id", batch);
+    if (expErr) return { error: `Experiment fetch: ${expErr.message}` };
+    if (exps) allMatchingIds = allMatchingIds.concat(exps.map(e => e.id));
+  }
 
-  if (matching.length === 0) return { error: "No matching experiments found." };
+  if (allMatchingIds.length === 0) {
+    return { error: `No matching experiments found (${animalIds.length} animals checked, type=${experimentType}, tp=${timepointAgeDays}d).` };
+  }
 
+  // Step 3: Build update payload
   const today = new Date().toISOString().split("T")[0];
   const update: Record<string, unknown> = { status: newStatus };
   if (newStatus === "completed") update.completed_date = today;
   if (newStatus === "scheduled" || newStatus === "pending") update.completed_date = null;
 
-  // Update in batches
-  const ids = matching.map(e => e.id);
-  for (let i = 0; i < ids.length; i += 100) {
-    const batch = ids.slice(i, i + 100);
+  // Step 4: Update in batches
+  for (let i = 0; i < allMatchingIds.length; i += 100) {
+    const batch = allMatchingIds.slice(i, i + 100);
     const { error } = await supabase.from("animal_experiments").update(update).in("id", batch);
     if (error) return { error: error.message };
   }
 
   revalidatePath("/colony");
-  return { success: true, updated: ids.length };
+  return { success: true, updated: allMatchingIds.length };
 }
 
 export async function deleteAnimalExperiment(id: string) {
