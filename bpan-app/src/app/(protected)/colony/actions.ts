@@ -679,22 +679,37 @@ export async function scheduleExperimentsForAnimal(
   // Get existing experiments for this animal to avoid duplicates
   const { data: existingExps } = await supabase
     .from("animal_experiments")
-    .select("experiment_type, timepoint_age_days")
+    .select("id, experiment_type, timepoint_age_days, status")
     .eq("animal_id", animalId)
     .eq("user_id", user.id);
 
-  // Build a set of "type::timepoint" keys that already exist
-  const existingKeys = new Set(
-    (existingExps || []).map(e => `${e.experiment_type}::${e.timepoint_age_days}`)
+  // Build a set of "type::timepoint" keys that already exist and are NOT skipped
+  // Skipped experiments should be re-scheduled when explicitly requested
+  const activeKeys = new Set(
+    (existingExps || [])
+      .filter(e => e.status !== "skipped")
+      .map(e => `${e.experiment_type}::${e.timepoint_age_days}`)
   );
+  // Track skipped experiments so we can reset them to "scheduled"
+  const skippedExps = (existingExps || []).filter(e => e.status === "skipped");
+  const skippedKeys = new Set(
+    skippedExps.map(e => `${e.experiment_type}::${e.timepoint_age_days}`)
+  );
+  const skippedIdMap = new Map<string, string>();
+  for (const e of skippedExps) {
+    skippedIdMap.set(`${e.experiment_type}::${e.timepoint_age_days}`, e.id);
+  }
 
   const birth = new Date(birthDate);
   const DAY = 24 * 60 * 60 * 1000;
   const records: Record<string, unknown>[] = [];
+  const skippedIdsToReschedule: { id: string; scheduled_date: string; notes?: string }[] = [];
 
   // Track whether EEG implant surgery has been scheduled (only once, at first timepoint)
-  // Check if one already exists in the DB or is being created for an earlier timepoint
-  let eegImplantScheduled = (existingExps || []).some(e => e.experiment_type === "eeg_implant");
+  // Only count non-skipped EEG implants as "already scheduled"
+  let eegImplantScheduled = (existingExps || []).some(
+    e => e.experiment_type === "eeg_implant" && e.status !== "skipped"
+  );
   // If ANY timepoint (across ALL, not just filtered) has includes_eeg_implant, schedule EEG
   const anyTimepointHasEeg = allTimepoints.some(tp => tp.includes_eeg_implant);
   const eegTpConfigForAnimal = allTimepoints.find(t => t.includes_eeg_implant) || timepoints[0];
@@ -706,35 +721,53 @@ export async function scheduleExperimentsForAnimal(
     for (const step of PROTOCOL_SCHEDULE) {
       const key = `${step.type}::${tp.age_days}`;
 
-      // Skip if already exists
-      if (existingKeys.has(key)) continue;
+      // Skip if already exists with an active status (scheduled, in_progress, completed)
+      if (activeKeys.has(key)) continue;
 
       if (step.type === "handling") {
         if (tp.handling_days_before > 0) {
           const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * DAY);
-          records.push({
-            user_id: user.id,
-            animal_id: animalId,
-            experiment_type: "handling",
-            timepoint_age_days: tp.age_days,
-            scheduled_date: handlingStart.toISOString().split("T")[0],
-            status: "scheduled",
-            notes: step.notes,
-          });
+          if (skippedKeys.has(key)) {
+            // Re-schedule the skipped experiment
+            skippedIdsToReschedule.push({
+              id: skippedIdMap.get(key)!,
+              scheduled_date: handlingStart.toISOString().split("T")[0],
+              notes: step.notes,
+            });
+          } else {
+            records.push({
+              user_id: user.id,
+              animal_id: animalId,
+              experiment_type: "handling",
+              timepoint_age_days: tp.age_days,
+              scheduled_date: handlingStart.toISOString().split("T")[0],
+              status: "scheduled",
+              notes: step.notes,
+            });
+          }
         }
         continue;
       }
 
       const expDate = new Date(experimentStart.getTime() + step.dayOffset * DAY);
-      records.push({
-        user_id: user.id,
-        animal_id: animalId,
-        experiment_type: step.type,
-        timepoint_age_days: tp.age_days,
-        scheduled_date: expDate.toISOString().split("T")[0],
-        status: "scheduled",
-        notes: step.notes,
-      });
+      if (skippedKeys.has(key)) {
+        // Re-schedule the skipped experiment
+        skippedIdsToReschedule.push({
+          id: skippedIdMap.get(key)!,
+          scheduled_date: expDate.toISOString().split("T")[0],
+          notes: step.notes,
+        });
+      } else {
+        records.push({
+          user_id: user.id,
+          animal_id: animalId,
+          experiment_type: step.type,
+          timepoint_age_days: tp.age_days,
+          scheduled_date: expDate.toISOString().split("T")[0],
+          status: "scheduled",
+          notes: step.notes,
+        });
+      }
     }
 
     // EEG: If ANY timepoint includes EEG, schedule across ALL timepoints.
@@ -751,45 +784,65 @@ export async function scheduleExperimentsForAnimal(
         // First timepoint: schedule surgery + recovery + recording
         eegImplantScheduled = true;
 
-        if (!existingKeys.has(`eeg_implant::${tp.age_days}`)) {
-          records.push({
-            user_id: user.id,
-            animal_id: animalId,
-            experiment_type: "eeg_implant",
-            timepoint_age_days: tp.age_days,
-            scheduled_date: afterExperimentsDate.toISOString().split("T")[0],
-            status: "scheduled",
-            notes: "EEG implant surgery (one-time, first timepoint only)",
-          });
+        const implantKey = `eeg_implant::${tp.age_days}`;
+        if (!activeKeys.has(implantKey)) {
+          const implantDate = afterExperimentsDate.toISOString().split("T")[0];
+          if (skippedKeys.has(implantKey)) {
+            skippedIdsToReschedule.push({ id: skippedIdMap.get(implantKey)!, scheduled_date: implantDate, notes: "EEG implant surgery (one-time, first timepoint only)" });
+          } else {
+            records.push({
+              user_id: user.id, animal_id: animalId,
+              experiment_type: "eeg_implant", timepoint_age_days: tp.age_days,
+              scheduled_date: implantDate, status: "scheduled",
+              notes: "EEG implant surgery (one-time, first timepoint only)",
+            });
+          }
         }
 
-        if (!existingKeys.has(`eeg_recording::${tp.age_days}`)) {
+        const recKey = `eeg_recording::${tp.age_days}`;
+        if (!activeKeys.has(recKey)) {
           const recordingStart = new Date(afterExperimentsDate.getTime() + eegTpConfig.eeg_recovery_days * DAY);
-          records.push({
-            user_id: user.id,
-            animal_id: animalId,
-            experiment_type: "eeg_recording",
-            timepoint_age_days: tp.age_days,
-            scheduled_date: recordingStart.toISOString().split("T")[0],
-            status: "scheduled",
-            notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) after ${eegTpConfig.eeg_recovery_days}d post-surgery recovery`,
-          });
+          const recDate = recordingStart.toISOString().split("T")[0];
+          if (skippedKeys.has(recKey)) {
+            skippedIdsToReschedule.push({ id: skippedIdMap.get(recKey)!, scheduled_date: recDate, notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) after ${eegTpConfig.eeg_recovery_days}d post-surgery recovery` });
+          } else {
+            records.push({
+              user_id: user.id, animal_id: animalId,
+              experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
+              scheduled_date: recDate, status: "scheduled",
+              notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) after ${eegTpConfig.eeg_recovery_days}d post-surgery recovery`,
+            });
+          }
         }
       } else {
         // Subsequent timepoints: recording only (7d rest after experiments, no surgery)
-        if (!existingKeys.has(`eeg_recording::${tp.age_days}`)) {
+        const recKey = `eeg_recording::${tp.age_days}`;
+        if (!activeKeys.has(recKey)) {
           const recordingStart = new Date(afterExperimentsDate.getTime() + 7 * DAY);
-          records.push({
-            user_id: user.id,
-            animal_id: animalId,
-            experiment_type: "eeg_recording",
-            timepoint_age_days: tp.age_days,
+          const recDate = recordingStart.toISOString().split("T")[0];
+          if (skippedKeys.has(recKey)) {
+            skippedIdsToReschedule.push({ id: skippedIdMap.get(recKey)!, scheduled_date: recDate, notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) — 7d rest after experiments (no surgery needed)` });
+          } else {
+            records.push({
+              user_id: user.id, animal_id: animalId,
+              experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
             scheduled_date: recordingStart.toISOString().split("T")[0],
             status: "scheduled",
             notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) — 7d rest after experiments (no surgery needed)`,
-          });
+            });
+          }
         }
       }
+    }
+  }
+
+  // Re-schedule skipped experiments (update status back to "scheduled")
+  if (skippedIdsToReschedule.length > 0) {
+    for (const item of skippedIdsToReschedule) {
+      await supabase
+        .from("animal_experiments")
+        .update({ status: "scheduled", scheduled_date: item.scheduled_date, notes: item.notes })
+        .eq("id", item.id);
     }
   }
 
@@ -803,7 +856,7 @@ export async function scheduleExperimentsForAnimal(
   }
 
   revalidatePath("/colony");
-  return { success: true, count: records.length };
+  return { success: true, count: records.length + skippedIdsToReschedule.length, rescheduled: skippedIdsToReschedule.length };
 }
 
 // ─── Cohort-Level Auto-Schedule ─────────────────────────────────────────
@@ -846,20 +899,30 @@ export async function scheduleExperimentsForCohort(
   // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (cursor-based pagination) ──
   const animalIds = cohortAnimals.map(a => a.id);
   const allExistingRaw = await fetchAllRows(supabase, "animal_experiments", user.id, { "in:animal_id": animalIds });
-  const allExisting = allExistingRaw as { id: string; animal_id: string; experiment_type: string; timepoint_age_days: number }[];
+  const allExisting = allExistingRaw as { id: string; animal_id: string; experiment_type: string; timepoint_age_days: number; status: string }[];
 
-  // Build a set of "animalId::type::tp" for quick lookup
-  const existingSet = new Set(
-    allExisting.map(e => `${e.animal_id}::${e.experiment_type}::${e.timepoint_age_days}`)
+  // Build a set of "animalId::type::tp" keys for NON-skipped experiments
+  const activeSet = new Set(
+    allExisting
+      .filter(e => e.status !== "skipped")
+      .map(e => `${e.animal_id}::${e.experiment_type}::${e.timepoint_age_days}`)
   );
-  // Track if EEG implant exists per animal
+  // Build a map for skipped experiments so we can re-schedule them
+  const skippedMap = new Map<string, string>(); // key → id
+  for (const e of allExisting) {
+    if (e.status === "skipped") {
+      skippedMap.set(`${e.animal_id}::${e.experiment_type}::${e.timepoint_age_days}`, e.id);
+    }
+  }
+  // Track if EEG implant exists per animal (only non-skipped)
   const animalHasEegImplant = new Set(
-    (allExisting || []).filter(e => e.experiment_type === "eeg_implant").map(e => e.animal_id)
+    allExisting.filter(e => e.experiment_type === "eeg_implant" && e.status !== "skipped").map(e => e.animal_id)
   );
 
   // ── 3. Compute all records in memory ──
   const DAY = 24 * 60 * 60 * 1000;
   const allRecords: Record<string, unknown>[] = [];
+  const skippedIdsToReschedule: { id: string; scheduled_date: string; notes?: string }[] = [];
   let animalsScheduled = 0;
   // If ANY timepoint (across ALL, not just filtered) has includes_eeg_implant, schedule EEG
   const anyTimepointHasEeg = allTimepoints.some(tp => tp.includes_eeg_implant);
@@ -874,80 +937,105 @@ export async function scheduleExperimentsForCohort(
     for (const tp of timepoints) {
       const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
 
-      // Schedule EVERY experiment in the protocol — no filtering by tp.experiments
+      // Schedule EVERY experiment in the protocol
       for (const step of PROTOCOL_SCHEDULE) {
         const key = `${animal.id}::${step.type}::${tp.age_days}`;
 
-        if (existingSet.has(key)) continue;
+        // Skip if already active (scheduled, in_progress, completed)
+        if (activeSet.has(key)) continue;
 
         if (step.type === "handling") {
           if (tp.handling_days_before > 0) {
             const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * DAY);
-            allRecords.push({
-              user_id: user.id, animal_id: animal.id,
-              experiment_type: "handling", timepoint_age_days: tp.age_days,
-              scheduled_date: handlingStart.toISOString().split("T")[0],
-              status: "scheduled", notes: step.notes,
-            });
-            existingSet.add(key);
+            const date = handlingStart.toISOString().split("T")[0];
+            if (skippedMap.has(key)) {
+              skippedIdsToReschedule.push({ id: skippedMap.get(key)!, scheduled_date: date, notes: step.notes });
+              skippedMap.delete(key);
+            } else {
+              allRecords.push({
+                user_id: user.id, animal_id: animal.id,
+                experiment_type: "handling", timepoint_age_days: tp.age_days,
+                scheduled_date: date, status: "scheduled", notes: step.notes,
+              });
+            }
+            activeSet.add(key);
             animalRecords++;
           }
           continue;
         }
 
         const expDate = new Date(experimentStart.getTime() + step.dayOffset * DAY);
-        allRecords.push({
-          user_id: user.id, animal_id: animal.id,
-          experiment_type: step.type, timepoint_age_days: tp.age_days,
-          scheduled_date: expDate.toISOString().split("T")[0],
-          status: "scheduled", notes: step.notes,
-        });
-        existingSet.add(key);
+        const date = expDate.toISOString().split("T")[0];
+        if (skippedMap.has(key)) {
+          skippedIdsToReschedule.push({ id: skippedMap.get(key)!, scheduled_date: date, notes: step.notes });
+          skippedMap.delete(key);
+        } else {
+          allRecords.push({
+            user_id: user.id, animal_id: animal.id,
+            experiment_type: step.type, timepoint_age_days: tp.age_days,
+            scheduled_date: date, status: "scheduled", notes: step.notes,
+          });
+        }
+        activeSet.add(key);
         animalRecords++;
       }
 
-      // EEG: If ANY timepoint includes EEG, schedule across ALL timepoints.
-      // Surgery once at first TP, recording at all TPs.
+      // EEG: Surgery once at first TP, recording at all TPs.
       if (anyTimepointHasEeg) {
         const afterExperimentsDate = new Date(experimentStart.getTime() + 10 * DAY);
 
         if (!eegImplantScheduled) {
           eegImplantScheduled = true;
           const implantKey = `${animal.id}::eeg_implant::${tp.age_days}`;
-          if (!existingSet.has(implantKey)) {
-            allRecords.push({
-              user_id: user.id, animal_id: animal.id,
-              experiment_type: "eeg_implant", timepoint_age_days: tp.age_days,
-              scheduled_date: afterExperimentsDate.toISOString().split("T")[0],
-              status: "scheduled", notes: "EEG implant surgery (one-time, first timepoint only)",
-            });
-            existingSet.add(implantKey);
+          if (!activeSet.has(implantKey)) {
+            const implantDate = afterExperimentsDate.toISOString().split("T")[0];
+            if (skippedMap.has(implantKey)) {
+              skippedIdsToReschedule.push({ id: skippedMap.get(implantKey)!, scheduled_date: implantDate, notes: "EEG implant surgery (one-time)" });
+              skippedMap.delete(implantKey);
+            } else {
+              allRecords.push({
+                user_id: user.id, animal_id: animal.id,
+                experiment_type: "eeg_implant", timepoint_age_days: tp.age_days,
+                scheduled_date: implantDate, status: "scheduled", notes: "EEG implant surgery (one-time)",
+              });
+            }
+            activeSet.add(implantKey);
             animalRecords++;
           }
           const recKey = `${animal.id}::eeg_recording::${tp.age_days}`;
-          if (!existingSet.has(recKey)) {
+          if (!activeSet.has(recKey)) {
             const recordingStart = new Date(afterExperimentsDate.getTime() + eegTpConfig.eeg_recovery_days * DAY);
-            allRecords.push({
-              user_id: user.id, animal_id: animal.id,
-              experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
-              scheduled_date: recordingStart.toISOString().split("T")[0],
-              status: "scheduled", notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) after ${eegTpConfig.eeg_recovery_days}d recovery`,
-            });
-            existingSet.add(recKey);
+            const recDate = recordingStart.toISOString().split("T")[0];
+            if (skippedMap.has(recKey)) {
+              skippedIdsToReschedule.push({ id: skippedMap.get(recKey)!, scheduled_date: recDate, notes: `EEG recording after ${eegTpConfig.eeg_recovery_days}d recovery` });
+              skippedMap.delete(recKey);
+            } else {
+              allRecords.push({
+                user_id: user.id, animal_id: animal.id,
+                experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
+                scheduled_date: recDate, status: "scheduled", notes: `EEG recording after ${eegTpConfig.eeg_recovery_days}d recovery`,
+              });
+            }
+            activeSet.add(recKey);
             animalRecords++;
           }
         } else {
           // Subsequent timepoints: recording only (no surgery)
           const recKey = `${animal.id}::eeg_recording::${tp.age_days}`;
-          if (!existingSet.has(recKey)) {
+          if (!activeSet.has(recKey)) {
             const recordingStart = new Date(afterExperimentsDate.getTime() + 7 * DAY);
-            allRecords.push({
-              user_id: user.id, animal_id: animal.id,
-              experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
-              scheduled_date: recordingStart.toISOString().split("T")[0],
-              status: "scheduled", notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) — 7d rest after experiments`,
-            });
-            existingSet.add(recKey);
+            const recDate = recordingStart.toISOString().split("T")[0];
+            if (skippedMap.has(recKey)) {
+              skippedIdsToReschedule.push({ id: skippedMap.get(recKey)!, scheduled_date: recDate, notes: `EEG recording — 7d rest after experiments` });
+              skippedMap.delete(recKey);
+            } else {
+              allRecords.push({
+                user_id: user.id, animal_id: animal.id,
+                experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
+                scheduled_date: recDate, status: "scheduled", notes: `EEG recording — 7d rest after experiments`,
+              });
+            }
+            activeSet.add(recKey);
             animalRecords++;
           }
         }
@@ -957,7 +1045,20 @@ export async function scheduleExperimentsForCohort(
     if (animalRecords > 0) animalsScheduled++;
   }
 
-  // ── 4. Batch insert all records at once ──
+  // ── 4a. Re-schedule skipped experiments ──
+  if (skippedIdsToReschedule.length > 0) {
+    for (let i = 0; i < skippedIdsToReschedule.length; i += 50) {
+      const batch = skippedIdsToReschedule.slice(i, i + 50);
+      for (const item of batch) {
+        await supabase
+          .from("animal_experiments")
+          .update({ status: "scheduled", scheduled_date: item.scheduled_date, notes: item.notes })
+          .eq("id", item.id);
+      }
+    }
+  }
+
+  // ── 4b. Batch insert new records ──
   if (allRecords.length > 0) {
     for (let i = 0; i < allRecords.length; i += 200) {
       const batch = allRecords.slice(i, i + 200);
@@ -968,11 +1069,12 @@ export async function scheduleExperimentsForCohort(
 
   revalidatePath("/colony");
 
-  if (allRecords.length === 0) {
+  const totalChanged = allRecords.length + skippedIdsToReschedule.length;
+  if (totalChanged === 0) {
     return { error: `All experiments for all ${cohortAnimals.length} animals are already scheduled. Nothing new to add.` };
   }
 
-  return { success: true, scheduled: animalsScheduled, total: allRecords.length };
+  return { success: true, scheduled: animalsScheduled, total: totalChanged, rescheduled: skippedIdsToReschedule.length };
 }
 
 // ─── Mass Delete Experiments ────────────────────────────────────────────
