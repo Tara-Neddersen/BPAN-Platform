@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -62,7 +63,16 @@ interface ExperimentTrackerMatrixProps {
   cohorts: Cohort[];
   timepoints: ColonyTimepoint[];
   experiments: AnimalExperiment[];
-  onBatchUpdateStatus?: (cohortId: string | null, timepointAgeDays: number, experimentType: string, newStatus: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
+  onBatchUpdateStatus?: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
+}
+
+// ─── Multi-toggle helper ────────────────────────────────────────────────
+
+function toggleSet<T>(set: Set<T>, value: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  return next;
 }
 
 // ─── Component ─────────────────────────────────────────────────────────
@@ -74,14 +84,23 @@ export function ExperimentTrackerMatrix({
   experiments,
   onBatchUpdateStatus,
 }: ExperimentTrackerMatrixProps) {
+  const router = useRouter();
   const [filterCohort, setFilterCohort] = useState("all");
   const [batchOpen, setBatchOpen] = useState(false);
-  const [batchCohort, setBatchCohort] = useState<string>("all");
-  const [batchTp, setBatchTp] = useState<string>("");
-  const [batchExp, setBatchExp] = useState<string>("");
+  const [batchCohorts, setBatchCohorts] = useState<Set<string>>(new Set());
+  const [batchTps, setBatchTps] = useState<Set<number>>(new Set());
+  const [batchExps, setBatchExps] = useState<Set<string>>(new Set());
   const [batchStatus, setBatchStatus] = useState<string>("");
   const [isPending, startTransition] = useTransition();
   const [batchResult, setBatchResult] = useState<string | null>(null);
+
+  const resetBatch = useCallback(() => {
+    setBatchCohorts(new Set());
+    setBatchTps(new Set());
+    setBatchExps(new Set());
+    setBatchStatus("");
+    setBatchResult(null);
+  }, []);
 
   // Sorted timepoints by age
   const sortedTimepoints = useMemo(
@@ -240,89 +259,153 @@ export function ExperimentTrackerMatrix({
 
         {/* Batch Update Panel */}
         {batchOpen && onBatchUpdateStatus && (
-          <div className="mt-3 p-3 rounded-lg border bg-muted/30 space-y-3">
-            <p className="text-xs font-medium">Batch mark experiments as a specific status:</p>
-            <div className="flex flex-wrap gap-2">
-              {/* Cohort */}
-              <Select value={batchCohort} onValueChange={setBatchCohort}>
-                <SelectTrigger className="w-[140px] h-8 text-xs">
-                  <SelectValue placeholder="Cohort" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Cohorts</SelectItem>
-                  {cohorts.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+          <div className="mt-3 p-4 rounded-lg border bg-muted/30 space-y-4">
+            <p className="text-sm font-medium">Batch update — click to select multiple, then Apply</p>
+
+            {/* Cohorts */}
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground font-medium">Cohorts <span className="text-muted-foreground/60">(none = all)</span></p>
+              <div className="flex flex-wrap gap-1.5">
+                {cohorts.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setBatchCohorts(toggleSet(batchCohorts, c.id))}
+                    className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                      batchCohorts.has(c.id)
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background hover:bg-muted border-border"
+                    }`}
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Timepoints */}
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground font-medium">Timepoints</p>
+              <div className="flex flex-wrap gap-1.5">
+                {sortedTimepoints.map((tp) => (
+                  <button
+                    key={tp.age_days}
+                    type="button"
+                    onClick={() => setBatchTps(toggleSet(batchTps, tp.age_days))}
+                    className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                      batchTps.has(tp.age_days)
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background hover:bg-muted border-border"
+                    }`}
+                  >
+                    {tp.name}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (batchTps.size === sortedTimepoints.length) setBatchTps(new Set());
+                    else setBatchTps(new Set(sortedTimepoints.map(tp => tp.age_days)));
+                  }}
+                  className="px-2.5 py-1 rounded-full text-xs border border-dashed hover:bg-muted transition-colors text-muted-foreground"
+                >
+                  {batchTps.size === sortedTimepoints.length ? "Clear all" : "Select all"}
+                </button>
+              </div>
+            </div>
+
+            {/* Experiments */}
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground font-medium">Experiments</p>
+              <div className="flex flex-wrap gap-1.5">
+                {allExperimentTypes.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setBatchExps(toggleSet(batchExps, t))}
+                    className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                      batchExps.has(t)
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background hover:bg-muted border-border"
+                    }`}
+                  >
+                    {EXPERIMENT_LABELS[t] || t}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (batchExps.size === allExperimentTypes.length) setBatchExps(new Set());
+                    else setBatchExps(new Set(allExperimentTypes));
+                  }}
+                  className="px-2.5 py-1 rounded-full text-xs border border-dashed hover:bg-muted transition-colors text-muted-foreground"
+                >
+                  {batchExps.size === allExperimentTypes.length ? "Clear all" : "Select all"}
+                </button>
+              </div>
+            </div>
+
+            {/* Status + Apply */}
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground font-medium">Mark as</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    { value: "completed", label: "✅ Completed" },
+                    { value: "in_progress", label: "🟡 In Progress" },
+                    { value: "scheduled", label: "🔵 Scheduled" },
+                    { value: "skipped", label: "❌ Skipped" },
+                    { value: "pending", label: "— Pending" },
+                  ] as const).map((s) => (
+                    <button
+                      key={s.value}
+                      type="button"
+                      onClick={() => setBatchStatus(batchStatus === s.value ? "" : s.value)}
+                      className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                        batchStatus === s.value
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-background hover:bg-muted border-border"
+                      }`}
+                    >
+                      {s.label}
+                    </button>
                   ))}
-                </SelectContent>
-              </Select>
+                </div>
+              </div>
+            </div>
 
-              {/* Timepoint */}
-              <Select value={batchTp} onValueChange={setBatchTp}>
-                <SelectTrigger className="w-[140px] h-8 text-xs">
-                  <SelectValue placeholder="Timepoint" />
-                </SelectTrigger>
-                <SelectContent>
-                  {sortedTimepoints.map((tp) => (
-                    <SelectItem key={tp.age_days} value={String(tp.age_days)}>
-                      {tp.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {/* Experiment Type */}
-              <Select value={batchExp} onValueChange={setBatchExp}>
-                <SelectTrigger className="w-[140px] h-8 text-xs">
-                  <SelectValue placeholder="Experiment" />
-                </SelectTrigger>
-                <SelectContent>
-                  {allExperimentTypes.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {EXPERIMENT_LABELS[t] || t}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {/* New Status */}
-              <Select value={batchStatus} onValueChange={setBatchStatus}>
-                <SelectTrigger className="w-[130px] h-8 text-xs">
-                  <SelectValue placeholder="Mark as..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="completed">✅ Completed</SelectItem>
-                  <SelectItem value="in_progress">🟡 In Progress</SelectItem>
-                  <SelectItem value="scheduled">🔵 Scheduled</SelectItem>
-                  <SelectItem value="skipped">❌ Skipped</SelectItem>
-                  <SelectItem value="pending">— Pending</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {/* Apply */}
+            <div className="flex items-center gap-3 pt-1">
               <Button
                 size="sm"
-                className="h-8 text-xs"
-                disabled={!batchTp || !batchExp || !batchStatus || isPending}
+                className="text-xs"
+                disabled={batchTps.size === 0 || batchExps.size === 0 || !batchStatus || isPending}
                 onClick={() => {
                   startTransition(async () => {
                     setBatchResult(null);
                     const res = await onBatchUpdateStatus(
-                      batchCohort === "all" ? null : batchCohort,
-                      parseInt(batchTp),
-                      batchExp,
+                      Array.from(batchCohorts),
+                      Array.from(batchTps),
+                      Array.from(batchExps),
                       batchStatus
                     );
-                    if (res.error) setBatchResult(`❌ ${res.error}`);
-                    else setBatchResult(`✅ Updated ${res.updated} experiments`);
+                    if (res.error) {
+                      setBatchResult(`❌ ${res.error}`);
+                    } else {
+                      setBatchResult(`✅ Updated ${res.updated} experiments`);
+                      router.refresh();
+                    }
                   });
                 }}
               >
-                {isPending ? "Updating..." : "Apply"}
+                {isPending ? "Updating..." : `Apply to ${batchTps.size} tp × ${batchExps.size} exp`}
               </Button>
+              <Button variant="ghost" size="sm" className="text-xs" onClick={resetBatch}>
+                Reset
+              </Button>
+              {batchResult && (
+                <p className="text-xs font-medium">{batchResult}</p>
+              )}
             </div>
-            {batchResult && (
-              <p className="text-xs font-medium">{batchResult}</p>
-            )}
           </div>
         )}
       </CardHeader>

@@ -372,45 +372,53 @@ export async function updateAnimalExperiment(id: string, formData: FormData) {
 }
 
 /**
- * Batch update experiment status for a specific cohort + timepoint + experiment type.
- * e.g. "Mark all marble @ 30d for BPAN 3 as skipped"
+ * Batch update experiment status — supports multiple cohorts, timepoints, and experiment types.
+ * e.g. "Mark all marble+nesting @ 30d+120d for BPAN 3+BPAN 5 as skipped"
  */
 export async function batchUpdateExperimentStatus(
-  cohortId: string | null,
-  timepointAgeDays: number,
-  experimentType: string,
+  cohortIds: string[],      // empty = all cohorts
+  timepointAgeDays: number[], // which timepoints
+  experimentTypes: string[],  // which experiment types
   newStatus: string,
 ) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  // Step 1: Get animal IDs (optionally filtered by cohort)
+  if (timepointAgeDays.length === 0 || experimentTypes.length === 0) {
+    return { error: "Select at least one timepoint and one experiment." };
+  }
+
+  // Step 1: Get animal IDs (optionally filtered by cohorts)
   let animalQuery = supabase.from("animals").select("id").eq("user_id", user.id);
-  if (cohortId) animalQuery = animalQuery.eq("cohort_id", cohortId);
+  if (cohortIds.length > 0) animalQuery = animalQuery.in("cohort_id", cohortIds);
   const { data: animals, error: animalErr } = await animalQuery;
   if (animalErr) return { error: `Animal fetch: ${animalErr.message}` };
-  if (!animals || animals.length === 0) return { error: "No animals found for this cohort." };
+  if (!animals || animals.length === 0) return { error: "No animals found." };
 
   const animalIds = animals.map(a => a.id);
 
-  // Step 2: Directly query matching experiments (paginated to handle >1000)
+  // Step 2: For each combination of tp × expType, query matching experiment IDs
   let allMatchingIds: string[] = [];
-  for (let i = 0; i < animalIds.length; i += 50) {
-    const batch = animalIds.slice(i, i + 50);
-    const { data: exps, error: expErr } = await supabase
-      .from("animal_experiments")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("experiment_type", experimentType)
-      .eq("timepoint_age_days", timepointAgeDays)
-      .in("animal_id", batch);
-    if (expErr) return { error: `Experiment fetch: ${expErr.message}` };
-    if (exps) allMatchingIds = allMatchingIds.concat(exps.map(e => e.id));
+  for (const tp of timepointAgeDays) {
+    for (const expType of experimentTypes) {
+      for (let i = 0; i < animalIds.length; i += 50) {
+        const batch = animalIds.slice(i, i + 50);
+        const { data: exps, error: expErr } = await supabase
+          .from("animal_experiments")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("experiment_type", expType)
+          .eq("timepoint_age_days", tp)
+          .in("animal_id", batch);
+        if (expErr) return { error: `Experiment fetch: ${expErr.message}` };
+        if (exps) allMatchingIds = allMatchingIds.concat(exps.map(e => e.id));
+      }
+    }
   }
 
   if (allMatchingIds.length === 0) {
-    return { error: `No matching experiments found (${animalIds.length} animals checked, type=${experimentType}, tp=${timepointAgeDays}d).` };
+    return { error: `No matching experiments found (${animalIds.length} animals, ${experimentTypes.length} types, ${timepointAgeDays.length} timepoints).` };
   }
 
   // Step 3: Build update payload
