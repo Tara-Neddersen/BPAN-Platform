@@ -654,12 +654,14 @@ export async function scheduleExperimentsForAnimal(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  // Get all timepoints
-  const { data: allTimepoints } = await supabase
+  // Get all timepoints (sort by sort_order, then age_days as fallback)
+  const { data: allTimepointsRaw } = await supabase
     .from("colony_timepoints")
     .select("*")
     .eq("user_id", user.id)
-    .order("sort_order", { ascending: true });
+    .order("sort_order", { ascending: true })
+    .order("age_days", { ascending: true });
+  const allTimepoints = allTimepointsRaw;
 
   if (!allTimepoints || allTimepoints.length === 0) {
     return { error: "No timepoints configured. Add timepoints first." };
@@ -693,8 +695,9 @@ export async function scheduleExperimentsForAnimal(
   // Track whether EEG implant surgery has been scheduled (only once, at first timepoint)
   // Check if one already exists in the DB or is being created for an earlier timepoint
   let eegImplantScheduled = (existingExps || []).some(e => e.experiment_type === "eeg_implant");
-  // If ANY timepoint has includes_eeg_implant, schedule EEG across ALL timepoints
-  const anyTimepointHasEeg = timepoints.some(tp => tp.includes_eeg_implant);
+  // If ANY timepoint (across ALL, not just filtered) has includes_eeg_implant, schedule EEG
+  const anyTimepointHasEeg = allTimepoints.some(tp => tp.includes_eeg_implant);
+  const eegTpConfigForAnimal = allTimepoints.find(t => t.includes_eeg_implant) || timepoints[0];
 
   for (const tp of timepoints) {
     const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
@@ -741,7 +744,7 @@ export async function scheduleExperimentsForAnimal(
     //   1st TP (e.g. 30d): experiments (10d) → implant surgery → recovery → recording
     //   Later TPs (120d, 210d): experiments (10d) → 7d rest → recording (no surgery)
     if (anyTimepointHasEeg) {
-      const eegTpConfig = timepoints.find(t => t.includes_eeg_implant) || tp;
+      const eegTpConfig = eegTpConfigForAnimal;
       const afterExperimentsDate = new Date(experimentStart.getTime() + 10 * DAY);
 
       if (!eegImplantScheduled) {
@@ -821,8 +824,8 @@ export async function scheduleExperimentsForCohort(
   // ── 1. Fetch all needed data in parallel ──
   const [cohortRes, animalsRes, timepointsRes] = await Promise.all([
     supabase.from("cohorts").select("*").eq("id", cohortId).eq("user_id", user.id).single(),
-    supabase.from("animals").select("id, birth_date").eq("cohort_id", cohortId).eq("user_id", user.id).eq("status", "active"),
-    supabase.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order", { ascending: true }),
+    supabase.from("animals").select("id, birth_date").eq("cohort_id", cohortId).eq("user_id", user.id).in("status", ["active", "eeg_implanted"]),
+    supabase.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order", { ascending: true }).order("age_days", { ascending: true }),
   ]);
 
   const cohort = cohortRes.data;
@@ -858,9 +861,9 @@ export async function scheduleExperimentsForCohort(
   const DAY = 24 * 60 * 60 * 1000;
   const allRecords: Record<string, unknown>[] = [];
   let animalsScheduled = 0;
-  // If ANY timepoint has includes_eeg_implant, schedule EEG across ALL timepoints
-  const anyTimepointHasEeg = timepoints.some(tp => tp.includes_eeg_implant);
-  const eegTpConfig = timepoints.find(t => t.includes_eeg_implant) || timepoints[0];
+  // If ANY timepoint (across ALL, not just filtered) has includes_eeg_implant, schedule EEG
+  const anyTimepointHasEeg = allTimepoints.some(tp => tp.includes_eeg_implant);
+  const eegTpConfig = allTimepoints.find(t => t.includes_eeg_implant) || timepoints[0];
 
   for (const animal of cohortAnimals) {
     const birthDate = animal.birth_date || cohort.birth_date;
