@@ -133,18 +133,69 @@ export async function updateCohort(id: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  const newBirthDate = formData.get("birth_date") as string;
+
+  // Get old birth_date to detect change
+  const { data: oldCohort } = await supabase
+    .from("cohorts")
+    .select("birth_date")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .single();
+
   const { error } = await supabase
     .from("cohorts")
     .update({
       breeder_cage_id: (formData.get("breeder_cage_id") as string) || null,
       name: formData.get("name") as string,
-      birth_date: formData.get("birth_date") as string,
+      birth_date: newBirthDate,
       litter_size: formData.get("litter_size") ? parseInt(formData.get("litter_size") as string) : null,
       notes: (formData.get("notes") as string) || null,
     })
     .eq("id", id)
     .eq("user_id", user.id);
   if (error) return { error: error.message };
+
+  // CASCADE: If birth_date changed, update all animals in this cohort + reschedule their experiments
+  if (oldCohort && oldCohort.birth_date !== newBirthDate && newBirthDate) {
+    // Update all animals' birth_date
+    const { data: cohortAnimals } = await supabase
+      .from("animals")
+      .select("id")
+      .eq("cohort_id", id)
+      .eq("user_id", user.id);
+
+    if (cohortAnimals && cohortAnimals.length > 0) {
+      const animalIds = cohortAnimals.map((a: { id: string }) => a.id);
+
+      // Update birth_date on all animals
+      for (let i = 0; i < animalIds.length; i += 100) {
+        const batch = animalIds.slice(i, i + 100);
+        await supabase
+          .from("animals")
+          .update({ birth_date: newBirthDate })
+          .in("id", batch);
+      }
+
+      // Reschedule non-completed experiments for all animals in this cohort
+      const allExps = await fetchAllRows(supabase, "animal_experiments", user.id, { "in:animal_id": animalIds });
+      const pendingExps = allExps.filter(
+        (e: { status: string }) => e.status === "scheduled" || e.status === "pending" || e.status === "in_progress"
+      );
+      for (const exp of pendingExps) {
+        if (exp.timepoint_age_days != null) {
+          const d = new Date(newBirthDate);
+          d.setDate(d.getDate() + exp.timepoint_age_days);
+          const newScheduledDate = d.toISOString().split("T")[0];
+          await supabase
+            .from("animal_experiments")
+            .update({ scheduled_date: newScheduledDate })
+            .eq("id", exp.id);
+        }
+      }
+    }
+  }
+
   revalidatePath("/colony");
   return { success: true };
 }
@@ -193,6 +244,17 @@ export async function updateAnimal(id: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  const newBirthDate = formData.get("birth_date") as string;
+  const newStatus = formData.get("status") as string;
+
+  // Get old values to detect changes
+  const { data: oldAnimal } = await supabase
+    .from("animals")
+    .select("birth_date, status")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .single();
+
   const { error } = await supabase
     .from("animals")
     .update({
@@ -201,9 +263,9 @@ export async function updateAnimal(id: string, formData: FormData) {
       sex: formData.get("sex") as string,
       genotype: formData.get("genotype") as string,
       ear_tag: (formData.get("ear_tag") as string) || null,
-      birth_date: formData.get("birth_date") as string,
+      birth_date: newBirthDate,
       cage_number: (formData.get("cage_number") as string) || null,
-      status: formData.get("status") as string,
+      status: newStatus,
       eeg_implanted: formData.get("eeg_implanted") === "true",
       eeg_implant_date: (formData.get("eeg_implant_date") as string) || null,
       notes: (formData.get("notes") as string) || null,
@@ -211,6 +273,47 @@ export async function updateAnimal(id: string, formData: FormData) {
     .eq("id", id)
     .eq("user_id", user.id);
   if (error) return { error: error.message };
+
+  // CASCADE: If birth_date changed, reschedule all non-completed experiments
+  if (oldAnimal && oldAnimal.birth_date !== newBirthDate && newBirthDate) {
+    const allExps = await fetchAllRows(supabase, "animal_experiments", user.id, { animal_id: id });
+    const pendingExps = allExps.filter(
+      (e: { status: string }) => e.status === "scheduled" || e.status === "pending" || e.status === "in_progress"
+    );
+    for (const exp of pendingExps) {
+      if (exp.timepoint_age_days != null) {
+        const d = new Date(newBirthDate);
+        d.setDate(d.getDate() + exp.timepoint_age_days);
+        const newScheduledDate = d.toISOString().split("T")[0];
+        await supabase
+          .from("animal_experiments")
+          .update({ scheduled_date: newScheduledDate })
+          .eq("id", exp.id);
+      }
+    }
+  }
+
+  // CASCADE: If status changed to inactive/deceased/sacrificed/transferred, skip all scheduled experiments
+  if (
+    oldAnimal &&
+    oldAnimal.status === "active" &&
+    newStatus !== "active" &&
+    ["sacrificed", "transferred", "deceased"].includes(newStatus)
+  ) {
+    const allExps = await fetchAllRows(supabase, "animal_experiments", user.id, { animal_id: id });
+    const scheduledExps = allExps.filter(
+      (e: { status: string }) => e.status === "scheduled" || e.status === "pending"
+    );
+    const expIds = scheduledExps.map((e: { id: string }) => e.id);
+    for (let i = 0; i < expIds.length; i += 100) {
+      const batch = expIds.slice(i, i + 100);
+      await supabase
+        .from("animal_experiments")
+        .update({ status: "skipped", notes: `Auto-skipped: animal marked as ${newStatus}` })
+        .in("id", batch);
+    }
+  }
+
   revalidatePath("/colony");
   return { success: true };
 }
@@ -344,8 +447,36 @@ export async function deleteColonyTimepoint(id: string) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  // Get the timepoint's age_days before deleting
+  const { data: tp } = await supabase
+    .from("colony_timepoints")
+    .select("age_days")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .single();
+
   const { error } = await supabase.from("colony_timepoints").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
+
+  // CASCADE: Delete all experiments and results for this timepoint's age_days
+  if (tp) {
+    // Delete experiments in batches
+    const allExps = await fetchAllRows(supabase, "animal_experiments", user.id, { timepoint_age_days: tp.age_days });
+    const expIds = allExps.map((e: { id: string }) => e.id);
+    for (let i = 0; i < expIds.length; i += 100) {
+      const batch = expIds.slice(i, i + 100);
+      await supabase.from("animal_experiments").delete().in("id", batch);
+    }
+
+    // Delete results in batches
+    const allResults = await fetchAllRows(supabase, "colony_results", user.id, { timepoint_age_days: tp.age_days });
+    const resultIds = allResults.map((r: { id: string }) => r.id);
+    for (let i = 0; i < resultIds.length; i += 100) {
+      const batch = resultIds.slice(i, i + 100);
+      await supabase.from("colony_results").delete().in("id", batch);
+    }
+  }
+
   revalidatePath("/colony");
   return { success: true };
 }
@@ -383,6 +514,15 @@ export async function updateAnimalExperiment(id: string, formData: FormData) {
   if (formData.has("results_drive_url")) update.results_drive_url = formData.get("results_drive_url") || null;
   if (formData.has("results_notes")) update.results_notes = formData.get("results_notes") || null;
   if (formData.has("notes")) update.notes = formData.get("notes") || null;
+
+  // AUTO-SET: If marking as completed but no completed_date provided, set it to today
+  if (update.status === "completed" && !update.completed_date) {
+    update.completed_date = new Date().toISOString().split("T")[0];
+  }
+  // AUTO-CLEAR: If reverting from completed, clear completed_date
+  if (update.status && update.status !== "completed" && !formData.has("completed_date")) {
+    update.completed_date = null;
+  }
 
   const { error } = await supabase
     .from("animal_experiments")

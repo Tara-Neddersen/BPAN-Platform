@@ -187,6 +187,7 @@ export async function batchUpsertColonyResults(
 
 /**
  * Delete a colony result row.
+ * CASCADE: Reverts the matching experiment status from "completed" back to "scheduled".
  */
 export async function deleteColonyResult(id: string) {
   const supabase = await createClient();
@@ -195,12 +196,41 @@ export async function deleteColonyResult(id: string) {
   } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  // Get result details before deleting so we can revert the experiment
+  const { data: result } = await supabase
+    .from("colony_results")
+    .select("animal_id, timepoint_age_days, experiment_type")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .single();
+
   const { error } = await supabase
     .from("colony_results")
     .delete()
     .eq("id", id)
     .eq("user_id", user.id);
   if (error) return { error: error.message };
+
+  // CASCADE: Revert matching experiment from "completed" back to "scheduled"
+  if (result) {
+    const { data: exp } = await supabase
+      .from("animal_experiments")
+      .select("id, status")
+      .eq("user_id", user.id)
+      .eq("animal_id", result.animal_id)
+      .eq("experiment_type", result.experiment_type)
+      .eq("timepoint_age_days", result.timepoint_age_days)
+      .eq("status", "completed")
+      .maybeSingle();
+
+    if (exp) {
+      await supabase
+        .from("animal_experiments")
+        .update({ status: "scheduled", completed_date: null })
+        .eq("id", exp.id);
+    }
+  }
+
   revalidatePath("/colony");
   return { success: true };
 }
