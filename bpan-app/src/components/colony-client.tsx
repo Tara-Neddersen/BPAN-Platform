@@ -209,6 +209,28 @@ export function ColonyClient({
   const [housingCages, setHousingCages] = useState(initHousingCages);
   const [colonyResults, setColonyResults] = useState(initColonyResults);
 
+  // Cursor-based pagination helper for large tables (client-side)
+  const fetchAllClientRows = useCallback(async (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    sb: any, table: string, userId: string
+  ): Promise<unknown[]> => {
+    const PAGE = 900;
+    let all: unknown[] = [];
+    let lastId: string | null = null;
+    while (true) {
+      let q = sb.from(table).select("*").eq("user_id", userId).order("id", { ascending: true }).limit(PAGE);
+      if (lastId) q = q.gt("id", lastId);
+      const { data, error } = await q;
+      if (error) { console.error(`fetchAllClientRows ${table}:`, error.message); break; }
+      if (!data || data.length === 0) break;
+      all = all.concat(data);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      lastId = (data[data.length - 1] as any).id;
+      if (data.length < PAGE) break;
+    }
+    return all;
+  }, []);
+
   // Refetch all colony data directly from Supabase (bypasses all caching)
   const refetchAll = useCallback(async () => {
     try {
@@ -216,40 +238,39 @@ export function ColonyClient({
       const { data: { user }, error: authError } = await sb.auth.getUser();
       if (authError || !user) {
         console.error("refetchAll: auth failed", authError);
-        // Fallback: force full page reload
         window.location.reload();
         return;
       }
-      const [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11] = await Promise.all([
+      // Small tables: normal query. Large tables: cursor-based pagination.
+      const [r1, r2, r5, r6, r7, r9, r10, allAnimals, allExps, allCageChanges, allResults] = await Promise.all([
         sb.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
         sb.from("cohorts").select("*").eq("user_id", user.id).order("name"),
-        sb.from("animals").select("*").eq("user_id", user.id).order("identifier"),
-        sb.from("animal_experiments").select("*").eq("user_id", user.id).order("scheduled_date"),
         sb.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
         sb.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
         sb.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
-        sb.from("cage_changes").select("*").eq("user_id", user.id).order("scheduled_date"),
         sb.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
         sb.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
-        sb.from("colony_results").select("*").eq("user_id", user.id).order("created_at"),
+        fetchAllClientRows(sb, "animals", user.id),
+        fetchAllClientRows(sb, "animal_experiments", user.id),
+        fetchAllClientRows(sb, "cage_changes", user.id),
+        fetchAllClientRows(sb, "colony_results", user.id),
       ]);
       setCages((r1.data || []) as BreederCage[]);
       setCohorts((r2.data || []) as Cohort[]);
-      setAnimals((r3.data || []) as Animal[]);
-      setExperiments((r4.data || []) as AnimalExperiment[]);
+      setAnimals(allAnimals as Animal[]);
+      setExperiments(allExps as AnimalExperiment[]);
       setTimepoints((r5.data || []) as ColonyTimepoint[]);
       setPortals((r6.data || []) as AdvisorPortal[]);
       setMeetings((r7.data || []) as MeetingNote[]);
-      setCageChanges((r8.data || []) as CageChange[]);
+      setCageChanges(allCageChanges as CageChange[]);
       setPhotos((r9.data || []) as ColonyPhoto[]);
       setHousingCages((r10.data || []) as HousingCage[]);
-      setColonyResults((r11.data || []) as ColonyResult[]);
+      setColonyResults(allResults as ColonyResult[]);
     } catch (err) {
       console.error("refetchAll error:", err);
-      // Fallback: force full page reload
       window.location.reload();
     }
-  }, []);
+  }, [fetchAllClientRows]);
 
   const [showAddAnimal, setShowAddAnimal] = useState(false);
   const [showAddCohort, setShowAddCohort] = useState(false);
@@ -360,11 +381,30 @@ export function ColonyClient({
     return d.toISOString().split("T")[0];
   }, []);
 
-  // Overdue experiments (past today, still scheduled)
-  const overdueExps = useMemo(
-    () => experiments.filter((e) => e.status === "scheduled" && e.scheduled_date && e.scheduled_date < todayStr),
-    [experiments, todayStr]
-  );
+  // Overdue experiments (past today AND past grace period, still scheduled/in_progress)
+  const overdueExps = useMemo(() => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const today = new Date();
+    // Build lookup: animalId → birth_date
+    const animalBirthMap = new Map(animals.map(a => [a.id, a.birth_date]));
+    // Build lookup: age_days → grace_period_days
+    const tpGraceMap = new Map(timepoints.map(tp => [tp.age_days, tp.grace_period_days ?? 30]));
+
+    return experiments.filter((e) => {
+      if (e.status !== "scheduled" && e.status !== "in_progress") return false;
+      if (!e.scheduled_date || e.scheduled_date >= todayStr) return false;
+
+      // Check if still within grace period
+      const birthStr = animalBirthMap.get(e.animal_id);
+      if (birthStr && e.timepoint_age_days != null) {
+        const graceDays = tpGraceMap.get(e.timepoint_age_days) ?? 30;
+        const birth = new Date(birthStr);
+        const deadline = new Date(birth.getTime() + (e.timepoint_age_days + graceDays) * DAY);
+        if (today <= deadline) return false; // Still in grace period — NOT overdue
+      }
+      return true;
+    });
+  }, [experiments, animals, timepoints, todayStr]);
 
   // Upcoming experiments — today through next 7 days
   const upcoming = useMemo(
