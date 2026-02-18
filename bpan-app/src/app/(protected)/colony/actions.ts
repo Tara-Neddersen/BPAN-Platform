@@ -371,6 +371,55 @@ export async function updateAnimalExperiment(id: string, formData: FormData) {
   return { success: true };
 }
 
+/**
+ * Batch update experiment status for a specific cohort + timepoint + experiment type.
+ * e.g. "Mark all marble @ 30d for BPAN 3 as skipped"
+ */
+export async function batchUpdateExperimentStatus(
+  cohortId: string | null,
+  timepointAgeDays: number,
+  experimentType: string,
+  newStatus: string,
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  // Get animal IDs (optionally filtered by cohort)
+  let animalQuery = supabase.from("animals").select("id").eq("user_id", user.id).eq("status", "active");
+  if (cohortId) animalQuery = animalQuery.eq("cohort_id", cohortId);
+  const { data: animals } = await animalQuery;
+  if (!animals || animals.length === 0) return { error: "No animals found." };
+
+  const animalIds = animals.map(a => a.id);
+
+  // Fetch matching experiment IDs (paginated RPC)
+  const allExps = await fetchAllViaRpc(supabase, "get_cohort_experiments", {
+    p_user_id: user.id,
+    p_animal_ids: animalIds,
+  });
+  const matching = (allExps as { id: string; animal_id: string; experiment_type: string; timepoint_age_days: number }[])
+    .filter(e => e.experiment_type === experimentType && e.timepoint_age_days === timepointAgeDays);
+
+  if (matching.length === 0) return { error: "No matching experiments found." };
+
+  const today = new Date().toISOString().split("T")[0];
+  const update: Record<string, unknown> = { status: newStatus };
+  if (newStatus === "completed") update.completed_date = today;
+  if (newStatus === "scheduled" || newStatus === "pending") update.completed_date = null;
+
+  // Update in batches
+  const ids = matching.map(e => e.id);
+  for (let i = 0; i < ids.length; i += 100) {
+    const batch = ids.slice(i, i + 100);
+    const { error } = await supabase.from("animal_experiments").update(update).in("id", batch);
+    if (error) return { error: error.message };
+  }
+
+  revalidatePath("/colony");
+  return { success: true, updated: ids.length };
+}
+
 export async function deleteAnimalExperiment(id: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

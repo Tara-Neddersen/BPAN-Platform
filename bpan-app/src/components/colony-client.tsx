@@ -148,6 +148,7 @@ interface ColonyClientProps {
     deleteHousingCage: (id: string) => Promise<{ success?: boolean; error?: string }>;
     assignAnimalToCage: (animalId: string, housingCageId: string | null) => Promise<{ success?: boolean; error?: string }>;
     rescheduleTimepointExperiments: (animalId: string, timepointAgeDays: number, newStartDate: string, birthDate: string) => Promise<{ success?: boolean; error?: string; rescheduled?: number; lastDate?: string; message?: string }>;
+    batchUpdateExperimentStatus: (cohortId: string | null, timepointAgeDays: number, experimentType: string, newStatus: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
   };
 }
 
@@ -1014,6 +1015,7 @@ export function ColonyClient({
             cohorts={cohorts}
             timepoints={timepoints}
             experiments={experiments}
+            onBatchUpdateStatus={actions.batchUpdateExperimentStatus}
           />
         </TabsContent>
 
