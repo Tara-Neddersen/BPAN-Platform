@@ -4,21 +4,44 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 
-// Helper: paginate RPC calls to bypass PostgREST 1000-row hard limit
+/**
+ * Cursor-based pagination: fetch ALL rows from a table using id > lastId.
+ * More reliable than .range() or RPC pagination.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchAllViaRpc(supabase: any, fnName: string, params: Record<string, unknown>): Promise<any[]> {
-  const PAGE = 1000;
+async function fetchAllRows(supabase: any, table: string, userId: string, extraFilters?: Record<string, unknown>): Promise<any[]> {
+  const PAGE = 900;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let all: any[] = [];
-  let page = 0;
+  let lastId: string | null = null;
+
   while (true) {
-    const from = page * PAGE;
-    const { data, error } = await supabase.rpc(fnName, params).range(from, from + PAGE - 1);
-    if (error) { console.error(`RPC ${fnName} page ${page} error:`, error.message); break; }
+    let query = supabase
+      .from(table)
+      .select("*")
+      .eq("user_id", userId)
+      .order("id", { ascending: true })
+      .limit(PAGE);
+
+    if (lastId) query = query.gt("id", lastId);
+
+    // Apply extra filters (e.g. .in("animal_id", [...]))
+    if (extraFilters) {
+      for (const [key, value] of Object.entries(extraFilters)) {
+        if (key.startsWith("in:")) {
+          query = query.in(key.slice(3), value as string[]);
+        } else {
+          query = query.eq(key, value);
+        }
+      }
+    }
+
+    const { data, error } = await query;
+    if (error) { console.error(`fetchAllRows ${table} error:`, error.message); break; }
     if (!data || data.length === 0) break;
     all = all.concat(data);
+    lastId = data[data.length - 1].id;
     if (data.length < PAGE) break;
-    page++;
   }
   return all;
 }
@@ -270,9 +293,9 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
 
   // If age_days changed, cascade to animal_experiments and colony_results
   if (oldAgeDays != null && oldAgeDays !== newAgeDays) {
-    // Fetch all affected experiments (paginated RPC to bypass 1000-row limit)
-    const affectedExpsRaw = await fetchAllViaRpc(supabase, "get_all_animal_experiments", { p_user_id: user.id });
-    const affectedExps = (affectedExpsRaw as { id: string; animal_id: string; timepoint_age_days: number }[])
+    // Fetch all affected experiments using cursor-based pagination
+    const allExpsRaw = await fetchAllRows(supabase, "animal_experiments", user.id);
+    const affectedExps = (allExpsRaw as { id: string; animal_id: string; timepoint_age_days: number }[])
       .filter(e => e.timepoint_age_days === oldAgeDays);
 
     if (affectedExps.length > 0) {
@@ -674,12 +697,9 @@ export async function scheduleExperimentsForCohort(
 
   if (timepoints.length === 0) return { error: "No matching timepoints found." };
 
-  // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (paginated RPC) ──
+  // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (cursor-based pagination) ──
   const animalIds = cohortAnimals.map(a => a.id);
-  const allExistingRaw = await fetchAllViaRpc(supabase, "get_cohort_experiments", {
-    p_user_id: user.id,
-    p_animal_ids: animalIds,
-  });
+  const allExistingRaw = await fetchAllRows(supabase, "animal_experiments", user.id, { "in:animal_id": animalIds });
   const allExisting = allExistingRaw as { id: string; animal_id: string; experiment_type: string; timepoint_age_days: number }[];
 
   // Build a set of "animalId::type::tp" for quick lookup
@@ -882,14 +902,15 @@ export async function deleteExperimentsForCohort(
 
   const animalIds = cohortAnimals.map(a => a.id);
 
-  // Get IDs of experiments to delete (paginated RPC to bypass 1000-row limit)
-  const idsRaw = await fetchAllViaRpc(supabase, "get_experiment_ids_for_delete", {
-    p_user_id: user.id,
-    p_animal_ids: animalIds,
-    p_timepoint_ages: onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0 ? onlyTimepointAgeDays : null,
-    p_statuses: onlyStatuses && onlyStatuses.length > 0 ? onlyStatuses : null,
-  });
-  const allIds = (idsRaw as { id: string }[]).map(r => r.id);
+  // Get experiments to delete using cursor-based pagination + in-memory filtering
+  const allExpsRaw = await fetchAllRows(supabase, "animal_experiments", user.id, { "in:animal_id": animalIds });
+  const allIds = (allExpsRaw as { id: string; timepoint_age_days: number; status: string }[])
+    .filter(e => {
+      if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0 && !onlyTimepointAgeDays.includes(e.timepoint_age_days)) return false;
+      if (onlyStatuses && onlyStatuses.length > 0 && !onlyStatuses.includes(e.status)) return false;
+      return true;
+    })
+    .map(e => e.id);
 
   if (allIds.length > 0) {
     for (let i = 0; i < allIds.length; i += 100) {

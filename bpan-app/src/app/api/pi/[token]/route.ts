@@ -1,21 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
 
-// Helper: paginate RPC calls to bypass PostgREST 1000-row hard limit
+/**
+ * Cursor-based pagination: fetch ALL rows from a table using id > lastId.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchAllViaRpc(supabase: any, fnName: string, params: Record<string, unknown>): Promise<any[]> {
-  const PAGE = 1000;
+async function fetchAllRows(supabase: any, table: string, userId: string): Promise<any[]> {
+  const PAGE = 900;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let all: any[] = [];
-  let page = 0;
+  let lastId: string | null = null;
+
   while (true) {
-    const from = page * PAGE;
-    const { data, error } = await supabase.rpc(fnName, params).range(from, from + PAGE - 1);
-    if (error) { console.error(`RPC ${fnName} page ${page} error:`, error.message); break; }
+    let query = supabase
+      .from(table)
+      .select("*")
+      .eq("user_id", userId)
+      .order("id", { ascending: true })
+      .limit(PAGE);
+
+    if (lastId) query = query.gt("id", lastId);
+
+    const { data, error } = await query;
+    if (error) { console.error(`fetchAllRows ${table} error:`, error.message); break; }
     if (!data || data.length === 0) break;
     all = all.concat(data);
+    lastId = data[data.length - 1].id;
     if (data.length < PAGE) break;
-    page++;
   }
   return all;
 }
@@ -100,10 +111,10 @@ export async function GET(
     }
 
     if (canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("results")) {
-      // Use paginated RPC to bypass 1000-row limit, then join animal identifiers
+      // Cursor-based pagination to bypass 1000-row limit, then join animal identifiers
       const [allExpsRaw, allAnimalsRaw] = await Promise.all([
-        fetchAllViaRpc(supabase, "get_all_animal_experiments", { p_user_id: userId }),
-        fetchAllViaRpc(supabase, "get_all_animals", { p_user_id: userId }),
+        fetchAllRows(supabase, "animal_experiments", userId),
+        fetchAllRows(supabase, "animals", userId),
       ]);
       const animalMap = new Map(
         (allAnimalsRaw as { id: string; identifier: string }[]).map(a => [a.id, a.identifier])
