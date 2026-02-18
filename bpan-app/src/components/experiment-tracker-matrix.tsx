@@ -108,9 +108,10 @@ export function ExperimentTrackerMatrix({
     [timepoints]
   );
 
-  // Gather all unique experiment types across timepoints
+  // Gather all unique experiment types: from timepoint config + actual experiment data
   const allExperimentTypes = useMemo(() => {
     const types: string[] = [];
+    // Start with timepoint-configured experiments
     for (const tp of sortedTimepoints) {
       for (const exp of tp.experiments) {
         if (!types.includes(exp)) types.push(exp);
@@ -120,8 +121,14 @@ export function ExperimentTrackerMatrix({
     if (!types.includes("handling")) {
       types.unshift("handling");
     }
+    // Also include EEG and any other types found in actual experiment data
+    for (const exp of experiments) {
+      if (!types.includes(exp.experiment_type)) {
+        types.push(exp.experiment_type);
+      }
+    }
     return types;
-  }, [sortedTimepoints]);
+  }, [sortedTimepoints, experiments]);
 
   // Filter animals
   const filteredAnimals = useMemo(() => {

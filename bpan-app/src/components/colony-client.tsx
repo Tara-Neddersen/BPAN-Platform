@@ -665,6 +665,11 @@ export function ColonyClient({
                                       const animal = animalLookup.get(exp.animal_id);
                                       const cohort = animal?.cohort_id ? cohortLookup.get(animal.cohort_id) : null;
                                       const tp = exp.timepoint_age_days != null ? tpLookup.get(exp.timepoint_age_days) : null;
+                                      const ageDays = animal?.birth_date
+                                        ? Math.floor((Date.now() - new Date(animal.birth_date).getTime()) / 86400000)
+                                        : null;
+                                      const graceDays = tp?.grace_period_days ?? 30;
+                                      const deadlineAge = exp.timepoint_age_days != null ? exp.timepoint_age_days + graceDays : null;
                                       return (
                                         <div key={exp.id} className="flex items-center justify-between text-[11px] py-0.5">
                                           <div className="flex items-center gap-1.5">
@@ -678,6 +683,11 @@ export function ColonyClient({
                                               <Badge variant="outline" className="h-4 px-1 text-[10px]">
                                                 {tp.name}
                                               </Badge>
+                                            )}
+                                            {ageDays != null && (
+                                              <span className="text-muted-foreground">
+                                                age {ageDays}d{deadlineAge != null ? ` / deadline ${deadlineAge}d` : ""}
+                                              </span>
                                             )}
                                             {exp.status === "in_progress" && (
                                               <Badge className="h-4 px-1 text-[10px] bg-yellow-100 text-yellow-800">In Progress</Badge>
