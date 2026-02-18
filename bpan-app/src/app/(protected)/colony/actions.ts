@@ -447,19 +447,16 @@ export async function scheduleExperimentsForAnimal(
 
   for (const tp of timepoints) {
     const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
-    // If no experiments are explicitly selected, default to ALL from the protocol
-    const expList = (tp.experiments as string[]) || [];
-    const selectedExps = new Set(
-      expList.length > 0 ? expList : PROTOCOL_SCHEDULE.map(s => s.type).filter(t => t !== "handling")
-    );
 
-    // Schedule each experiment in the protocol that the user selected
+    // Schedule EVERY experiment in the protocol — no filtering by tp.experiments
     for (const step of PROTOCOL_SCHEDULE) {
       const key = `${step.type}::${tp.age_days}`;
 
-      // "handling" is always included if handling_days_before > 0
+      // Skip if already exists
+      if (existingKeys.has(key)) continue;
+
       if (step.type === "handling") {
-        if (tp.handling_days_before > 0 && !existingKeys.has(key)) {
+        if (tp.handling_days_before > 0) {
           const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * DAY);
           records.push({
             user_id: user.id,
@@ -473,12 +470,6 @@ export async function scheduleExperimentsForAnimal(
         }
         continue;
       }
-
-      // Only schedule experiments the user selected in their timepoint config
-      if (!selectedExps.has(step.type)) continue;
-
-      // Skip if already exists
-      if (existingKeys.has(key)) continue;
 
       const expDate = new Date(experimentStart.getTime() + step.dayOffset * DAY);
       records.push({
@@ -627,16 +618,15 @@ export async function scheduleExperimentsForCohort(
 
     for (const tp of timepoints) {
       const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
-      const expList = (tp.experiments as string[]) || [];
-      const selectedExps = new Set(
-        expList.length > 0 ? expList : PROTOCOL_SCHEDULE.map(s => s.type).filter(t => t !== "handling")
-      );
 
+      // Schedule EVERY experiment in the protocol — no filtering by tp.experiments
       for (const step of PROTOCOL_SCHEDULE) {
         const key = `${animal.id}::${step.type}::${tp.age_days}`;
 
+        if (existingSet.has(key)) continue;
+
         if (step.type === "handling") {
-          if (tp.handling_days_before > 0 && !existingSet.has(key)) {
+          if (tp.handling_days_before > 0) {
             const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * DAY);
             allRecords.push({
               user_id: user.id, animal_id: animal.id,
@@ -649,9 +639,6 @@ export async function scheduleExperimentsForCohort(
           }
           continue;
         }
-
-        if (!selectedExps.has(step.type)) continue;
-        if (existingSet.has(key)) continue;
 
         const expDate = new Date(experimentStart.getTime() + step.dayOffset * DAY);
         allRecords.push({
