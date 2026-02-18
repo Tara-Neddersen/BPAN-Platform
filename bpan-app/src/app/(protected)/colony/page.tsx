@@ -51,13 +51,31 @@ import {
 } from "./actions";
 import { batchUpsertColonyResults } from "./result-actions";
 
+// Helper: paginate RPC calls to bypass PostgREST 1000-row hard limit
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAllViaRpc(supabase: any, fnName: string, params: Record<string, unknown>): Promise<unknown[]> {
+  const PAGE = 1000;
+  let all: unknown[] = [];
+  let page = 0;
+  while (true) {
+    const from = page * PAGE;
+    const { data, error } = await supabase.rpc(fnName, params).range(from, from + PAGE - 1);
+    if (error) { console.error(`RPC ${fnName} page ${page} error:`, error.message); break; }
+    if (!data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < PAGE) break;
+    page++;
+  }
+  return all;
+}
+
 export default async function ColonyPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
-  // Use RPC functions for large tables (bypasses PostgREST 1000-row limit)
   // Small tables use normal queries (well under 1000 rows)
+  // Large tables use paginated RPC to bypass PostgREST 1000-row hard limit
   const [
     { data: breederCages },
     { data: cohorts },
@@ -66,10 +84,10 @@ export default async function ColonyPage() {
     { data: meetingNotes },
     { data: colonyPhotos },
     { data: housingCages },
-    { data: animalExperiments },
-    { data: animals },
-    { data: cageChanges },
-    { data: colonyResults },
+    animalExperiments,
+    animals,
+    cageChanges,
+    colonyResults,
   ] = await Promise.all([
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
@@ -78,10 +96,10 @@ export default async function ColonyPage() {
     supabase.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
     supabase.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
-    supabase.rpc("get_all_animal_experiments", { p_user_id: user.id }),
-    supabase.rpc("get_all_animals", { p_user_id: user.id }),
-    supabase.rpc("get_all_cage_changes", { p_user_id: user.id }),
-    supabase.rpc("get_all_colony_results", { p_user_id: user.id }),
+    fetchAllViaRpc(supabase, "get_all_animal_experiments", { p_user_id: user.id }),
+    fetchAllViaRpc(supabase, "get_all_animals", { p_user_id: user.id }),
+    fetchAllViaRpc(supabase, "get_all_cage_changes", { p_user_id: user.id }),
+    fetchAllViaRpc(supabase, "get_all_colony_results", { p_user_id: user.id }),
   ]);
 
   return (

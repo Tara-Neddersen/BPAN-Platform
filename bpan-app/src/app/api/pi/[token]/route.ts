@@ -1,6 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
 
+// Helper: paginate RPC calls to bypass PostgREST 1000-row hard limit
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAllViaRpc(supabase: any, fnName: string, params: Record<string, unknown>): Promise<any[]> {
+  const PAGE = 1000;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let all: any[] = [];
+  let page = 0;
+  while (true) {
+    const from = page * PAGE;
+    const { data, error } = await supabase.rpc(fnName, params).range(from, from + PAGE - 1);
+    if (error) { console.error(`RPC ${fnName} page ${page} error:`, error.message); break; }
+    if (!data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < PAGE) break;
+    page++;
+  }
+  return all;
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ token: string }> }
@@ -81,16 +100,16 @@ export async function GET(
     }
 
     if (canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("results")) {
-      // Use RPC to bypass 1000-row limit, then join animal identifiers
-      const [{ data: allExpsRaw }, { data: allAnimalsRaw }] = await Promise.all([
-        supabase.rpc("get_all_animal_experiments", { p_user_id: userId }),
-        supabase.rpc("get_all_animals", { p_user_id: userId }),
+      // Use paginated RPC to bypass 1000-row limit, then join animal identifiers
+      const [allExpsRaw, allAnimalsRaw] = await Promise.all([
+        fetchAllViaRpc(supabase, "get_all_animal_experiments", { p_user_id: userId }),
+        fetchAllViaRpc(supabase, "get_all_animals", { p_user_id: userId }),
       ]);
       const animalMap = new Map(
-        ((allAnimalsRaw || []) as { id: string; identifier: string }[]).map(a => [a.id, a.identifier])
+        (allAnimalsRaw as { id: string; identifier: string }[]).map(a => [a.id, a.identifier])
       );
 
-      animalExperiments = ((allExpsRaw || []) as Record<string, unknown>[]).map((e) => ({
+      animalExperiments = (allExpsRaw as Record<string, unknown>[]).map((e) => ({
         animal_identifier: animalMap.get(e.animal_id as string) || "?",
         experiment_type: e.experiment_type,
         timepoint_age_days: e.timepoint_age_days,
