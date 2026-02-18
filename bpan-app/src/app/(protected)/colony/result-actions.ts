@@ -101,8 +101,13 @@ export async function upsertColonyResult(
     if (error) return { error: error.message };
   }
 
-  // Auto-mark the matching experiment as completed
-  await markExperimentCompleted(supabase, user.id, animalId, timepointAgeDays, experimentType);
+  // Auto-mark the matching experiment as completed — only if there's real data
+  const hasRealData = measures && Object.values(measures).some(
+    v => v !== null && v !== "" && v !== undefined
+  );
+  if (hasRealData) {
+    await markExperimentCompleted(supabase, user.id, animalId, timepointAgeDays, experimentType);
+  }
 
   revalidatePath("/colony");
   return { success: true };
@@ -165,8 +170,13 @@ export async function batchUpsertColonyResults(
       else successCount++;
     }
 
-    // Auto-mark the matching experiment as completed
-    await markExperimentCompleted(supabase, user.id, entry.animalId, timepointAgeDays, experimentType);
+    // Auto-mark the matching experiment as completed — only if there's real data
+    const hasRealData = entry.measures && Object.values(entry.measures).some(
+      v => v !== null && v !== "" && v !== undefined
+    );
+    if (hasRealData) {
+      await markExperimentCompleted(supabase, user.id, entry.animalId, timepointAgeDays, experimentType);
+    }
   }
 
   revalidatePath("/colony");
