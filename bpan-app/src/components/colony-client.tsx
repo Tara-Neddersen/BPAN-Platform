@@ -290,6 +290,7 @@ export function ColonyClient({
   const [scheduleDialog, setScheduleDialog] = useState<{ type: "cohort" | "animal"; id: string; name: string; birthDate?: string } | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<{ type: "cohort" | "animal"; id: string; name: string } | null>(null);
   const [showOverdueDetails, setShowOverdueDetails] = useState(false);
+  const [expandedOverdueTypes, setExpandedOverdueTypes] = useState<Set<string>>(new Set());
   const [selectedTpAges, setSelectedTpAges] = useState<Set<number>>(new Set());
   const [deleteStatusFilter, setDeleteStatusFilter] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -614,30 +615,83 @@ export function ColonyClient({
                 {showOverdueDetails && (
                   <div className="space-y-0.5 pt-1 border-t border-red-200/50">
                     {(() => {
+                      // Build lookups
+                      const animalLookup = new Map(animals.map(a => [a.id, a]));
+                      const cohortLookup = new Map(cohorts.map(c => [c.id, c]));
+                      const tpLookup = new Map(timepoints.map(tp => [tp.age_days, tp]));
+
                       // Group overdue by experiment type
-                      const groups = new Map<string, { animalIds: Set<string>; earliest: string; latest: string }>();
+                      const groups = new Map<string, { exps: typeof overdueExps; animalIds: Set<string>; earliest: string; latest: string }>();
                       for (const exp of overdueExps) {
                         if (!groups.has(exp.experiment_type)) {
-                          groups.set(exp.experiment_type, { animalIds: new Set(), earliest: exp.scheduled_date!, latest: exp.scheduled_date! });
+                          groups.set(exp.experiment_type, { exps: [], animalIds: new Set(), earliest: exp.scheduled_date!, latest: exp.scheduled_date! });
                         }
                         const g = groups.get(exp.experiment_type)!;
+                        g.exps.push(exp);
                         g.animalIds.add(exp.animal_id);
                         if (exp.scheduled_date! < g.earliest) g.earliest = exp.scheduled_date!;
                         if (exp.scheduled_date! > g.latest) g.latest = exp.scheduled_date!;
                       }
                       return Array.from(groups.entries())
                         .sort(([, a], [, b]) => a.earliest.localeCompare(b.earliest))
-                        .map(([type, g]) => (
-                          <div key={type} className="flex items-center justify-between text-xs text-red-700 dark:text-red-400">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{EXPERIMENT_LABELS[type] || type}</span>
-                              <span className="text-muted-foreground">{g.animalIds.size} animals</span>
+                        .map(([type, g]) => {
+                          const isExpanded = expandedOverdueTypes.has(type);
+                          return (
+                            <div key={type} className="space-y-0.5">
+                              <div
+                                className="flex items-center justify-between text-xs text-red-700 dark:text-red-400 cursor-pointer hover:bg-red-100/50 dark:hover:bg-red-900/20 rounded px-1 py-0.5"
+                                onClick={() => {
+                                  setExpandedOverdueTypes(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(type)) next.delete(type); else next.add(type);
+                                    return next;
+                                  });
+                                }}
+                              >
+                                <div className="flex items-center gap-2">
+                                  {isExpanded ? <ChevronUp className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+                                  <span className="font-medium">{EXPERIMENT_LABELS[type] || type}</span>
+                                  <span className="text-muted-foreground">{g.animalIds.size} animal{g.animalIds.size !== 1 ? "s" : ""}</span>
+                                </div>
+                                <span className="text-muted-foreground">
+                                  {g.earliest === g.latest ? g.earliest : `${g.earliest} → ${g.latest}`}
+                                </span>
+                              </div>
+                              {isExpanded && (
+                                <div className="ml-5 space-y-0 border-l-2 border-red-200 dark:border-red-800 pl-2">
+                                  {g.exps
+                                    .sort((a, b) => (a.scheduled_date || "").localeCompare(b.scheduled_date || ""))
+                                    .map((exp) => {
+                                      const animal = animalLookup.get(exp.animal_id);
+                                      const cohort = animal?.cohort_id ? cohortLookup.get(animal.cohort_id) : null;
+                                      const tp = exp.timepoint_age_days != null ? tpLookup.get(exp.timepoint_age_days) : null;
+                                      return (
+                                        <div key={exp.id} className="flex items-center justify-between text-[11px] py-0.5">
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="font-medium text-foreground">
+                                              {animal?.identifier || "?"}
+                                            </span>
+                                            {cohort && (
+                                              <span className="text-muted-foreground">({cohort.name})</span>
+                                            )}
+                                            {tp && (
+                                              <Badge variant="outline" className="h-4 px-1 text-[10px]">
+                                                {tp.name}
+                                              </Badge>
+                                            )}
+                                            {exp.status === "in_progress" && (
+                                              <Badge className="h-4 px-1 text-[10px] bg-yellow-100 text-yellow-800">In Progress</Badge>
+                                            )}
+                                          </div>
+                                          <span className="text-muted-foreground">{exp.scheduled_date}</span>
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              )}
                             </div>
-                            <span className="text-muted-foreground">
-                              {g.earliest === g.latest ? g.earliest : `${g.earliest} → ${g.latest}`}
-                            </span>
-                          </div>
-                        ));
+                          );
+                        });
                     })()}
                   </div>
                 )}
