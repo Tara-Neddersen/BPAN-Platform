@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import {
   Plus, Edit, Trash2, Loader2, Check, X, Copy, Pencil,
@@ -194,6 +195,7 @@ export function ColonyClient({
   batchUpsertColonyResults,
   actions,
 }: ColonyClientProps) {
+  const router = useRouter();
   const supabaseRef = useRef(createBrowserClient());
 
   // Local state — updated via refetch after each action
@@ -476,7 +478,7 @@ export function ColonyClient({
       toast.error(result.error);
     } else {
       toast.success(`Scheduled ${result.count} experiments for ${animal.identifier}!`);
-      refetchAll();
+      await refetchAll(); router.refresh();
     }
   }
 
@@ -1759,7 +1761,8 @@ export function ColonyClient({
                       if (res.error) toast.error(res.error);
                       else toast.success(`Scheduled ${res.count} experiments!`);
                     }
-                    refetchAll();
+                    await refetchAll();
+                    router.refresh();
                     setScheduleDialog(null);
                   } finally {
                     setBusy(false);
@@ -1892,7 +1895,8 @@ export function ColonyClient({
                           if (res.error) toast.error(res.error);
                           else toast.success(`Deleted ${res.deleted} experiments`);
                         }
-                        refetchAll();
+                        await refetchAll();
+                        router.refresh();
                         setDeleteDialog(null);
                       } finally {
                         setBusy(false);
@@ -1927,7 +1931,7 @@ export function ColonyClient({
                 navigator.clipboard.writeText(url);
                 toast.success("Access created! Link copied to clipboard.");
                 setShowAddPI(false);
-                refetchAll();
+                await refetchAll();
               }
             }}
             className="space-y-3"
