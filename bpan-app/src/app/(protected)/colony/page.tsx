@@ -51,40 +51,13 @@ import {
 } from "./actions";
 import { batchUpsertColonyResults } from "./result-actions";
 
-// Cursor-based pagination: fetches ALL rows by using id > lastId (bypasses max_rows limit)
-async function fetchAllRows<T extends { id: string }>(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  table: string,
-  userId: string,
-): Promise<T[]> {
-  const PAGE = 1000;
-  const allRows: T[] = [];
-  let lastId = "";
-  while (true) {
-    let query = supabase
-      .from(table)
-      .select("*")
-      .eq("user_id", userId)
-      .order("id")
-      .limit(PAGE);
-    if (lastId) {
-      query = query.gt("id", lastId);
-    }
-    const { data, error } = await query;
-    if (error || !data || data.length === 0) break;
-    allRows.push(...(data as T[]));
-    lastId = (data[data.length - 1] as { id: string }).id;
-    if (data.length < PAGE) break;
-  }
-  return allRows;
-}
-
 export default async function ColonyPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
-  // Fetch small tables normally, paginate large tables
+  // Use RPC functions for large tables (bypasses PostgREST 1000-row limit)
+  // Small tables use normal queries (well under 1000 rows)
   const [
     { data: breederCages },
     { data: cohorts },
@@ -93,10 +66,10 @@ export default async function ColonyPage() {
     { data: meetingNotes },
     { data: colonyPhotos },
     { data: housingCages },
-    animalExperiments,
-    animals,
-    cageChanges,
-    colonyResults,
+    { data: animalExperiments },
+    { data: animals },
+    { data: cageChanges },
+    { data: colonyResults },
   ] = await Promise.all([
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
@@ -105,10 +78,10 @@ export default async function ColonyPage() {
     supabase.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
     supabase.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
-    fetchAllRows<AnimalExperiment>(supabase, "animal_experiments", user.id),
-    fetchAllRows<Animal>(supabase, "animals", user.id),
-    fetchAllRows<CageChange>(supabase, "cage_changes", user.id),
-    fetchAllRows<ColonyResult>(supabase, "colony_results", user.id),
+    supabase.rpc("get_all_animal_experiments", { p_user_id: user.id }),
+    supabase.rpc("get_all_animals", { p_user_id: user.id }),
+    supabase.rpc("get_all_cage_changes", { p_user_id: user.id }),
+    supabase.rpc("get_all_colony_results", { p_user_id: user.id }),
   ]);
 
   return (

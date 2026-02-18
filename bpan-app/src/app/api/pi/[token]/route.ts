@@ -81,27 +81,17 @@ export async function GET(
     }
 
     if (canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("results")) {
-      // Cursor-based pagination to bypass 1000-row limit
-      const allExpsData: Record<string, unknown>[] = [];
-      const PAGE = 1000;
-      let lastId = "";
-      while (true) {
-        let q = supabase
-          .from("animal_experiments")
-          .select("*, animals(identifier)")
-          .eq("user_id", userId)
-          .order("id")
-          .limit(PAGE);
-        if (lastId) q = q.gt("id", lastId);
-        const { data, error } = await q;
-        if (error || !data || data.length === 0) break;
-        allExpsData.push(...(data as Record<string, unknown>[]));
-        lastId = (data[data.length - 1] as { id: string }).id;
-        if (data.length < PAGE) break;
-      }
+      // Use RPC to bypass 1000-row limit, then join animal identifiers
+      const [{ data: allExpsRaw }, { data: allAnimalsRaw }] = await Promise.all([
+        supabase.rpc("get_all_animal_experiments", { p_user_id: userId }),
+        supabase.rpc("get_all_animals", { p_user_id: userId }),
+      ]);
+      const animalMap = new Map(
+        ((allAnimalsRaw || []) as { id: string; identifier: string }[]).map(a => [a.id, a.identifier])
+      );
 
-      animalExperiments = allExpsData.map((e) => ({
-        animal_identifier: (e.animals as { identifier: string } | null)?.identifier || "?",
+      animalExperiments = ((allExpsRaw || []) as Record<string, unknown>[]).map((e) => ({
+        animal_identifier: animalMap.get(e.animal_id as string) || "?",
         experiment_type: e.experiment_type,
         timepoint_age_days: e.timepoint_age_days,
         scheduled_date: e.scheduled_date,

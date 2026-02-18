@@ -251,27 +251,10 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
 
   // If age_days changed, cascade to animal_experiments and colony_results
   if (oldAgeDays != null && oldAgeDays !== newAgeDays) {
-    // Update animal_experiments timepoint_age_days (cursor pagination)
-    const affectedExps: { id: string; animal_id: string }[] = [];
-    {
-      const PAGE = 1000;
-      let lastId = "";
-      while (true) {
-        let q = supabase
-          .from("animal_experiments")
-          .select("id, animal_id")
-          .eq("user_id", user.id)
-          .eq("timepoint_age_days", oldAgeDays)
-          .order("id")
-          .limit(PAGE);
-        if (lastId) q = q.gt("id", lastId);
-        const { data, error } = await q;
-        if (error || !data || data.length === 0) break;
-        affectedExps.push(...data);
-        lastId = data[data.length - 1].id;
-        if (data.length < PAGE) break;
-      }
-    }
+    // Fetch all affected experiments (use RPC to bypass 1000-row limit)
+    const { data: affectedExpsRaw } = await supabase.rpc("get_all_animal_experiments", { p_user_id: user.id });
+    const affectedExps = ((affectedExpsRaw || []) as { id: string; animal_id: string; timepoint_age_days: number }[])
+      .filter(e => e.timepoint_age_days === oldAgeDays);
 
     if (affectedExps.length > 0) {
       // Get birth dates for all affected animals to recalculate scheduled_date
@@ -614,28 +597,13 @@ export async function scheduleExperimentsForCohort(
 
   if (timepoints.length === 0) return { error: "No matching timepoints found." };
 
-  // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (cursor pagination) ──
+  // ── 2. Fetch ALL existing experiments for ALL animals in this cohort (RPC bypasses 1000-row limit) ──
   const animalIds = cohortAnimals.map(a => a.id);
-  const allExisting: { id: string; animal_id: string; experiment_type: string; timepoint_age_days: number }[] = [];
-  {
-    const PAGE = 1000;
-    let lastId = "";
-    while (true) {
-      let q = supabase
-        .from("animal_experiments")
-        .select("id, animal_id, experiment_type, timepoint_age_days")
-        .in("animal_id", animalIds)
-        .eq("user_id", user.id)
-        .order("id")
-        .limit(PAGE);
-      if (lastId) q = q.gt("id", lastId);
-      const { data, error } = await q;
-      if (error || !data || data.length === 0) break;
-      allExisting.push(...data);
-      lastId = data[data.length - 1].id;
-      if (data.length < PAGE) break;
-    }
-  }
+  const { data: allExistingRaw } = await supabase.rpc("get_cohort_experiments", {
+    p_user_id: user.id,
+    p_animal_ids: animalIds,
+  });
+  const allExisting = (allExistingRaw || []) as { id: string; animal_id: string; experiment_type: string; timepoint_age_days: number }[];
 
   // Build a set of "animalId::type::tp" for quick lookup
   const existingSet = new Set(
@@ -841,33 +809,14 @@ export async function deleteExperimentsForCohort(
 
   const animalIds = cohortAnimals.map(a => a.id);
 
-  // Get IDs of experiments to delete (cursor pagination to bypass 1000-row limit)
-  const allIds: string[] = [];
-  {
-    const PAGE = 1000;
-    let lastId = "";
-    while (true) {
-      let q = supabase
-        .from("animal_experiments")
-        .select("id")
-        .in("animal_id", animalIds)
-        .eq("user_id", user.id)
-        .order("id")
-        .limit(PAGE);
-      if (lastId) q = q.gt("id", lastId);
-      if (onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0) {
-        q = q.in("timepoint_age_days", onlyTimepointAgeDays);
-      }
-      if (onlyStatuses && onlyStatuses.length > 0) {
-        q = q.in("status", onlyStatuses);
-      }
-      const { data, error } = await q;
-      if (error || !data || data.length === 0) break;
-      allIds.push(...data.map(r => r.id));
-      lastId = data[data.length - 1].id;
-      if (data.length < PAGE) break;
-    }
-  }
+  // Get IDs of experiments to delete (RPC bypasses 1000-row limit)
+  const { data: idsRaw } = await supabase.rpc("get_experiment_ids_for_delete", {
+    p_user_id: user.id,
+    p_animal_ids: animalIds,
+    p_timepoint_ages: onlyTimepointAgeDays && onlyTimepointAgeDays.length > 0 ? onlyTimepointAgeDays : null,
+    p_statuses: onlyStatuses && onlyStatuses.length > 0 ? onlyStatuses : null,
+  });
+  const allIds = ((idsRaw || []) as { id: string }[]).map(r => r.id);
 
   if (allIds.length > 0) {
     for (let i = 0; i < allIds.length; i += 100) {
