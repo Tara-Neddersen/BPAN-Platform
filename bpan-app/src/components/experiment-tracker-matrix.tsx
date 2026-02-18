@@ -164,7 +164,7 @@ export function ExperimentTrackerMatrix({
     let completed = 0;
     for (const animal of filteredAnimals) {
       for (const tp of sortedTimepoints) {
-        for (const expType of tp.experiments) {
+        for (const expType of allExperimentTypes) {
           total++;
           const status = statusMap.get(animal.id)?.get(tp.age_days)?.get(expType);
           if (status === "completed") completed++;
@@ -172,14 +172,13 @@ export function ExperimentTrackerMatrix({
       }
     }
     return { total, completed, pct: total > 0 ? Math.round((completed / total) * 100) : 0 };
-  }, [filteredAnimals, sortedTimepoints, statusMap]);
+  }, [filteredAnimals, sortedTimepoints, allExperimentTypes, statusMap]);
 
-  // Column headers: for each timepoint, list its experiment types
-  // Structure: { tp, expType, label }[]
+  // Column headers: for each timepoint, list ALL experiment types (including EEG etc.)
   const columns = useMemo(() => {
     const cols: { tpAge: number; tpName: string; expType: string; label: string }[] = [];
     for (const tp of sortedTimepoints) {
-      for (const expType of tp.experiments) {
+      for (const expType of allExperimentTypes) {
         cols.push({
           tpAge: tp.age_days,
           tpName: tp.name,
@@ -189,7 +188,7 @@ export function ExperimentTrackerMatrix({
       }
     }
     return cols;
-  }, [sortedTimepoints]);
+  }, [sortedTimepoints, allExperimentTypes]);
 
   // Group columns by timepoint for header spans
   const tpGroups = useMemo(() => {
@@ -198,11 +197,11 @@ export function ExperimentTrackerMatrix({
       groups.push({
         tpAge: tp.age_days,
         tpName: tp.name,
-        colCount: tp.experiments.length,
+        colCount: allExperimentTypes.length,
       });
     }
     return groups;
-  }, [sortedTimepoints]);
+  }, [sortedTimepoints, allExperimentTypes]);
 
   return (
     <Card>
