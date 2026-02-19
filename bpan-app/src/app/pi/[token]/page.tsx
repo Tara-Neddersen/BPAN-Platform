@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import {
   Loader2, AlertCircle, Mouse, Calendar, Check, Clock,
   FlaskConical, BarChart3, ChevronLeft, ChevronRight, ImageIcon,
-  Table as TableIcon, TrendingUp,
+  Table as TableIcon, TrendingUp, ClipboardCheck,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -67,17 +67,17 @@ interface PortalData {
   advisor_name: string;
   can_see: string[];
   animals: Array<{
-    identifier: string; sex: string; genotype: string;
-    birth_date: string; status: string; cohort_name: string;
+    id: string; identifier: string; sex: string; genotype: string;
+    birth_date: string; status: string; cohort_id: string; cohort_name: string;
     ear_tag: string | null; cage_number: string | null;
     eeg_implanted: boolean;
   }>;
   full_animals: Animal[];
   experiments: Array<{
-    animal_identifier: string; experiment_type: string;
-    timepoint_age_days: number | null; scheduled_date: string | null;
-    completed_date: string | null; status: string;
-    results_drive_url: string | null;
+    animal_id: string; animal_identifier: string; cohort_id: string | null;
+    experiment_type: string; timepoint_age_days: number | null;
+    scheduled_date: string | null; completed_date: string | null;
+    status: string; results_drive_url: string | null;
   }>;
   colony_results: ColonyResult[];
   cohorts: Cohort[];
@@ -86,6 +86,7 @@ interface PortalData {
   stats: {
     total_animals: number; active_animals: number;
     pending_experiments: number; completed_experiments: number;
+    in_progress_experiments: number; skipped_experiments: number;
   };
 }
 
@@ -902,6 +903,202 @@ function PIAnalysisPanel({
   );
 }
 
+// ─── Experiment Tracker (read-only for PI) ──────────────────────────────
+
+function PITrackerTab({
+  experiments,
+  cohorts,
+  timepoints,
+}: {
+  experiments: PortalData["experiments"];
+  cohorts: Cohort[];
+  timepoints: ColonyTimepoint[];
+}) {
+  const [filterCohort, setFilterCohort] = useState<string>("all");
+
+  // All unique experiment types
+  const experimentTypes = useMemo(() => {
+    const types = new Set(experiments.map(e => e.experiment_type));
+    return [...types].sort();
+  }, [experiments]);
+
+  // Sorted timepoint ages
+  const tpAges = useMemo(() => {
+    const ages = new Set(experiments.map(e => e.timepoint_age_days).filter(Boolean) as number[]);
+    return [...ages].sort((a, b) => a - b);
+  }, [experiments]);
+
+  // Group experiments by animal
+  const animalData = useMemo(() => {
+    // Get unique animals
+    const animalMap = new Map<string, { id: string; identifier: string; cohortId: string | null }>();
+    for (const e of experiments) {
+      if (!animalMap.has(e.animal_id)) {
+        animalMap.set(e.animal_id, {
+          id: e.animal_id,
+          identifier: e.animal_identifier,
+          cohortId: e.cohort_id,
+        });
+      }
+    }
+    return [...animalMap.values()]
+      .filter(a => filterCohort === "all" || a.cohortId === filterCohort)
+      .sort((a, b) => a.identifier.localeCompare(b.identifier, undefined, { numeric: true }));
+  }, [experiments, filterCohort]);
+
+  // Lookup: animal_id → timepoint → experiment_type → status
+  const statusMap = useMemo(() => {
+    const map = new Map<string, string>(); // `${animalId}::${tp}::${type}` → status
+    for (const e of experiments) {
+      if (e.timepoint_age_days != null) {
+        const key = `${e.animal_id}::${e.timepoint_age_days}::${e.experiment_type}`;
+        map.set(key, e.status);
+      }
+    }
+    return map;
+  }, [experiments]);
+
+  // Compute overall completion rate
+  const { completed, total } = useMemo(() => {
+    const relevant = experiments.filter(e => e.status !== "skipped");
+    return {
+      completed: relevant.filter(e => e.status === "completed").length,
+      total: relevant.length,
+    };
+  }, [experiments]);
+
+  const completionPct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  // Status icon
+  const getStatusIcon = (status: string | undefined) => {
+    switch (status) {
+      case "completed": return <span className="text-green-600">✅</span>;
+      case "in_progress": return <span className="text-amber-500">🔵</span>;
+      case "scheduled": return <span className="text-blue-400">⏳</span>;
+      case "skipped": return <span className="text-gray-400">—</span>;
+      default: return <span className="text-gray-200">·</span>;
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Completion bar */}
+      <Card>
+        <CardContent className="pt-4 pb-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium">Overall Progress</span>
+            <span className="text-sm text-muted-foreground">{completed}/{total} experiments complete ({completionPct}%)</span>
+          </div>
+          <div className="h-3 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-green-400 to-green-600 rounded-full transition-all duration-500"
+              style={{ width: `${completionPct}%` }}
+            />
+          </div>
+          <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1">✅ Completed: {completed}</span>
+            <span className="flex items-center gap-1">🔵 In Progress: {experiments.filter(e => e.status === "in_progress").length}</span>
+            <span className="flex items-center gap-1">⏳ Scheduled: {experiments.filter(e => e.status === "scheduled").length}</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Cohort filter */}
+      {cohorts.length > 1 && (
+        <div className="flex items-center gap-2">
+          <Select value={filterCohort} onValueChange={setFilterCohort}>
+            <SelectTrigger className="h-8 text-xs w-[180px]"><SelectValue placeholder="Filter by cohort" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Cohorts</SelectItem>
+              {cohorts.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {/* Progress by experiment type */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {experimentTypes.map(type => {
+          const typeExps = experiments.filter(e => e.experiment_type === type && e.status !== "skipped");
+          const typeDone = typeExps.filter(e => e.status === "completed").length;
+          const typeTotal = typeExps.length;
+          const typePct = typeTotal > 0 ? Math.round((typeDone / typeTotal) * 100) : 0;
+          return (
+            <Card key={type} className="overflow-hidden">
+              <CardContent className="pt-3 pb-2 px-3">
+                <p className="text-xs font-medium truncate">{EXPERIMENT_LABELS[type] || type}</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <div className="h-1.5 flex-1 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-green-500 rounded-full" style={{ width: `${typePct}%` }} />
+                  </div>
+                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">{typeDone}/{typeTotal}</span>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* Tracker matrix */}
+      <Card>
+        <CardContent className="p-0">
+          <ScrollArea className="w-full">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b bg-muted/30">
+                    <th className="text-left py-2 px-3 font-medium sticky left-0 bg-muted/30 z-10 min-w-[100px]">Animal</th>
+                    {tpAges.map(tp => (
+                      experimentTypes.map(type => (
+                        <th key={`${tp}-${type}`} className="text-center py-1 px-1 font-medium min-w-[32px]" title={`${EXPERIMENT_LABELS[type] || type} @ ${tp}d`}>
+                          <div className="text-[8px] leading-tight opacity-60">{tp}d</div>
+                          <div className="text-[8px] leading-tight truncate max-w-[40px]">{(EXPERIMENT_LABELS[type] || type).slice(0, 4)}</div>
+                        </th>
+                      ))
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {animalData.map(animal => {
+                    const cohort = cohorts.find(c => c.id === animal.cohortId);
+                    return (
+                      <tr key={animal.id} className="border-b last:border-0 hover:bg-muted/20">
+                        <td className="py-1.5 px-3 font-medium sticky left-0 bg-background z-10 whitespace-nowrap">
+                          {animal.identifier}
+                          {cohort && <span className="text-[10px] text-muted-foreground ml-1">({cohort.name.replace("BPAN ", "B")})</span>}
+                        </td>
+                        {tpAges.map(tp => (
+                          experimentTypes.map(type => {
+                            const key = `${animal.id}::${tp}::${type}`;
+                            const status = statusMap.get(key);
+                            return (
+                              <td key={`${tp}-${type}`} className="text-center py-1 px-0.5">
+                                {getStatusIcon(status)}
+                              </td>
+                            );
+                          })
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </ScrollArea>
+        </CardContent>
+      </Card>
+
+      {/* Legend */}
+      <div className="flex items-center gap-4 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1">✅ Completed</span>
+        <span className="flex items-center gap-1">🔵 In Progress</span>
+        <span className="flex items-center gap-1">⏳ Scheduled</span>
+        <span className="flex items-center gap-1">· Not scheduled</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Portal Page ───────────────────────────────────────────────────
 
 export default function PIPortalPage({ params }: { params: Promise<{ token: string }> }) {
@@ -957,16 +1154,16 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
           <p className="text-xs text-muted-foreground">Active Animals</p>
         </CardContent></Card>
         <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold">{data.stats.total_animals}</div>
-          <p className="text-xs text-muted-foreground">Total Animals</p>
+          <div className="text-2xl font-bold text-green-600">{data.stats.completed_experiments}</div>
+          <p className="text-xs text-muted-foreground">Experiments Done</p>
         </CardContent></Card>
         <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold">{data.stats.pending_experiments}</div>
-          <p className="text-xs text-muted-foreground">Pending</p>
+          <div className="text-2xl font-bold text-amber-600">{data.stats.in_progress_experiments}</div>
+          <p className="text-xs text-muted-foreground">In Progress</p>
         </CardContent></Card>
         <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold">{data.stats.completed_experiments}</div>
-          <p className="text-xs text-muted-foreground">Completed</p>
+          <div className="text-2xl font-bold text-blue-600">{data.stats.pending_experiments}</div>
+          <p className="text-xs text-muted-foreground">Scheduled</p>
         </CardContent></Card>
       </div>
 
@@ -975,22 +1172,61 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
         <PhotoGallery photos={data.photos} />
       )}
 
-      {/* Tabbed sections: Overview / Results / Analysis */}
-      {hasColonyResults ? (
+      {/* Tabbed sections: Overview / Tracker / Results / Analysis */}
+      {hasColonyResults || data.experiments.length > 0 ? (
         <Tabs defaultValue="overview">
-          <TabsList className="w-full flex gap-1 p-1" style={{ height: "auto" }}>
+          <TabsList className="w-full flex flex-wrap gap-1 p-1" style={{ height: "auto" }}>
             <TabsTrigger value="overview" className="flex-1 gap-1.5">
               <Mouse className="h-3.5 w-3.5" /> Overview
             </TabsTrigger>
-            <TabsTrigger value="results" className="flex-1 gap-1.5">
-              <TableIcon className="h-3.5 w-3.5" /> Results Data
-            </TabsTrigger>
-            <TabsTrigger value="analysis" className="flex-1 gap-1.5">
-              <TrendingUp className="h-3.5 w-3.5" /> Analysis & Plots
-            </TabsTrigger>
+            {data.experiments.length > 0 && (
+              <TabsTrigger value="tracker" className="flex-1 gap-1.5">
+                <ClipboardCheck className="h-3.5 w-3.5" /> Tracker
+              </TabsTrigger>
+            )}
+            {hasColonyResults && (
+              <>
+                <TabsTrigger value="results" className="flex-1 gap-1.5">
+                  <TableIcon className="h-3.5 w-3.5" /> Results Data
+                </TabsTrigger>
+                <TabsTrigger value="analysis" className="flex-1 gap-1.5">
+                  <TrendingUp className="h-3.5 w-3.5" /> Analysis & Plots
+                </TabsTrigger>
+              </>
+            )}
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4 mt-4">
+            {/* Progress Summary */}
+            {data.experiments.length > 0 && (() => {
+              const activeExps = data.experiments.filter(e => e.status !== "skipped");
+              const completedCount = activeExps.filter(e => e.status === "completed").length;
+              const inProgressCount = activeExps.filter(e => e.status === "in_progress").length;
+              const totalActive = activeExps.length;
+              const completionPct = totalActive > 0 ? Math.round((completedCount / totalActive) * 100) : 0;
+              return (
+                <Card>
+                  <CardContent className="pt-4 pb-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium">Experiment Progress</span>
+                      <span className="text-sm font-bold text-green-600">{completionPct}% Complete</span>
+                    </div>
+                    <div className="h-3 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-green-400 to-green-600 rounded-full transition-all"
+                        style={{ width: `${completionPct}%` }}
+                      />
+                    </div>
+                    <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+                      <span>✅ {completedCount} completed</span>
+                      <span>🔵 {inProgressCount} in progress</span>
+                      <span>⏳ {totalActive - completedCount - inProgressCount} scheduled</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })()}
+
             {/* Upcoming */}
             {data.can_see.includes("timeline") && upcoming.length > 0 && (
               <Card>
@@ -1041,47 +1277,78 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
               </Card>
             )}
 
-            {/* Experiment Progress */}
-            {data.can_see.includes("experiments") && (
-              <Card>
-                <CardHeader className="py-3 px-4">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <FlaskConical className="h-4 w-4" /> All Experiments
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-1 pb-3">
-                  {data.experiments.slice(0, 50).map((exp, i) => (
-                    <div key={i} className="flex items-center gap-2 text-sm">
-                      <Badge className={`${STATUS_COLORS[exp.status]} text-xs`} variant="secondary">
-                        {exp.status}
-                      </Badge>
-                      <span className="font-medium">{exp.animal_identifier}</span>
-                      <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
-                      {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
-                      <span className="text-xs text-muted-foreground ml-auto">{exp.scheduled_date || exp.completed_date || ""}</span>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
+            {/* Recent Completed Experiments (optimistic view) */}
+            {data.can_see.includes("experiments") && (() => {
+              const recentCompleted = data.experiments
+                .filter(e => e.status === "completed")
+                .sort((a, b) => (b.completed_date || "").localeCompare(a.completed_date || ""))
+                .slice(0, 30);
+              const recentInProgress = data.experiments
+                .filter(e => e.status === "in_progress")
+                .slice(0, 20);
+              if (recentCompleted.length === 0 && recentInProgress.length === 0) return null;
+              return (
+                <Card>
+                  <CardHeader className="py-3 px-4">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <FlaskConical className="h-4 w-4" /> Recent Activity
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-1 pb-3">
+                    {recentInProgress.map((exp, i) => (
+                      <div key={`ip-${i}`} className="flex items-center gap-2 text-sm">
+                        <Badge className="bg-amber-100 text-amber-700 text-xs" variant="secondary">in progress</Badge>
+                        <span className="font-medium">{exp.animal_identifier}</span>
+                        <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
+                        {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
+                      </div>
+                    ))}
+                    {recentCompleted.map((exp, i) => (
+                      <div key={`c-${i}`} className="flex items-center gap-2 text-sm">
+                        <Badge className="bg-green-100 text-green-700 text-xs" variant="secondary">completed</Badge>
+                        <span className="font-medium">{exp.animal_identifier}</span>
+                        <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
+                        {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
+                        <span className="text-xs text-muted-foreground ml-auto">{exp.completed_date || ""}</span>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              );
+            })()}
           </TabsContent>
 
-          <TabsContent value="results" className="mt-4">
-            <ColonyResultsView
-              fullAnimals={data.full_animals}
-              colonyResults={data.colony_results}
-              cohorts={data.cohorts}
-              timepoints={data.timepoints}
-            />
-          </TabsContent>
+          {/* Tracker Tab */}
+          {data.experiments.length > 0 && (
+            <TabsContent value="tracker" className="mt-4">
+              <PITrackerTab
+                experiments={data.experiments}
+                cohorts={data.cohorts}
+                timepoints={data.timepoints}
+              />
+            </TabsContent>
+          )}
 
-          <TabsContent value="analysis" className="mt-4">
-            <PIAnalysisPanel
-              fullAnimals={data.full_animals}
-              colonyResults={data.colony_results}
-              cohorts={data.cohorts}
-            />
-          </TabsContent>
+          {hasColonyResults && (
+            <>
+              <TabsContent value="results" className="mt-4">
+                <ColonyResultsView
+                  fullAnimals={data.full_animals}
+                  colonyResults={data.colony_results}
+                  cohorts={data.cohorts}
+                  timepoints={data.timepoints}
+                />
+              </TabsContent>
+
+              <TabsContent value="analysis" className="mt-4">
+                <PIAnalysisPanel
+                  fullAnimals={data.full_animals}
+                  colonyResults={data.colony_results}
+                  cohorts={data.cohorts}
+                />
+              </TabsContent>
+            </>
+          )}
         </Tabs>
       ) : (
         <>

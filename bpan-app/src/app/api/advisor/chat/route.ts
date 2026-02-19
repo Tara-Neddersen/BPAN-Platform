@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateAdvisorResponse, generateConversationTitle } from "@/lib/advisor";
-import type { AdvisorContext, ChatMessage } from "@/lib/advisor";
+import type { AdvisorContext, ChatMessage, ColonyAnimalSummary, ColonyExperimentSummary, ColonyResultSummary } from "@/lib/advisor";
 import type {
   ResearchContext,
   Hypothesis,
@@ -73,12 +73,58 @@ export async function POST(request: Request) {
         .limit(40),
     ]);
 
+    // Fetch colony data (animals, experiments, results) for full research awareness
+    const [
+      { data: colonyAnimalsRaw },
+      { data: colonyExpsRaw },
+      { data: colonyResultsRaw },
+      { data: cohortsRaw },
+    ] = await Promise.all([
+      supabase.from("animals").select("identifier, sex, genotype, birth_date, status, cohort_id, cohorts(name)").eq("user_id", user.id).eq("status", "active").limit(200),
+      supabase.from("animal_experiments").select("animal_id, experiment_type, timepoint_age_days, status, scheduled_date, completed_date, animals(identifier)").eq("user_id", user.id).limit(500),
+      supabase.from("colony_results").select("animal_id, experiment_type, timepoint_age_days, measures, animals(identifier)").eq("user_id", user.id).limit(500),
+      supabase.from("cohorts").select("id, name").eq("user_id", user.id),
+    ]);
+
+    const now = Date.now();
+    const cohortNameMap = new Map((cohortsRaw || []).map((c: { id: string; name: string }) => [c.id, c.name]));
+
+    const colonyAnimals: ColonyAnimalSummary[] = (colonyAnimalsRaw || []).map((a: Record<string, unknown>) => ({
+      identifier: a.identifier as string,
+      sex: a.sex as string,
+      genotype: a.genotype as string,
+      cohortName: (a.cohorts as { name: string } | null)?.name || cohortNameMap.get(a.cohort_id as string) || "Unknown",
+      ageDays: Math.floor((now - new Date(a.birth_date as string).getTime()) / (1000 * 60 * 60 * 24)),
+      status: a.status as string,
+    }));
+
+    const colonyExperiments: ColonyExperimentSummary[] = (colonyExpsRaw || []).map((e: Record<string, unknown>) => ({
+      animalIdentifier: (e.animals as { identifier: string } | null)?.identifier || "?",
+      experimentType: e.experiment_type as string,
+      timepointDays: e.timepoint_age_days as number | null,
+      status: e.status as string,
+      scheduledDate: e.scheduled_date as string | null,
+      completedDate: e.completed_date as string | null,
+    }));
+
+    const colonyResults: ColonyResultSummary[] = (colonyResultsRaw || [])
+      .filter((r: Record<string, unknown>) => r.measures && typeof r.measures === "object")
+      .map((r: Record<string, unknown>) => ({
+        animalIdentifier: (r.animals as { identifier: string } | null)?.identifier || "?",
+        experimentType: r.experiment_type as string,
+        timepointDays: r.timepoint_age_days as number,
+        measures: r.measures as Record<string, number | string | null>,
+      }));
+
     const advisorContext: AdvisorContext = {
       researchContext: (researchContext as ResearchContext) || null,
       recentNotes: (recentNotes as NoteWithPaper[]) || [],
       savedPapers: (savedPapers as SavedPaper[]) || [],
       hypotheses: (hypotheses as Hypothesis[]) || [],
       aiMemories: (aiMemories as Array<{ category: string; content: string; confidence: string }>) || [],
+      colonyAnimals,
+      colonyExperiments,
+      colonyResults,
     };
 
     // 2. Handle conversation — create or reuse

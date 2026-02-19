@@ -13,6 +13,31 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface ColonyAnimalSummary {
+  identifier: string;
+  sex: string;
+  genotype: string;
+  cohortName: string;
+  ageDays: number;
+  status: string;
+}
+
+export interface ColonyExperimentSummary {
+  animalIdentifier: string;
+  experimentType: string;
+  timepointDays: number | null;
+  status: string;
+  scheduledDate: string | null;
+  completedDate: string | null;
+}
+
+export interface ColonyResultSummary {
+  animalIdentifier: string;
+  experimentType: string;
+  timepointDays: number;
+  measures: Record<string, number | string | null>;
+}
+
 export interface AdvisorContext {
   researchContext: ResearchContext | null;
   recentNotes: NoteWithPaper[];
@@ -20,6 +45,10 @@ export interface AdvisorContext {
   hypotheses: Hypothesis[];
   aiMemories?: Array<{ category: string; content: string; confidence: string }>;
   currentPage?: string; // e.g. "paper:uuid", "notes", "dashboard"
+  /** Colony data for full research awareness */
+  colonyAnimals?: ColonyAnimalSummary[];
+  colonyExperiments?: ColonyExperimentSummary[];
+  colonyResults?: ColonyResultSummary[];
 }
 
 // ─── System Prompt Builder ───────────────────────────────────────────────────
@@ -81,6 +110,75 @@ If you don't know something, say so clearly rather than guessing.`);
       .map(([cat, items]) => `${cat.replace(/_/g, " ").toUpperCase()}:\n${items.join("\n")}`)
       .join("\n\n");
     parts.push(`\n--- ACCUMULATED AI MEMORY (${ctx.aiMemories.length} remembered facts) ---\nThese are facts, preferences, and insights you've learned about this student over time. Use them to give more personalized, relevant advice.\n${memText}`);
+  }
+
+  // Colony animals, experiments, and results
+  if (ctx.colonyAnimals?.length) {
+    // Group animals by cohort
+    const cohortGroups = new Map<string, typeof ctx.colonyAnimals>();
+    for (const a of ctx.colonyAnimals) {
+      const key = a.cohortName || "Unknown";
+      if (!cohortGroups.has(key)) cohortGroups.set(key, []);
+      cohortGroups.get(key)!.push(a);
+    }
+    const animalText = [...cohortGroups.entries()]
+      .map(([cohort, animals]) => {
+        const summary = animals.map(a =>
+          `    ${a.identifier}: ${a.genotype} ${a.sex}, ${a.ageDays}d old, ${a.status}`
+        ).join("\n");
+        return `  ${cohort} (${animals.length} animals):\n${summary}`;
+      })
+      .join("\n");
+    parts.push(`\n--- MOUSE COLONY (${ctx.colonyAnimals.length} animals) ---\n${animalText}`);
+  }
+
+  if (ctx.colonyExperiments?.length) {
+    // Summarize experiment counts by status
+    const statusCounts: Record<string, number> = {};
+    const typeCounts: Record<string, Record<string, number>> = {};
+    for (const e of ctx.colonyExperiments) {
+      statusCounts[e.status] = (statusCounts[e.status] || 0) + 1;
+      if (!typeCounts[e.experimentType]) typeCounts[e.experimentType] = {};
+      typeCounts[e.experimentType][e.status] = (typeCounts[e.experimentType][e.status] || 0) + 1;
+    }
+    const statusLine = Object.entries(statusCounts).map(([s, c]) => `${s}: ${c}`).join(", ");
+    const typeLines = Object.entries(typeCounts).map(([type, counts]) => {
+      const countStr = Object.entries(counts).map(([s, c]) => `${s}=${c}`).join(", ");
+      return `  ${type}: ${countStr}`;
+    }).join("\n");
+    parts.push(`\n--- COLONY EXPERIMENTS (${ctx.colonyExperiments.length} total: ${statusLine}) ---\n${typeLines}`);
+  }
+
+  if (ctx.colonyResults?.length) {
+    // Group results by experiment type → timepoint, show actual data
+    const resultsByType = new Map<string, typeof ctx.colonyResults>();
+    for (const r of ctx.colonyResults) {
+      const key = `${r.experimentType}@${r.timepointDays}d`;
+      if (!resultsByType.has(key)) resultsByType.set(key, []);
+      resultsByType.get(key)!.push(r);
+    }
+
+    const resultLines: string[] = [];
+    for (const [key, results] of resultsByType.entries()) {
+      // Get all measure keys from this group
+      const allKeys = new Set<string>();
+      for (const r of results) {
+        for (const k of Object.keys(r.measures || {})) {
+          if (!k.startsWith("__")) allKeys.add(k);
+        }
+      }
+      const measureKeys = [...allKeys].slice(0, 5); // cap at 5 measures
+      const lines = results.slice(0, 8).map(r => { // cap at 8 animals
+        const vals = measureKeys.map(k => {
+          const v = r.measures[k];
+          return v != null ? `${k}=${typeof v === "number" ? Number(v).toFixed(2) : v}` : null;
+        }).filter(Boolean).join(", ");
+        return `    ${r.animalIdentifier}: ${vals}`;
+      });
+      resultLines.push(`  ${key} (${results.length} animals):\n${lines.join("\n")}`);
+    }
+    const capped = resultLines.slice(0, 10); // cap total groups
+    parts.push(`\n--- COLONY EXPERIMENT RESULTS (${ctx.colonyResults.length} data points) ---\n${capped.join("\n")}${resultLines.length > 10 ? `\n  ... and ${resultLines.length - 10} more experiment/timepoint groups` : ""}`);
   }
 
   // Recent notes (last 15 for context window management)

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Loader2, Save, ChevronDown, ChevronRight, Plus, Trash2, Check, Upload, Eye, EyeOff, X, Camera, ExternalLink, Image as ImageIcon } from "lucide-react";
+import { Loader2, Save, ChevronDown, ChevronRight, Plus, Trash2, Check, Upload, Eye, EyeOff, X, Camera, ExternalLink, Image as ImageIcon, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -420,6 +420,50 @@ export function ColonyResultsTab({
     }
   }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, batchUpsertColonyResults]);
 
+  // Export current view as CSV
+  const handleExport = useCallback(() => {
+    const tp = Number(activeTimepoint);
+    const exp = activeExperiment;
+    const fields = getFields(exp);
+
+    // Build CSV headers
+    const headers = ["Animal", "Cohort", "Genotype", "Sex", "Ear Tag", ...fields.map(f => f.label + (f.unit ? ` (${f.unit})` : ""))];
+    const rows: string[][] = [];
+
+    for (const animal of activeAnimals) {
+      const data = getRowData(animal.id, tp, exp);
+      const cohort = cohorts.find(c => c.id === animal.cohort_id);
+      const row = [
+        animal.identifier,
+        cohort?.name || "",
+        animal.genotype,
+        animal.sex,
+        animal.ear_tag || "",
+        ...fields.map(f => {
+          const v = data.measures[f.key];
+          return v != null && v !== "" ? String(v) : "";
+        }),
+      ];
+      rows.push(row);
+    }
+
+    // Build CSV string
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+
+    // Download
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${exp}_${tp}d_results.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Exported to CSV");
+  }, [activeTimepoint, activeExperiment, activeAnimals, getFields, getRowData, cohorts]);
+
   // Add custom field
   const handleAddField = useCallback(() => {
     if (!newFieldLabel.trim()) return;
@@ -651,6 +695,14 @@ export function ColonyResultsTab({
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleExport}
+                          >
+                            <Download className="w-3.5 h-3.5 mr-1" />
+                            Export CSV
+                          </Button>
                           <Button
                             size="sm"
                             variant="outline"

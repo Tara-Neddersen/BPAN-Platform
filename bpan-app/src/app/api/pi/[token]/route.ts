@@ -78,11 +78,13 @@ export async function GET(
         .order("identifier");
 
       animals = (animalsData || []).map((a: Record<string, unknown>) => ({
+        id: a.id as string,
         identifier: a.identifier,
         sex: a.sex,
         genotype: a.genotype,
         birth_date: a.birth_date,
         status: a.status,
+        cohort_id: a.cohort_id as string,
         cohort_name: (a.cohorts as { name: string } | null)?.name || "Unknown",
         ear_tag: a.ear_tag,
         cage_number: a.cage_number,
@@ -116,19 +118,24 @@ export async function GET(
         fetchAllRows(supabase, "animal_experiments", userId),
         fetchAllRows(supabase, "animals", userId),
       ]);
-      const animalMap = new Map(
-        (allAnimalsRaw as { id: string; identifier: string }[]).map(a => [a.id, a.identifier])
+      const animalMapById = new Map(
+        (allAnimalsRaw as { id: string; identifier: string; cohort_id: string }[]).map(a => [a.id, a])
       );
 
-      animalExperiments = (allExpsRaw as Record<string, unknown>[]).map((e) => ({
-        animal_identifier: animalMap.get(e.animal_id as string) || "?",
-        experiment_type: e.experiment_type,
-        timepoint_age_days: e.timepoint_age_days,
-        scheduled_date: e.scheduled_date,
-        completed_date: e.completed_date,
-        status: e.status,
-        results_drive_url: canSee.includes("results") ? e.results_drive_url : null,
-      }));
+      animalExperiments = (allExpsRaw as Record<string, unknown>[]).map((e) => {
+        const animal = animalMapById.get(e.animal_id as string);
+        return {
+          animal_id: e.animal_id,
+          animal_identifier: animal?.identifier || "?",
+          cohort_id: animal?.cohort_id || null,
+          experiment_type: e.experiment_type,
+          timepoint_age_days: e.timepoint_age_days,
+          scheduled_date: e.scheduled_date,
+          completed_date: e.completed_date,
+          status: e.status,
+          results_drive_url: canSee.includes("results") ? e.results_drive_url : null,
+        };
+      });
     }
 
     // Fetch colony results, cohorts, and timepoints for results/analysis views
@@ -163,6 +170,8 @@ export async function GET(
     const activeAnimals = (animals as Array<{ status: string }>).filter((a) => a.status === "active").length;
     const pendingExps = (animalExperiments as Array<{ status: string }>).filter((e) => e.status === "scheduled").length;
     const completedExps = (animalExperiments as Array<{ status: string }>).filter((e) => e.status === "completed").length;
+    const inProgressExps = (animalExperiments as Array<{ status: string }>).filter((e) => e.status === "in_progress").length;
+    const skippedExps = (animalExperiments as Array<{ status: string }>).filter((e) => e.status === "skipped").length;
 
     return NextResponse.json({
       advisor_name: portal.advisor_name,
@@ -179,6 +188,8 @@ export async function GET(
         active_animals: activeAnimals,
         pending_experiments: pendingExps,
         completed_experiments: completedExps,
+        in_progress_experiments: inProgressExps,
+        skipped_experiments: skippedExps,
       },
     });
   } catch (err) {

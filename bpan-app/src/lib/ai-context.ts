@@ -146,17 +146,19 @@ export async function buildUnifiedContext(
     addSection(`\n--- HYPOTHESES ---\n${hypoText}`);
   }
 
-  // ── 4. Colony Overview ──
+  // ── 4. Colony Overview (with results data) ──
   let colonyStats = null;
   if (includeColony) {
     const [
       { count: cohortCount },
       { count: animalCount },
       { count: pendingExpCount },
+      { count: completedExpCount },
     ] = await Promise.all([
       supabase.from("cohorts").select("*", { count: "exact", head: true }).eq("user_id", userId),
       supabase.from("animals").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "active"),
       supabase.from("animal_experiments").select("*", { count: "exact", head: true }).eq("user_id", userId).in("status", ["pending", "scheduled"]),
+      supabase.from("animal_experiments").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "completed"),
     ]);
 
     colonyStats = {
@@ -180,10 +182,38 @@ export async function buildUnifiedContext(
         .order("scheduled_date")
         .limit(15);
 
-      let colonyText = `Mouse Colony: ${colonyStats.cohorts} cohorts, ${colonyStats.animals} active animals, ${colonyStats.pendingExperiments} pending experiments`;
+      let colonyText = `Mouse Colony: ${colonyStats.cohorts} cohorts, ${colonyStats.animals} active animals, ${colonyStats.pendingExperiments} pending experiments, ${completedExpCount || 0} completed experiments`;
       if (upcomingExps?.length) {
         colonyText += `\nUpcoming (next 2 weeks): ${upcomingExps.map(e => `${e.experiment_type} for ${(e as Record<string, unknown>).animals ? ((e as Record<string, unknown>).animals as Record<string, unknown>).identifier : "?"} on ${e.scheduled_date}`).join("; ")}`;
       }
+
+      // Add experiment results summary
+      const { data: resultsSummary } = await supabase
+        .from("colony_results")
+        .select("experiment_type, timepoint_age_days, measures, animals(identifier, genotype, sex)")
+        .eq("user_id", userId)
+        .limit(100);
+
+      if (resultsSummary?.length) {
+        // Group by experiment type → timepoint to give a summary
+        const resultGroups = new Map<string, { count: number; measureKeys: Set<string> }>();
+        for (const r of resultsSummary) {
+          const key = `${r.experiment_type}@${r.timepoint_age_days}d`;
+          if (!resultGroups.has(key)) resultGroups.set(key, { count: 0, measureKeys: new Set() });
+          const g = resultGroups.get(key)!;
+          g.count++;
+          if (r.measures && typeof r.measures === "object") {
+            for (const k of Object.keys(r.measures as Record<string, unknown>)) {
+              if (!k.startsWith("__")) g.measureKeys.add(k);
+            }
+          }
+        }
+        const resultSummaryText = [...resultGroups.entries()]
+          .map(([key, g]) => `  ${key}: ${g.count} animals, measures: ${[...g.measureKeys].slice(0, 5).join(", ")}`)
+          .join("\n");
+        colonyText += `\nExperiment Results (${resultsSummary.length} data points):\n${resultSummaryText}`;
+      }
+
       addSection(`\n--- COLONY STATUS ---\n${colonyText}`);
     }
   }

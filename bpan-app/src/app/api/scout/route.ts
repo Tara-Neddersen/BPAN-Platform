@@ -84,20 +84,30 @@ export async function POST(request: Request) {
       matched_keyword: string;
     }> = [];
 
-    const papersPerKeyword = Math.max(2, Math.ceil(maxPapers / keywords.length));
+    const papersPerKeyword = Math.max(3, Math.ceil(maxPapers / keywords.length));
     let totalAnalyzed = 0;
 
     for (const keyword of keywords) {
       if (totalAnalyzed >= maxPapers) break;
 
       try {
-        // Sort by date to get recent papers
-        const result = await searchPubMed(`${keyword} AND ("last 30 days"[dp])`, 1);
+        // Search multiple pages and strategies to find more unanalyzed papers
+        // Strategy 1: Recent papers (last 1 year) sorted by date
+        const recentResult = await searchPubMed(`${keyword} AND ("last 1 year"[dp])`, 1);
+        // Strategy 2: All-time relevance search (page 1)
+        const relevanceResult = await searchPubMed(keyword, 1);
+        // Strategy 3: Page 2 of relevance search for deeper results
+        const deeperResult = await searchPubMed(keyword, 2);
 
-        // If no recent papers, try without date filter but still get recent-ish
-        const papers = result.papers.length > 0
-          ? result.papers
-          : (await searchPubMed(keyword, 1)).papers;
+        // Combine and deduplicate across strategies
+        const seenPmids = new Set<string>();
+        const papers = [];
+        for (const p of [...recentResult.papers, ...relevanceResult.papers, ...deeperResult.papers]) {
+          if (p.pmid && !seenPmids.has(p.pmid)) {
+            seenPmids.add(p.pmid);
+            papers.push(p);
+          }
+        }
 
         let found = 0;
         for (const paper of papers) {

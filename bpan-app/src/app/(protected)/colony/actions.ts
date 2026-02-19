@@ -535,6 +535,27 @@ export async function updateAnimalExperiment(id: string, formData: FormData) {
 }
 
 /**
+ * Simple reschedule: move a single experiment to a new date.
+ * Used by the calendar drag-and-drop feature.
+ */
+export async function rescheduleExperimentDate(id: string, newDate: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase
+    .from("animal_experiments")
+    .update({ scheduled_date: newDate })
+    .eq("id", id)
+    .eq("user_id", user.id);
+
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  revalidatePath("/experiments");
+  return { success: true };
+}
+
+/**
  * Batch update experiment status — supports multiple cohorts, timepoints, and experiment types.
  * e.g. "Mark all marble+nesting @ 30d+120d for BPAN 3+BPAN 5 as skipped"
  */

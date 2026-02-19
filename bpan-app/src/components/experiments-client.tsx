@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +23,7 @@ import {
   ArrowRight,
   AlertTriangle,
   Loader2,
+  GripVertical,
 } from "lucide-react";
 import {
   createExperiment,
@@ -38,6 +40,8 @@ import {
   updateReagent,
   deleteReagent,
 } from "@/app/(protected)/experiments/actions";
+import { rescheduleExperimentDate } from "@/app/(protected)/colony/actions";
+import { toast } from "sonner";
 import type { Experiment, ExperimentTimepoint, Protocol, Reagent, ProtocolStep, AnimalExperiment, Animal, Cohort, ColonyTimepoint } from "@/types";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -349,12 +353,58 @@ function CalendarView({
   cohorts?: Cohort[];
   colonyTimepoints?: ColonyTimepoint[];
 }) {
+  const router = useRouter();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showColonyExps, setShowColonyExps] = useState(true);
   const [filterCohort, setFilterCohort] = useState<string>("all");
   const [expandedDay, setExpandedDay] = useState<string | null>(null);
+  const [dragOverDay, setDragOverDay] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
+
+  // ─── Drag & Drop Handlers ───────────────────────────────────────────
+  const handleDragStart = useCallback((e: React.DragEvent, expId: string, expType: string, fromDate: string) => {
+    e.dataTransfer.setData("text/plain", JSON.stringify({ expId, expType, fromDate }));
+    e.dataTransfer.effectAllowed = "move";
+    setIsDragging(true);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, dayStr: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverDay(dayStr);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverDay(null);
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent, targetDate: string) => {
+    e.preventDefault();
+    setDragOverDay(null);
+    setIsDragging(false);
+    try {
+      const data = JSON.parse(e.dataTransfer.getData("text/plain"));
+      const { expId, fromDate } = data;
+      if (fromDate === targetDate) return; // Dropped on same day
+
+      const result = await rescheduleExperimentDate(expId, targetDate);
+      if (result.error) {
+        toast.error(`Failed to reschedule: ${result.error}`);
+      } else {
+        toast.success(`Moved to ${targetDate}`);
+        router.refresh();
+      }
+    } catch {
+      toast.error("Failed to move experiment");
+    }
+  }, [router]);
+
+  const handleDragEnd = useCallback(() => {
+    setIsDragging(false);
+    setDragOverDay(null);
+  }, []);
 
   const firstDay = new Date(year, month, 1);
   const lastDay = new Date(year, month + 1, 0);
@@ -407,7 +457,7 @@ function CalendarView({
     const dayExps = filteredColonyExps.filter(ae => ae.scheduled_date === dateStr);
 
     // Group by experiment_type + status
-    const groups = new Map<string, { type: string; status: string; animals: { id: string; identifier: string; cohortName: string; tpName: string }[] }>();
+    const groups = new Map<string, { type: string; status: string; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string }[] }>();
     for (const ae of dayExps) {
       const key = `${ae.experiment_type}::${ae.status}`;
       if (!groups.has(key)) {
@@ -422,6 +472,7 @@ function CalendarView({
       const tp = ae.timepoint_age_days != null ? tpMap.get(ae.timepoint_age_days) : null;
       groups.get(key)!.animals.push({
         id: ae.animal_id,
+        expId: ae.id,
         identifier: animal?.identifier || "?",
         cohortName: cohort?.name || "",
         tpName: tp?.name || `${ae.timepoint_age_days}d`,
@@ -562,10 +613,15 @@ function CalendarView({
                 key={i}
                 className={`border-t border-r min-h-[90px] p-1 relative group transition-colors ${
                   isToday ? "bg-primary/5" : ""
-                } ${hasContent ? "cursor-pointer hover:bg-muted/20" : ""}`}
+                } ${hasContent ? "cursor-pointer hover:bg-muted/20" : ""} ${
+                  dragOverDay === dayStr ? "ring-2 ring-primary ring-inset bg-primary/10" : ""
+                } ${isDragging ? "transition-shadow" : ""}`}
                 onClick={() => {
                   if (hasContent) setExpandedDay(isExpanded ? null : dayStr);
                 }}
+                onDragOver={(e) => handleDragOver(e, dayStr)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, dayStr)}
               >
                 <div className="flex items-center justify-between">
                   <span className={`text-xs font-medium inline-flex h-5 w-5 items-center justify-center rounded-full ${isToday ? "bg-primary text-primary-foreground" : ""}`}>
@@ -603,9 +659,19 @@ function CalendarView({
                       {colonyGroups.slice(0, 3).map((g) => (
                         <div
                           key={g.type + g.status}
-                          className={`text-[10px] leading-tight px-1 py-0.5 rounded truncate ${COLONY_STATUS_COLORS[g.status] || "bg-gray-100 text-gray-700"}`}
+                          className={`text-[10px] leading-tight px-1 py-0.5 rounded truncate cursor-grab active:cursor-grabbing ${COLONY_STATUS_COLORS[g.status] || "bg-gray-100 text-gray-700"}`}
+                          draggable
+                          onDragStart={(e) => {
+                            e.stopPropagation();
+                            // Drag all experiments in this group
+                            handleDragStart(e, g.animals[0].expId, g.type, dayStr);
+                          }}
+                          onDragEnd={handleDragEnd}
                         >
-                          {COLONY_EXP_LABELS[g.type] || g.type} · {g.animals.length}
+                          <span className="inline-flex items-center gap-0.5">
+                            <GripVertical className="h-2 w-2 opacity-40 inline-block flex-shrink-0" />
+                            {COLONY_EXP_LABELS[g.type] || g.type} · {g.animals.length}
+                          </span>
                         </div>
                       ))}
                       {colonyGroups.length > 3 && (
@@ -628,7 +694,17 @@ function CalendarView({
                           </div>
                           <div className="flex flex-wrap gap-x-1 mt-0.5 text-[9px] opacity-80">
                             {g.animals.slice(0, 6).map((a) => (
-                              <span key={a.id} title={`${a.cohortName} #${a.identifier} (${a.tpName})`}>
+                              <span
+                                key={a.id}
+                                title={`Drag to reschedule · ${a.cohortName} #${a.identifier} (${a.tpName})`}
+                                className="cursor-grab active:cursor-grabbing hover:underline"
+                                draggable
+                                onDragStart={(e) => {
+                                  e.stopPropagation();
+                                  handleDragStart(e, a.expId, g.type, dayStr);
+                                }}
+                                onDragEnd={handleDragEnd}
+                              >
                                 {a.cohortName ? `${a.cohortName.replace("BPAN ", "B")}-` : ""}{a.identifier}
                               </span>
                             ))}
@@ -704,9 +780,16 @@ function CalendarView({
                           {g.animals.map((a) => (
                             <span
                               key={a.id}
-                              className="inline-flex items-center text-[10px] bg-white/60 dark:bg-black/20 rounded px-1.5 py-0.5"
-                              title={`${a.cohortName} #${a.identifier} (${a.tpName})`}
+                              className="inline-flex items-center text-[10px] bg-white/60 dark:bg-black/20 rounded px-1.5 py-0.5 cursor-grab active:cursor-grabbing hover:ring-1 hover:ring-primary/50"
+                              title={`Drag to reschedule · ${a.cohortName} #${a.identifier} (${a.tpName})`}
+                              draggable
+                              onDragStart={(e) => {
+                                e.stopPropagation();
+                                handleDragStart(e, a.expId, g.type, expandedDay!);
+                              }}
+                              onDragEnd={handleDragEnd}
                             >
+                              <GripVertical className="h-2.5 w-2.5 opacity-40 mr-0.5 flex-shrink-0" />
                               {a.cohortName && <span className="font-medium mr-0.5">{a.cohortName.replace("BPAN ", "B")}</span>}
                               #{a.identifier}
                               <span className="ml-1 opacity-60">{a.tpName}</span>
