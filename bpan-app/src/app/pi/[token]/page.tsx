@@ -905,11 +905,26 @@ function PIAnalysisPanel({
 
 // ─── Experiment Tracker (read-only for PI) ──────────────────────────────
 
+// Genotype color scheme
+const GENOTYPE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  hemi: { bg: "bg-red-100", text: "text-red-700", border: "border-red-300" },
+  het: { bg: "bg-amber-100", text: "text-amber-700", border: "border-amber-300" },
+  wt: { bg: "bg-blue-100", text: "text-blue-700", border: "border-blue-300" },
+};
+
+// Sex ordering (for sort tiebreak)
+const SEX_ORDER: Record<string, number> = { male: 0, female: 1 };
+
+// Genotype ordering (for sort tiebreak)
+const GENOTYPE_ORDER: Record<string, number> = { hemi: 0, het: 1, wt: 2 };
+
 function PITrackerTab({
+  animals,
   experiments,
   cohorts,
   timepoints,
 }: {
+  animals: PortalData["animals"];
   experiments: PortalData["experiments"];
   cohorts: Cohort[];
   timepoints: ColonyTimepoint[];
@@ -928,27 +943,58 @@ function PITrackerTab({
     return [...ages].sort((a, b) => a - b);
   }, [experiments]);
 
-  // Group experiments by animal
-  const animalData = useMemo(() => {
-    // Get unique animals
-    const animalMap = new Map<string, { id: string; identifier: string; cohortId: string | null }>();
-    for (const e of experiments) {
-      if (!animalMap.has(e.animal_id)) {
-        animalMap.set(e.animal_id, {
-          id: e.animal_id,
-          identifier: e.animal_identifier,
-          cohortId: e.cohort_id,
-        });
-      }
-    }
-    return [...animalMap.values()]
-      .filter(a => filterCohort === "all" || a.cohortId === filterCohort)
-      .sort((a, b) => a.identifier.localeCompare(b.identifier, undefined, { numeric: true }));
-  }, [experiments, filterCohort]);
+  // Animal lookup by id (from full animals list)
+  const animalById = useMemo(() => {
+    const map = new Map<string, PortalData["animals"][0]>();
+    for (const a of animals) map.set(a.id, a);
+    return map;
+  }, [animals]);
+
+  // Cohort lookup
+  const cohortById = useMemo(() => {
+    const map = new Map<string, Cohort>();
+    for (const c of cohorts) map.set(c.id, c);
+    return map;
+  }, [cohorts]);
+
+  // Build sorted animal list: age (oldest first) → cohort name → sex → genotype
+  const sortedAnimals = useMemo(() => {
+    // Get unique animal IDs that have experiments
+    const animalIdsWithExps = new Set(experiments.map(e => e.animal_id));
+    const relevantAnimals = animals.filter(a =>
+      animalIdsWithExps.has(a.id) && (filterCohort === "all" || a.cohort_id === filterCohort)
+    );
+
+    return [...relevantAnimals].sort((a, b) => {
+      // 1. Age (oldest first = earliest birth_date first)
+      const ageA = new Date(a.birth_date).getTime();
+      const ageB = new Date(b.birth_date).getTime();
+      if (ageA !== ageB) return ageA - ageB; // earlier date = older
+
+      // 2. Cohort name
+      const cohortA = cohortById.get(a.cohort_id)?.name || "";
+      const cohortB = cohortById.get(b.cohort_id)?.name || "";
+      const cohortCmp = cohortA.localeCompare(cohortB, undefined, { numeric: true });
+      if (cohortCmp !== 0) return cohortCmp;
+
+      // 3. Sex (male first)
+      const sexA = SEX_ORDER[a.sex] ?? 2;
+      const sexB = SEX_ORDER[b.sex] ?? 2;
+      if (sexA !== sexB) return sexA - sexB;
+
+      // 4. Genotype
+      const genoA = GENOTYPE_ORDER[a.genotype] ?? 3;
+      const genoB = GENOTYPE_ORDER[b.genotype] ?? 3;
+      if (genoA !== genoB) return genoA - genoB;
+
+      // 5. Identifier fallback
+      return a.identifier.localeCompare(b.identifier, undefined, { numeric: true });
+    });
+  }, [animals, experiments, filterCohort, cohortById]);
 
   // Lookup: animal_id → timepoint → experiment_type → status
   const statusMap = useMemo(() => {
-    const map = new Map<string, string>(); // `${animalId}::${tp}::${type}` → status
+    const map = new Map<string, string>();
     for (const e of experiments) {
       if (e.timepoint_age_days != null) {
         const key = `${e.animal_id}::${e.timepoint_age_days}::${e.experiment_type}`;
@@ -957,17 +1003,6 @@ function PITrackerTab({
     }
     return map;
   }, [experiments]);
-
-  // Compute overall completion rate
-  const { completed, total } = useMemo(() => {
-    const relevant = experiments.filter(e => e.status !== "skipped");
-    return {
-      completed: relevant.filter(e => e.status === "completed").length,
-      total: relevant.length,
-    };
-  }, [experiments]);
-
-  const completionPct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   // Status icon
   const getStatusIcon = (status: string | undefined) => {
@@ -982,27 +1017,6 @@ function PITrackerTab({
 
   return (
     <div className="space-y-4">
-      {/* Completion bar */}
-      <Card>
-        <CardContent className="pt-4 pb-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium">Overall Progress</span>
-            <span className="text-sm text-muted-foreground">{completed}/{total} experiments complete ({completionPct}%)</span>
-          </div>
-          <div className="h-3 bg-muted rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-green-400 to-green-600 rounded-full transition-all duration-500"
-              style={{ width: `${completionPct}%` }}
-            />
-          </div>
-          <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">✅ Completed: {completed}</span>
-            <span className="flex items-center gap-1">🔵 In Progress: {experiments.filter(e => e.status === "in_progress").length}</span>
-            <span className="flex items-center gap-1">⏳ Scheduled: {experiments.filter(e => e.status === "scheduled").length}</span>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* Cohort filter */}
       {cohorts.length > 1 && (
         <div className="flex items-center gap-2">
@@ -1013,41 +1027,26 @@ function PITrackerTab({
               {cohorts.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
+          {/* Genotype legend */}
+          <div className="flex items-center gap-2 ml-auto text-[10px]">
+            {Object.entries(GENOTYPE_COLORS).map(([geno, colors]) => (
+              <span key={geno} className={`px-1.5 py-0.5 rounded ${colors.bg} ${colors.text} font-medium`}>
+                {GENOTYPE_LABELS[geno] || geno}
+              </span>
+            ))}
+          </div>
         </div>
       )}
-
-      {/* Progress by experiment type */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {experimentTypes.map(type => {
-          const typeExps = experiments.filter(e => e.experiment_type === type && e.status !== "skipped");
-          const typeDone = typeExps.filter(e => e.status === "completed").length;
-          const typeTotal = typeExps.length;
-          const typePct = typeTotal > 0 ? Math.round((typeDone / typeTotal) * 100) : 0;
-          return (
-            <Card key={type} className="overflow-hidden">
-              <CardContent className="pt-3 pb-2 px-3">
-                <p className="text-xs font-medium truncate">{EXPERIMENT_LABELS[type] || type}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <div className="h-1.5 flex-1 bg-muted rounded-full overflow-hidden">
-                    <div className="h-full bg-green-500 rounded-full" style={{ width: `${typePct}%` }} />
-                  </div>
-                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">{typeDone}/{typeTotal}</span>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
 
       {/* Tracker matrix */}
       <Card>
         <CardContent className="p-0">
           <ScrollArea className="w-full">
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+              <table className="w-full text-xs border-collapse">
                 <thead>
                   <tr className="border-b bg-muted/30">
-                    <th className="text-left py-2 px-3 font-medium sticky left-0 bg-muted/30 z-10 min-w-[100px]">Animal</th>
+                    <th className="text-left py-2 px-3 font-medium sticky left-0 bg-muted/30 z-10 min-w-[140px]">Animal</th>
                     {tpAges.map(tp => (
                       experimentTypes.map(type => (
                         <th key={`${tp}-${type}`} className="text-center py-1 px-1 font-medium min-w-[32px]" title={`${EXPERIMENT_LABELS[type] || type} @ ${tp}d`}>
@@ -1059,13 +1058,28 @@ function PITrackerTab({
                   </tr>
                 </thead>
                 <tbody>
-                  {animalData.map(animal => {
-                    const cohort = cohorts.find(c => c.id === animal.cohortId);
+                  {sortedAnimals.map((animal, idx) => {
+                    const cohort = cohortById.get(animal.cohort_id);
+                    const genoColors = GENOTYPE_COLORS[animal.genotype] || { bg: "bg-gray-100", text: "text-gray-600", border: "border-gray-300" };
+
+                    // Detect cohort boundary for bold separator
+                    const prevAnimal = idx > 0 ? sortedAnimals[idx - 1] : null;
+                    const isCohortBoundary = prevAnimal && prevAnimal.cohort_id !== animal.cohort_id;
+
                     return (
-                      <tr key={animal.id} className="border-b last:border-0 hover:bg-muted/20">
+                      <tr
+                        key={animal.id}
+                        className={`border-b last:border-0 hover:bg-muted/20 ${isCohortBoundary ? "border-t-[3px] border-t-foreground/30" : ""}`}
+                      >
                         <td className="py-1.5 px-3 font-medium sticky left-0 bg-background z-10 whitespace-nowrap">
-                          {animal.identifier}
-                          {cohort && <span className="text-[10px] text-muted-foreground ml-1">({cohort.name.replace("BPAN ", "B")})</span>}
+                          <div className="flex items-center gap-1.5">
+                            <span className={`inline-block px-1 py-0.5 rounded text-[9px] font-semibold ${genoColors.bg} ${genoColors.text}`}>
+                              {GENOTYPE_LABELS[animal.genotype] || animal.genotype}
+                            </span>
+                            <span>{animal.identifier}</span>
+                            <span className="text-[9px] text-muted-foreground">{animal.sex === "male" ? "♂" : "♀"}</span>
+                            {cohort && <span className="text-[9px] text-muted-foreground opacity-60">({cohort.name.replace("BPAN ", "B")})</span>}
+                          </div>
                         </td>
                         {tpAges.map(tp => (
                           experimentTypes.map(type => {
@@ -1197,36 +1211,6 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4 mt-4">
-            {/* Progress Summary */}
-            {data.experiments.length > 0 && (() => {
-              const activeExps = data.experiments.filter(e => e.status !== "skipped");
-              const completedCount = activeExps.filter(e => e.status === "completed").length;
-              const inProgressCount = activeExps.filter(e => e.status === "in_progress").length;
-              const totalActive = activeExps.length;
-              const completionPct = totalActive > 0 ? Math.round((completedCount / totalActive) * 100) : 0;
-              return (
-                <Card>
-                  <CardContent className="pt-4 pb-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium">Experiment Progress</span>
-                      <span className="text-sm font-bold text-green-600">{completionPct}% Complete</span>
-                    </div>
-                    <div className="h-3 bg-muted rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-green-400 to-green-600 rounded-full transition-all"
-                        style={{ width: `${completionPct}%` }}
-                      />
-                    </div>
-                    <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
-                      <span>✅ {completedCount} completed</span>
-                      <span>🔵 {inProgressCount} in progress</span>
-                      <span>⏳ {totalActive - completedCount - inProgressCount} scheduled</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })()}
-
             {/* Upcoming */}
             {data.can_see.includes("timeline") && upcoming.length > 0 && (
               <Card>
@@ -1322,6 +1306,7 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
           {data.experiments.length > 0 && (
             <TabsContent value="tracker" className="mt-4">
               <PITrackerTab
+                animals={data.animals}
                 experiments={data.experiments}
                 cohorts={data.cohorts}
                 timepoints={data.timepoints}
