@@ -918,6 +918,14 @@ const SEX_ORDER: Record<string, number> = { male: 0, female: 1 };
 // Genotype ordering (for sort tiebreak)
 const GENOTYPE_ORDER: Record<string, number> = { hemi: 0, het: 1, wt: 2 };
 
+// Canonical protocol order for experiments
+const PROTOCOL_ORDER: string[] = [
+  "handling", "y_maze", "marble", "ldb", "nesting",
+  "data_collection", "core_acclimation", "catwalk",
+  "rotarod_hab", "rotarod", "stamina", "blood_draw",
+  "eeg_implant", "eeg_recording",
+];
+
 function PITrackerTab({
   animals,
   experiments,
@@ -931,10 +939,15 @@ function PITrackerTab({
 }) {
   const [filterCohort, setFilterCohort] = useState<string>("all");
 
-  // All unique experiment types
+  // All experiment types present in data, in protocol order
   const experimentTypes = useMemo(() => {
-    const types = new Set(experiments.map(e => e.experiment_type));
-    return [...types].sort();
+    const present = new Set(experiments.map(e => e.experiment_type));
+    // Protocol order first, then any unknown types at the end
+    const ordered = PROTOCOL_ORDER.filter(t => present.has(t));
+    for (const t of present) {
+      if (!ordered.includes(t)) ordered.push(t);
+    }
+    return ordered;
   }, [experiments]);
 
   // Sorted timepoint ages
@@ -943,12 +956,17 @@ function PITrackerTab({
     return [...ages].sort((a, b) => a - b);
   }, [experiments]);
 
-  // Animal lookup by id (from full animals list)
-  const animalById = useMemo(() => {
-    const map = new Map<string, PortalData["animals"][0]>();
-    for (const a of animals) map.set(a.id, a);
-    return map;
-  }, [animals]);
+  // First timepoint (for EEG implant: only show at first tp)
+  const firstTpAge = tpAges.length > 0 ? tpAges[0] : null;
+
+  // Which experiment types to show for a given timepoint
+  const getTypesForTp = useCallback((tpAge: number) => {
+    // EEG implant only at first timepoint
+    if (tpAge !== firstTpAge) {
+      return experimentTypes.filter(t => t !== "eeg_implant");
+    }
+    return experimentTypes;
+  }, [experimentTypes, firstTpAge]);
 
   // Cohort lookup
   const cohortById = useMemo(() => {
@@ -959,17 +977,16 @@ function PITrackerTab({
 
   // Build sorted animal list: age (oldest first) → cohort name → sex → genotype
   const sortedAnimals = useMemo(() => {
-    // Get unique animal IDs that have experiments
     const animalIdsWithExps = new Set(experiments.map(e => e.animal_id));
     const relevantAnimals = animals.filter(a =>
       animalIdsWithExps.has(a.id) && (filterCohort === "all" || a.cohort_id === filterCohort)
     );
 
     return [...relevantAnimals].sort((a, b) => {
-      // 1. Age (oldest first = earliest birth_date first)
+      // 1. Age (oldest first = earliest birth_date)
       const ageA = new Date(a.birth_date).getTime();
       const ageB = new Date(b.birth_date).getTime();
-      if (ageA !== ageB) return ageA - ageB; // earlier date = older
+      if (ageA !== ageB) return ageA - ageB;
 
       // 2. Cohort name
       const cohortA = cohortById.get(a.cohort_id)?.name || "";
@@ -1015,11 +1032,20 @@ function PITrackerTab({
     }
   };
 
+  // Pre-compute columns per timepoint (for colSpan)
+  const tpColumns = useMemo(() => tpAges.map(tp => ({
+    tp,
+    types: getTypesForTp(tp),
+  })), [tpAges, getTypesForTp]);
+
+  // Total columns for scroll width hint
+  const totalExpCols = tpColumns.reduce((sum, tc) => sum + tc.types.length, 0);
+
   return (
     <div className="space-y-4">
-      {/* Cohort filter */}
-      {cohorts.length > 1 && (
-        <div className="flex items-center gap-2">
+      {/* Cohort filter + genotype legend */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {cohorts.length > 1 && (
           <Select value={filterCohort} onValueChange={setFilterCohort}>
             <SelectTrigger className="h-8 text-xs w-[180px]"><SelectValue placeholder="Filter by cohort" /></SelectTrigger>
             <SelectContent>
@@ -1027,78 +1053,105 @@ function PITrackerTab({
               {cohorts.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          {/* Genotype legend */}
-          <div className="flex items-center gap-2 ml-auto text-[10px]">
-            {Object.entries(GENOTYPE_COLORS).map(([geno, colors]) => (
-              <span key={geno} className={`px-1.5 py-0.5 rounded ${colors.bg} ${colors.text} font-medium`}>
-                {GENOTYPE_LABELS[geno] || geno}
-              </span>
-            ))}
-          </div>
+        )}
+        <div className="flex items-center gap-2 ml-auto text-[10px]">
+          {Object.entries(GENOTYPE_COLORS).map(([geno, colors]) => (
+            <span key={geno} className={`px-1.5 py-0.5 rounded ${colors.bg} ${colors.text} font-medium`}>
+              {GENOTYPE_LABELS[geno] || geno}
+            </span>
+          ))}
         </div>
-      )}
+      </div>
 
-      {/* Tracker matrix */}
+      {/* Tracker matrix — use native div scroll (not ScrollArea) for reliable horizontal scroll */}
       <Card>
         <CardContent className="p-0">
-          <ScrollArea className="w-full">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse">
-                <thead>
-                  <tr className="border-b bg-muted/30">
-                    <th className="text-left py-2 px-3 font-medium sticky left-0 bg-muted/30 z-10 min-w-[140px]">Animal</th>
-                    {tpAges.map(tp => (
-                      experimentTypes.map(type => (
-                        <th key={`${tp}-${type}`} className="text-center py-1 px-1 font-medium min-w-[32px]" title={`${EXPERIMENT_LABELS[type] || type} @ ${tp}d`}>
-                          <div className="text-[8px] leading-tight opacity-60">{tp}d</div>
-                          <div className="text-[8px] leading-tight truncate max-w-[40px]">{(EXPERIMENT_LABELS[type] || type).slice(0, 4)}</div>
-                        </th>
-                      ))
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedAnimals.map((animal, idx) => {
-                    const cohort = cohortById.get(animal.cohort_id);
-                    const genoColors = GENOTYPE_COLORS[animal.genotype] || { bg: "bg-gray-100", text: "text-gray-600", border: "border-gray-300" };
-
-                    // Detect cohort boundary for bold separator
-                    const prevAnimal = idx > 0 ? sortedAnimals[idx - 1] : null;
-                    const isCohortBoundary = prevAnimal && prevAnimal.cohort_id !== animal.cohort_id;
-
-                    return (
-                      <tr
-                        key={animal.id}
-                        className={`border-b last:border-0 hover:bg-muted/20 ${isCohortBoundary ? "border-t-[3px] border-t-foreground/30" : ""}`}
+          <div className="overflow-auto max-h-[70vh]" style={{ WebkitOverflowScrolling: "touch" }}>
+            <table className="text-xs border-collapse" style={{ minWidth: `${160 + totalExpCols * 50}px` }}>
+              <thead className="sticky top-0 z-20">
+                {/* Row 1: Timepoint group headers */}
+                <tr className="bg-muted/50 border-b">
+                  <th
+                    className="text-left py-2 px-3 font-semibold sticky left-0 bg-muted/50 z-30 min-w-[160px]"
+                    rowSpan={2}
+                  >
+                    Animal
+                  </th>
+                  {tpColumns.map(({ tp, types }, tpIdx) => (
+                    <th
+                      key={tp}
+                      colSpan={types.length}
+                      className={`text-center py-1.5 px-1 font-bold text-sm bg-muted/50 ${tpIdx > 0 ? "border-l-[3px] border-l-foreground/30" : ""}`}
+                    >
+                      {tp} days
+                    </th>
+                  ))}
+                </tr>
+                {/* Row 2: Experiment type headers */}
+                <tr className="bg-muted/30 border-b">
+                  {tpColumns.map(({ tp, types }, tpIdx) => (
+                    types.map((type, typeIdx) => (
+                      <th
+                        key={`${tp}-${type}`}
+                        className={`text-center py-1 px-0.5 font-medium bg-muted/30 ${tpIdx > 0 && typeIdx === 0 ? "border-l-[3px] border-l-foreground/30" : ""}`}
+                        style={{ minWidth: "46px", maxWidth: "70px" }}
                       >
-                        <td className="py-1.5 px-3 font-medium sticky left-0 bg-background z-10 whitespace-nowrap">
-                          <div className="flex items-center gap-1.5">
-                            <span className={`inline-block px-1 py-0.5 rounded text-[9px] font-semibold ${genoColors.bg} ${genoColors.text}`}>
-                              {GENOTYPE_LABELS[animal.genotype] || animal.genotype}
-                            </span>
-                            <span>{animal.identifier}</span>
-                            <span className="text-[9px] text-muted-foreground">{animal.sex === "male" ? "♂" : "♀"}</span>
-                            {cohort && <span className="text-[9px] text-muted-foreground opacity-60">({cohort.name.replace("BPAN ", "B")})</span>}
-                          </div>
-                        </td>
-                        {tpAges.map(tp => (
-                          experimentTypes.map(type => {
-                            const key = `${animal.id}::${tp}::${type}`;
-                            const status = statusMap.get(key);
-                            return (
-                              <td key={`${tp}-${type}`} className="text-center py-1 px-0.5">
-                                {getStatusIcon(status)}
-                              </td>
-                            );
-                          })
-                        ))}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </ScrollArea>
+                        <div
+                          className="text-[9px] leading-tight whitespace-nowrap overflow-hidden text-ellipsis"
+                          title={EXPERIMENT_LABELS[type] || type}
+                          style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", height: "70px", display: "flex", alignItems: "center", justifyContent: "flex-end" }}
+                        >
+                          {EXPERIMENT_LABELS[type] || type}
+                        </div>
+                      </th>
+                    ))
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedAnimals.map((animal, idx) => {
+                  const cohort = cohortById.get(animal.cohort_id);
+                  const genoColors = GENOTYPE_COLORS[animal.genotype] || { bg: "bg-gray-100", text: "text-gray-600", border: "border-gray-300" };
+
+                  // Detect cohort boundary for bold separator
+                  const prevAnimal = idx > 0 ? sortedAnimals[idx - 1] : null;
+                  const isCohortBoundary = prevAnimal != null && prevAnimal.cohort_id !== animal.cohort_id;
+
+                  return (
+                    <tr
+                      key={animal.id}
+                      className={`border-b last:border-0 hover:bg-muted/10 ${isCohortBoundary ? "border-t-[3px] border-t-foreground/30" : ""}`}
+                    >
+                      <td className="py-1.5 px-3 font-medium sticky left-0 bg-background z-10 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`inline-block px-1 py-0.5 rounded text-[9px] font-semibold ${genoColors.bg} ${genoColors.text}`}>
+                            {GENOTYPE_LABELS[animal.genotype] || animal.genotype}
+                          </span>
+                          <span>{animal.identifier}</span>
+                          <span className="text-[9px] text-muted-foreground">{animal.sex === "male" ? "♂" : "♀"}</span>
+                          {cohort && <span className="text-[9px] text-muted-foreground opacity-60">({cohort.name.replace("BPAN ", "B")})</span>}
+                        </div>
+                      </td>
+                      {tpColumns.map(({ tp, types }, tpIdx) => (
+                        types.map((type, typeIdx) => {
+                          const key = `${animal.id}::${tp}::${type}`;
+                          const status = statusMap.get(key);
+                          return (
+                            <td
+                              key={`${tp}-${type}`}
+                              className={`text-center py-1 px-0.5 ${tpIdx > 0 && typeIdx === 0 ? "border-l-[3px] border-l-foreground/30" : ""}`}
+                            >
+                              {getStatusIcon(status)}
+                            </td>
+                          );
+                        })
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </CardContent>
       </Card>
 
