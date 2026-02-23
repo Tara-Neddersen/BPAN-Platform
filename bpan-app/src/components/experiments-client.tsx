@@ -40,7 +40,7 @@ import {
   updateReagent,
   deleteReagent,
 } from "@/app/(protected)/experiments/actions";
-import { rescheduleExperimentDate } from "@/app/(protected)/colony/actions";
+import { rescheduleExperimentDate, rescheduleExperimentDates } from "@/app/(protected)/colony/actions";
 import { toast } from "sonner";
 import type { Experiment, ExperimentTimepoint, Protocol, Reagent, ProtocolStep, AnimalExperiment, Animal, Cohort, ColonyTimepoint } from "@/types";
 
@@ -364,8 +364,8 @@ function CalendarView({
   const month = currentDate.getMonth();
 
   // ─── Drag & Drop Handlers ───────────────────────────────────────────
-  const handleDragStart = useCallback((e: React.DragEvent, expId: string, expType: string, fromDate: string) => {
-    e.dataTransfer.setData("text/plain", JSON.stringify({ expId, expType, fromDate }));
+  const handleDragStart = useCallback((e: React.DragEvent, expId: string, expType: string, fromDate: string, expIds?: string[]) => {
+    e.dataTransfer.setData("text/plain", JSON.stringify({ expId, expIds: expIds || [expId], expType, fromDate }));
     e.dataTransfer.effectAllowed = "move";
     setIsDragging(true);
   }, []);
@@ -386,14 +386,20 @@ function CalendarView({
     setIsDragging(false);
     try {
       const data = JSON.parse(e.dataTransfer.getData("text/plain"));
-      const { expId, fromDate } = data;
+      const { expId, expIds, fromDate } = data;
       if (fromDate === targetDate) return; // Dropped on same day
 
-      const result = await rescheduleExperimentDate(expId, targetDate);
+      // If multiple IDs (group drag), move them all at once
+      const ids: string[] = expIds && expIds.length > 1 ? expIds : [expId];
+      const result = ids.length > 1
+        ? await rescheduleExperimentDates(ids, targetDate)
+        : await rescheduleExperimentDate(expId, targetDate);
+
       if (result.error) {
         toast.error(`Failed to reschedule: ${result.error}`);
       } else {
-        toast.success(`Moved to ${targetDate}`);
+        const label = ids.length > 1 ? `${ids.length} animals` : "1 animal";
+        toast.success(`Moved ${label} to ${targetDate}`);
         router.refresh();
       }
     } catch {
@@ -606,7 +612,9 @@ function CalendarView({
             const isToday = dayStr === todayStr;
             const hasContent = dayExperiments.length > 0 || dayTimepoints.length > 0 || colonyGroups.length > 0;
             const isExpanded = expandedDay === dayStr;
-            const totalColonyAnimals = colonyGroups.reduce((sum, g) => sum + g.animals.length, 0);
+            // Count unique animals (an animal doing 2 experiments counts as 1)
+            const uniqueAnimalIds = new Set(colonyGroups.flatMap(g => g.animals.map(a => a.id)));
+            const totalColonyAnimals = uniqueAnimalIds.size;
 
             return (
               <div
@@ -663,8 +671,9 @@ function CalendarView({
                           draggable
                           onDragStart={(e) => {
                             e.stopPropagation();
-                            // Drag all experiments in this group
-                            handleDragStart(e, g.animals[0].expId, g.type, dayStr);
+                            // Drag all experiments in this group together
+                            const allIds = g.animals.map(a => a.expId);
+                            handleDragStart(e, allIds[0], g.type, dayStr, allIds);
                           }}
                           onDragEnd={handleDragEnd}
                         >

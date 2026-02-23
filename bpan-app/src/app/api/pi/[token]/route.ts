@@ -134,6 +134,7 @@ export async function GET(
           completed_date: e.completed_date,
           status: e.status,
           results_drive_url: canSee.includes("results") ? e.results_drive_url : null,
+          notes: e.notes || null,
         };
       });
     }

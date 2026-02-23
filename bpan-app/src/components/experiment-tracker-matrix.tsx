@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Check, X, Clock, Minus, Zap } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import type { Animal, Cohort, ColonyTimepoint, AnimalExperiment } from "@/types";
 
 // ─── Labels ────────────────────────────────────────────────────────────
@@ -21,6 +22,8 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   core_acclimation: "Core Acclim",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Hab",
+  rotarod_test1: "Rotarod Test 1",
+  rotarod_test2: "Rotarod Test 2",
   rotarod: "Rotarod",
   stamina: "Stamina",
   blood_draw: "Blood Draw",
@@ -63,7 +66,7 @@ interface ExperimentTrackerMatrixProps {
   cohorts: Cohort[];
   timepoints: ColonyTimepoint[];
   experiments: AnimalExperiment[];
-  onBatchUpdateStatus?: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
+  onBatchUpdateStatus?: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string, notes?: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
 }
 
 // ─── Multi-toggle helper ────────────────────────────────────────────────
@@ -91,6 +94,7 @@ export function ExperimentTrackerMatrix({
   const [batchTps, setBatchTps] = useState<Set<number>>(new Set());
   const [batchExps, setBatchExps] = useState<Set<string>>(new Set());
   const [batchStatus, setBatchStatus] = useState<string>("");
+  const [batchSkipReason, setBatchSkipReason] = useState<string>("");
   const [isPending, startTransition] = useTransition();
   const [batchResult, setBatchResult] = useState<string | null>(null);
 
@@ -99,6 +103,7 @@ export function ExperimentTrackerMatrix({
     setBatchTps(new Set());
     setBatchExps(new Set());
     setBatchStatus("");
+    setBatchSkipReason("");
     setBatchResult(null);
   }, []);
 
@@ -390,6 +395,18 @@ export function ExperimentTrackerMatrix({
                   ))}
                 </div>
               </div>
+
+              {batchStatus === "skipped" && (
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground font-medium">Skip reason (optional)</p>
+                  <Input
+                    placeholder="e.g. Equipment unavailable, animal excluded"
+                    value={batchSkipReason}
+                    onChange={(e) => setBatchSkipReason(e.target.value)}
+                    className="text-xs h-8 max-w-sm"
+                  />
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-3 pt-1">
@@ -404,7 +421,8 @@ export function ExperimentTrackerMatrix({
                       Array.from(batchCohorts),
                       Array.from(batchTps),
                       Array.from(batchExps),
-                      batchStatus
+                      batchStatus,
+                      batchSkipReason || undefined
                     );
                     if (res.error) {
                       setBatchResult(`❌ ${res.error}`);

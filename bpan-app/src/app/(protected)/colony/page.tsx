@@ -49,6 +49,7 @@ import {
   assignAnimalToCage,
   rescheduleTimepointExperiments,
   batchUpdateExperimentStatus,
+  batchScheduleSingleExperiment,
 } from "./actions";
 import { batchUpsertColonyResults } from "./result-actions";
 
@@ -177,6 +178,7 @@ export default async function ColonyPage() {
           assignAnimalToCage,
           rescheduleTimepointExperiments,
           batchUpdateExperimentStatus,
+          batchScheduleSingleExperiment,
         }}
       />
     </div>

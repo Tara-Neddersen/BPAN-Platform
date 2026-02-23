@@ -23,8 +23,9 @@ const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const EXPERIMENT_LABELS: Record<string, string> = {
   handling: "Handling", y_maze: "Y-Maze", ldb: "Light-Dark Box",
-  marble: "Marble Burying", nesting: "Nesting", rotarod: "Rotarod",
-  rotarod_hab: "Rotarod Hab", stamina: "Stamina Test",
+  marble: "Marble Burying", nesting: "Nesting", rotarod: "Rotarod (legacy)",
+  rotarod_hab: "Rotarod Hab", rotarod_test1: "Rotarod Test 1", rotarod_test2: "Rotarod Test 2",
+  stamina: "Stamina",
   catwalk: "CatWalk", blood_draw: "Plasma Collection",
   data_collection: "Data Collection", core_acclimation: "Core Acclimation",
   eeg_implant: "EEG Implant", eeg_recording: "EEG Recording",
@@ -77,7 +78,7 @@ interface PortalData {
     animal_id: string; animal_identifier: string; cohort_id: string | null;
     experiment_type: string; timepoint_age_days: number | null;
     scheduled_date: string | null; completed_date: string | null;
-    status: string; results_drive_url: string | null;
+    status: string; results_drive_url: string | null; notes: string | null;
   }>;
   colony_results: ColonyResult[];
   cohorts: Cohort[];
@@ -427,27 +428,50 @@ function ColonyResultsView({
 
 // ─── Simple Analysis Panel (read-only charts for PI) ────────────────────
 
+type PinnedPlot = { experiment: string; timepoint: string; measure: string; chartType: string; label: string };
+
 function PIAnalysisPanel({
   fullAnimals,
   colonyResults,
   cohorts,
+  portalToken,
 }: {
   fullAnimals: Animal[];
   colonyResults: ColonyResult[];
   cohorts: Cohort[];
+  portalToken: string;
 }) {
   const [selectedExperiment, setSelectedExperiment] = useState<string>("");
   const [selectedTimepoint, setSelectedTimepoint] = useState<string>("");
   const [selectedMeasure, setSelectedMeasure] = useState<string>("");
-  const [chartType, setChartType] = useState<string>("bar");
+  const [chartType, setChartType] = useState<string>("scatter");
 
-  // Significance annotations
-  type SigAnnotation = { group1: string; group2: string; label: string };
-  const SIG_LABELS = ["ns", "*", "**", "***", "****"];
-  const [sigAnnotations, setSigAnnotations] = useState<SigAnnotation[]>([]);
-  const [pendingGroup1, setPendingGroup1] = useState("");
-  const [pendingGroup2, setPendingGroup2] = useState("");
-  const [pendingLabel, setPendingLabel] = useState("*");
+  // Pinned plots (stored in localStorage per portal token)
+  const PINNED_KEY = `pinned_plots_${portalToken}`;
+  const [pinnedPlots, setPinnedPlots] = useState<PinnedPlot[]>(() => {
+    try {
+      const stored = typeof window !== "undefined" ? localStorage.getItem(PINNED_KEY) : null;
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
+
+  const savePinnedPlots = (plots: PinnedPlot[]) => {
+    setPinnedPlots(plots);
+    try { localStorage.setItem(PINNED_KEY, JSON.stringify(plots)); } catch { /* ignore */ }
+  };
+
+  const pinCurrentPlot = () => {
+    if (!selectedExperiment || !selectedTimepoint || !selectedMeasure) return;
+    const label = `${EXPERIMENT_LABELS[selectedExperiment] || selectedExperiment} · ${selectedMeasure.replace(/_/g, " ")} · ${selectedTimepoint}d`;
+    const newPin: PinnedPlot = { experiment: selectedExperiment, timepoint: selectedTimepoint, measure: selectedMeasure, chartType, label };
+    // Avoid exact duplicates
+    if (pinnedPlots.some(p => p.experiment === newPin.experiment && p.timepoint === newPin.timepoint && p.measure === newPin.measure && p.chartType === newPin.chartType)) return;
+    savePinnedPlots([...pinnedPlots, newPin]);
+  };
+
+  const unpinPlot = (idx: number) => {
+    savePinnedPlots(pinnedPlots.filter((_, i) => i !== idx));
+  };
 
   const availableExperiments = useMemo(() => {
     const exps = new Set(colonyResults.map((r) => r.experiment_type));
@@ -537,100 +561,61 @@ function PIAnalysisPanel({
       }));
   }, [filtered, fullAnimals, selectedMeasure]);
 
-  // Plotly data
-  const plotData = useMemo(() => {
-    if (groupData.length === 0) return { data: [], layout: {} };
-
-    const measureLabel = selectedMeasure.replace(/_/g, " ");
-
-    if (chartType === "bar") {
+  // Helper to build plot data for a given config (reused for pinned plots)
+  const buildPlotData = useCallback((gData: typeof groupData, ct: string, measure: string) => {
+    if (gData.length === 0) return { data: [], layout: {} };
+    const measureLabel = measure.replace(/_/g, " ");
+    if (ct === "bar") {
       return {
         data: [{
           type: "bar" as const,
-          x: groupData.map((g) => g.label),
-          y: groupData.map((g) => g.mean),
-          error_y: {
-            type: "data" as const,
-            array: groupData.map((g) => g.sem),
-            visible: true,
-          },
-          marker: {
-            color: groupData.map((g) => GROUP_COLORS[g.label] || CHART_COLORS[0]),
-          },
+          x: gData.map((g) => g.label),
+          y: gData.map((g) => g.mean),
+          error_y: { type: "data" as const, array: gData.map((g) => g.sem), visible: true },
+          marker: { color: gData.map((g) => GROUP_COLORS[g.label] || CHART_COLORS[0]) },
         }],
-        layout: {
-          title: { text: measureLabel, font: { size: 14 } },
-          yaxis: { title: { text: measureLabel } },
-          margin: { t: 40, r: 20, b: 60, l: 60 },
-          height: 400,
-        },
+        layout: { title: { text: measureLabel, font: { size: 14 } }, yaxis: { title: { text: measureLabel } }, margin: { t: 40, r: 20, b: 60, l: 60 }, height: 350 },
       };
     }
-
-    if (chartType === "box") {
+    if (ct === "box") {
       return {
-        data: groupData.map((g, i) => ({
-          type: "box" as const,
-          y: g.values,
-          name: g.label,
-          marker: { color: GROUP_COLORS[g.label] || CHART_COLORS[i] },
-          boxpoints: "all" as const,
-          jitter: 0.3,
-          pointpos: -1.5,
-        })),
-        layout: {
-          title: { text: measureLabel, font: { size: 14 } },
-          yaxis: { title: { text: measureLabel } },
-          margin: { t: 40, r: 20, b: 60, l: 60 },
-          height: 400,
-          showlegend: false,
-        },
+        data: gData.map((g, i) => ({ type: "box" as const, y: g.values, name: g.label, marker: { color: GROUP_COLORS[g.label] || CHART_COLORS[i] }, boxpoints: "all" as const, jitter: 0.3, pointpos: -1.5 })),
+        layout: { title: { text: measureLabel, font: { size: 14 } }, yaxis: { title: { text: measureLabel } }, margin: { t: 40, r: 20, b: 60, l: 60 }, height: 350, showlegend: false },
       };
     }
-
-    if (chartType === "violin") {
+    if (ct === "violin") {
       return {
-        data: groupData.map((g, i) => ({
-          type: "violin" as const,
-          y: g.values,
-          name: g.label,
-          box: { visible: true },
-          meanline: { visible: true },
-          marker: { color: GROUP_COLORS[g.label] || CHART_COLORS[i] },
-          points: "all" as const,
-          jitter: 0.3,
-        })),
-        layout: {
-          title: { text: measureLabel, font: { size: 14 } },
-          yaxis: { title: { text: measureLabel } },
-          margin: { t: 40, r: 20, b: 60, l: 60 },
-          height: 400,
-          showlegend: false,
-        },
+        data: gData.map((g, i) => ({ type: "violin" as const, y: g.values, name: g.label, box: { visible: true }, meanline: { visible: true }, marker: { color: GROUP_COLORS[g.label] || CHART_COLORS[i] }, points: "all" as const, jitter: 0.3 })),
+        layout: { title: { text: measureLabel, font: { size: 14 } }, yaxis: { title: { text: measureLabel } }, margin: { t: 40, r: 20, b: 60, l: 60 }, height: 350, showlegend: false },
       };
     }
-
-    // scatter: individual animals
+    // scatter / dot plot with mean ± SD overlay
+    const dotTraces = gData.map((g, i) => ({
+      type: "scatter" as const,
+      mode: "markers" as const,
+      y: g.values,
+      x: g.values.map(() => g.label),
+      name: g.label,
+      marker: { color: GROUP_COLORS[g.label] || CHART_COLORS[i], size: 8, opacity: 0.65 },
+    }));
+    const sdTraces = gData.map((g, i) => ({
+      type: "scatter" as const,
+      mode: "markers" as const,
+      x: [g.label],
+      y: [g.mean],
+      error_y: { type: "data" as const, array: [g.sd], visible: true, thickness: 2.5, width: 10, color: GROUP_COLORS[g.label] || CHART_COLORS[i] },
+      marker: { color: GROUP_COLORS[g.label] || CHART_COLORS[i], size: 10, symbol: "line-ew-open" as const, line: { width: 2.5 } },
+      name: `${g.label} mean±SD`,
+      showlegend: false,
+    }));
     return {
-      data: groupData.map((g, i) => ({
-        type: "scatter" as const,
-        mode: "markers" as const,
-        y: g.values,
-        x: g.values.map(() => g.label),
-        name: g.label,
-        marker: {
-          color: GROUP_COLORS[g.label] || CHART_COLORS[i],
-          size: 8,
-        },
-      })),
-      layout: {
-        title: { text: measureLabel, font: { size: 14 } },
-        yaxis: { title: { text: measureLabel } },
-        margin: { t: 40, r: 20, b: 60, l: 60 },
-        height: 400,
-      },
+      data: [...dotTraces, ...sdTraces],
+      layout: { title: { text: measureLabel, font: { size: 14 } }, yaxis: { title: { text: measureLabel } }, margin: { t: 40, r: 20, b: 60, l: 60 }, height: 350 },
     };
-  }, [groupData, chartType, selectedMeasure]);
+  }, []);
+
+  // Plotly data for current selection
+  const plotData = useMemo(() => buildPlotData(groupData, chartType, selectedMeasure), [buildPlotData, groupData, chartType, selectedMeasure]);
 
   // Summary stats table
   const statsTable = useMemo(() => {
@@ -645,59 +630,6 @@ function PIAnalysisPanel({
     }));
   }, [groupData]);
 
-  // Build significance bracket shapes + annotations
-  const sigShapesAndAnnotations = useMemo(() => {
-    if (groupData.length === 0 || sigAnnotations.length === 0)
-      return { shapes: [] as Partial<Plotly.Shape>[], annotations: [] as Partial<Plotly.Annotations>[] };
-
-    const labels = groupData.map((g) => g.label);
-    const overallMax = Math.max(...groupData.flatMap((g) => [g.mean + g.sem, ...g.values]), 0);
-    const step = overallMax * 0.08;
-
-    const shapes: Partial<Plotly.Shape>[] = [];
-    const annotations: Partial<Plotly.Annotations>[] = [];
-
-    const sorted = [...sigAnnotations].sort((a, b) => {
-      const spanA = Math.abs(labels.indexOf(a.group2) - labels.indexOf(a.group1));
-      const spanB = Math.abs(labels.indexOf(b.group2) - labels.indexOf(b.group1));
-      return spanA - spanB;
-    });
-
-    let currentY = overallMax + step;
-
-    for (const ann of sorted) {
-      const idx1 = labels.indexOf(ann.group1);
-      const idx2 = labels.indexOf(ann.group2);
-      if (idx1 < 0 || idx2 < 0) continue;
-
-      const x0 = Math.min(idx1, idx2);
-      const x1 = Math.max(idx1, idx2);
-      const bracketY = currentY;
-      const tickDown = step * 0.3;
-
-      shapes.push(
-        { type: "line", x0: labels[x0], x1: labels[x0], y0: bracketY - tickDown, y1: bracketY, xref: "x", yref: "y", line: { color: "black", width: 1.5 } },
-        { type: "line", x0: labels[x0], x1: labels[x1], y0: bracketY, y1: bracketY, xref: "x", yref: "y", line: { color: "black", width: 1.5 } },
-        { type: "line", x0: labels[x1], x1: labels[x1], y0: bracketY - tickDown, y1: bracketY, xref: "x", yref: "y", line: { color: "black", width: 1.5 } },
-      );
-
-      const midIdx = (x0 + x1) / 2;
-      annotations.push({
-        x: labels[Math.round(midIdx)] || labels[x0],
-        y: bracketY + step * 0.15,
-        xref: "x", yref: "y",
-        text: ann.label === "ns" ? "<i>ns</i>" : ann.label,
-        showarrow: false,
-        font: { size: ann.label === "ns" ? 11 : 14, color: "black" },
-        xanchor: "center", yanchor: "bottom",
-      });
-
-      currentY += step;
-    }
-
-    return { shapes, annotations };
-  }, [groupData, sigAnnotations]);
-
   if (colonyResults.length === 0) {
     return (
       <Card>
@@ -710,6 +642,62 @@ function PIAnalysisPanel({
 
   return (
     <div className="space-y-4">
+      {/* Pinned Plots */}
+      {pinnedPlots.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-1.5">📌 Pinned Plots</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {pinnedPlots.map((pin, idx) => {
+              // Build group data for pinned plot
+              const pinFiltered = colonyResults.filter(r => r.experiment_type === pin.experiment && r.timepoint_age_days === Number(pin.timepoint));
+              const pinGroups: Record<string, number[]> = {};
+              for (const r of pinFiltered) {
+                const animal = fullAnimals.find(a => a.id === r.animal_id);
+                if (!animal) continue;
+                const m = r.measures as Record<string, number | string | null> | null;
+                if (!m) continue;
+                const val = m[pin.measure];
+                if (typeof val !== "number") continue;
+                const gLabel = `${GENOTYPE_LABELS[animal.genotype] || animal.genotype} ${animal.sex === "male" ? "Male" : "Female"}`;
+                if (!pinGroups[gLabel]) pinGroups[gLabel] = [];
+                pinGroups[gLabel].push(val);
+              }
+              const pinGData = Object.entries(pinGroups).map(([label, values]) => ({
+                label, values,
+                mean: values.reduce((s, v) => s + v, 0) / values.length,
+                sem: values.length > 1 ? Math.sqrt(values.reduce((s, v) => s + (v - values.reduce((a, b) => a + b, 0) / values.length) ** 2, 0) / (values.length - 1)) / Math.sqrt(values.length) : 0,
+                sd: 0,
+              }));
+              const pinPlotData = buildPlotData(pinGData, pin.chartType, pin.measure);
+              return (
+                <Card key={idx} className="relative">
+                  <button
+                    onClick={() => unpinPlot(idx)}
+                    className="absolute top-2 right-2 z-10 text-[10px] text-muted-foreground hover:text-destructive bg-background/80 rounded px-1"
+                    title="Unpin this plot"
+                  >
+                    ✕ unpin
+                  </button>
+                  <CardContent className="pt-3 pb-1 px-2">
+                    <p className="text-[10px] text-muted-foreground mb-1 pr-12 truncate">{pin.label}</p>
+                    {pinGData.length > 0 ? (
+                      <Plot
+                        data={pinPlotData.data as Plotly.Data[]}
+                        layout={{ ...(pinPlotData.layout as Record<string, unknown>), autosize: true, paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { size: 9 }, height: 220, margin: { t: 20, r: 10, b: 40, l: 40 } } as Partial<Plotly.Layout>}
+                        config={{ responsive: true, displayModeBar: false }}
+                        style={{ width: "100%", height: "220px" }}
+                      />
+                    ) : (
+                      <p className="text-xs text-muted-foreground py-4 text-center">No data</p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Config */}
       <Card>
         <CardContent className="pt-4 pb-3">
@@ -752,87 +740,21 @@ function PIAnalysisPanel({
               <Select value={chartType} onValueChange={setChartType}>
                 <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="scatter">Dot Plot</SelectItem>
                   <SelectItem value="bar">Bar + SEM</SelectItem>
                   <SelectItem value="box">Box Plot</SelectItem>
                   <SelectItem value="violin">Violin</SelectItem>
-                  <SelectItem value="scatter">Scatter</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
 
-          {/* Significance annotations */}
-          {chartType !== "scatter" && groupData.length > 0 && (
-            <div className="border-t mt-3 pt-3 space-y-2">
-              <label className="text-[11px] font-medium text-muted-foreground">Significance Annotations</label>
-              <div className="flex flex-wrap items-end gap-2">
-                <div>
-                  <label className="text-[10px] text-muted-foreground block mb-0.5">Group 1</label>
-                  <Select value={pendingGroup1} onValueChange={setPendingGroup1}>
-                    <SelectTrigger className="h-7 text-xs w-[130px]"><SelectValue placeholder="Select" /></SelectTrigger>
-                    <SelectContent>
-                      {groupData.map((g) => (
-                        <SelectItem key={g.label} value={g.label}>{g.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="text-[10px] text-muted-foreground block mb-0.5">Group 2</label>
-                  <Select value={pendingGroup2} onValueChange={setPendingGroup2}>
-                    <SelectTrigger className="h-7 text-xs w-[130px]"><SelectValue placeholder="Select" /></SelectTrigger>
-                    <SelectContent>
-                      {groupData.filter((g) => g.label !== pendingGroup1).map((g) => (
-                        <SelectItem key={g.label} value={g.label}>{g.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="text-[10px] text-muted-foreground block mb-0.5">Significance</label>
-                  <Select value={pendingLabel} onValueChange={setPendingLabel}>
-                    <SelectTrigger className="h-7 text-xs w-[80px]"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {SIG_LABELS.map((l) => (
-                        <SelectItem key={l} value={l}>{l === "ns" ? "ns" : l}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs"
-                  disabled={!pendingGroup1 || !pendingGroup2 || pendingGroup1 === pendingGroup2}
-                  onClick={() => {
-                    setSigAnnotations((prev) => [...prev, { group1: pendingGroup1, group2: pendingGroup2, label: pendingLabel }]);
-                    setPendingGroup1("");
-                    setPendingGroup2("");
-                  }}
-                >
-                  + Add
-                </Button>
-              </div>
-              {sigAnnotations.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {sigAnnotations.map((ann, i) => (
-                    <Badge
-                      key={i}
-                      variant="secondary"
-                      className="text-[10px] gap-1 pl-1.5 pr-1 py-0 cursor-pointer hover:bg-destructive/10"
-                      onClick={() => setSigAnnotations((prev) => prev.filter((_, j) => j !== i))}
-                    >
-                      {ann.group1} vs {ann.group2}: <strong>{ann.label}</strong>
-                      <span className="text-muted-foreground hover:text-destructive ml-0.5">✕</span>
-                    </Badge>
-                  ))}
-                  {sigAnnotations.length > 1 && (
-                    <button className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => setSigAnnotations([])}>
-                      Clear all
-                    </button>
-                  )}
-                </div>
-              )}
+          {/* Pin button */}
+          {selectedExperiment && selectedMeasure && groupData.length > 0 && (
+            <div className="mt-3 pt-3 border-t flex justify-end">
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={pinCurrentPlot}>
+                📌 Pin this plot
+              </Button>
             </div>
           )}
         </CardContent>
@@ -850,9 +772,6 @@ function PIAnalysisPanel({
                 paper_bgcolor: "transparent",
                 plot_bgcolor: "transparent",
                 font: { size: 11 },
-                margin: { ...(plotData.layout as Record<string, unknown>).margin as Record<string, number> || { t: 40, r: 20, b: 60, l: 60 }, t: sigAnnotations.length > 0 ? 60 + sigAnnotations.length * 20 : 40 },
-                shapes: [...sigShapesAndAnnotations.shapes],
-                annotations: [...sigShapesAndAnnotations.annotations],
               } as Partial<Plotly.Layout>}
               config={{ responsive: true, displayModeBar: false }}
               style={{ width: "100%", height: "400px" }}
@@ -922,8 +841,9 @@ const GENOTYPE_ORDER: Record<string, number> = { hemi: 0, het: 1, wt: 2 };
 const PROTOCOL_ORDER: string[] = [
   "handling", "y_maze", "marble", "ldb", "nesting",
   "data_collection", "core_acclimation", "catwalk",
-  "rotarod_hab", "rotarod", "stamina", "blood_draw",
+  "rotarod_hab", "rotarod_test1", "rotarod_test2", "stamina", "blood_draw",
   "eeg_implant", "eeg_recording",
+  "rotarod", // legacy — keep at end so old records still display
 ];
 
 function PITrackerTab({
@@ -938,6 +858,7 @@ function PITrackerTab({
   timepoints: ColonyTimepoint[];
 }) {
   const [filterCohort, setFilterCohort] = useState<string>("all");
+  const [summaryHighlight, setSummaryHighlight] = useState<"completed" | "scheduled" | "skipped">("completed");
 
   // All experiment types present in data, in protocol order
   const experimentTypes = useMemo(() => {
@@ -975,7 +896,7 @@ function PITrackerTab({
     return map;
   }, [cohorts]);
 
-  // Build sorted animal list: age (oldest first) → cohort name → sex → genotype
+  // Build sorted animal list: cohort name → sex → genotype → numeric identifier
   const sortedAnimals = useMemo(() => {
     const animalIdsWithExps = new Set(experiments.map(e => e.animal_id));
     const relevantAnimals = animals.filter(a =>
@@ -983,31 +904,52 @@ function PITrackerTab({
     );
 
     return [...relevantAnimals].sort((a, b) => {
-      // 1. Age (oldest first = earliest birth_date)
-      const ageA = new Date(a.birth_date).getTime();
-      const ageB = new Date(b.birth_date).getTime();
-      if (ageA !== ageB) return ageA - ageB;
-
-      // 2. Cohort name
+      // 1. Cohort name
       const cohortA = cohortById.get(a.cohort_id)?.name || "";
       const cohortB = cohortById.get(b.cohort_id)?.name || "";
       const cohortCmp = cohortA.localeCompare(cohortB, undefined, { numeric: true });
       if (cohortCmp !== 0) return cohortCmp;
 
-      // 3. Sex (male first)
+      // 2. Sex (male first)
       const sexA = SEX_ORDER[a.sex] ?? 2;
       const sexB = SEX_ORDER[b.sex] ?? 2;
       if (sexA !== sexB) return sexA - sexB;
 
-      // 4. Genotype
+      // 3. Genotype (hemi → het → wt)
       const genoA = GENOTYPE_ORDER[a.genotype] ?? 3;
       const genoB = GENOTYPE_ORDER[b.genotype] ?? 3;
       if (genoA !== genoB) return genoA - genoB;
 
-      // 5. Identifier fallback
+      // 4. Numeric part of identifier (natural number sort)
+      const numA = parseInt(a.identifier.match(/(\d+)$/)?.[1] || "0", 10);
+      const numB = parseInt(b.identifier.match(/(\d+)$/)?.[1] || "0", 10);
+      if (numA !== numB) return numA - numB;
+
       return a.identifier.localeCompare(b.identifier, undefined, { numeric: true });
     });
   }, [animals, experiments, filterCohort, cohortById]);
+
+  // Genotype count summary
+  const genotypeCounts = useMemo(() => {
+    const counts: Record<string, { male: number; female: number }> = {};
+    for (const a of sortedAnimals) {
+      if (!counts[a.genotype]) counts[a.genotype] = { male: 0, female: 0 };
+      if (a.sex === "male") counts[a.genotype].male++;
+      else counts[a.genotype].female++;
+    }
+    return counts;
+  }, [sortedAnimals]);
+
+  // Build skip notes lookup: animal_id::tp::type → notes
+  const skipNotesMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const e of experiments) {
+      if (e.status === "skipped" && e.notes && e.timepoint_age_days != null) {
+        map.set(`${e.animal_id}::${e.timepoint_age_days}::${e.experiment_type}`, e.notes);
+      }
+    }
+    return map;
+  }, [experiments]);
 
   // Lookup: animal_id → timepoint → experiment_type → status
   const statusMap = useMemo(() => {
@@ -1021,13 +963,43 @@ function PITrackerTab({
     return map;
   }, [experiments]);
 
-  // Status icon
-  const getStatusIcon = (status: string | undefined) => {
+  // Cohort-level summary: cohort × timepoint counts
+  const cohortSummaryData = useMemo(() => {
+    const cohortIds = [...new Set(sortedAnimals.map(a => a.cohort_id))];
+    return cohortIds.map(cohortId => {
+      const cohortAnimals = sortedAnimals.filter(a => a.cohort_id === cohortId);
+      const tpData = tpAges.map(tp => {
+        const counts: Record<string, number> = { completed: 0, scheduled: 0, in_progress: 0, skipped: 0, total: 0 };
+        for (const animal of cohortAnimals) {
+          for (const type of getTypesForTp(tp)) {
+            const status = statusMap.get(`${animal.id}::${tp}::${type}`);
+            if (status && status !== "pending") {
+              counts.total++;
+              if (status in counts) counts[status]++;
+            }
+          }
+        }
+        return { tp, ...counts };
+      });
+      return { cohortId, cohortName: cohortById.get(cohortId)?.name || "?", nAnimals: cohortAnimals.length, tpData };
+    });
+  }, [sortedAnimals, tpAges, statusMap, getTypesForTp, cohortById]);
+
+  // Status icon (with skip reason tooltip)
+  const getStatusIcon = (status: string | undefined, skipNote?: string) => {
     switch (status) {
       case "completed": return <span className="text-green-600">✅</span>;
       case "in_progress": return <span className="text-amber-500">🔵</span>;
       case "scheduled": return <span className="text-blue-400">⏳</span>;
-      case "skipped": return <span className="text-gray-400">—</span>;
+      case "skipped":
+        return (
+          <span
+            className="text-gray-400 cursor-help"
+            title={skipNote ? `Skipped: ${skipNote}` : "Skipped"}
+          >
+            —
+          </span>
+        );
       default: return <span className="text-gray-200">·</span>;
     }
   };
@@ -1043,6 +1015,91 @@ function PITrackerTab({
 
   return (
     <div className="space-y-4">
+      {/* Genotype count summary */}
+      <div className="flex flex-wrap gap-2">
+        {Object.entries(GENOTYPE_COLORS).map(([geno, colors]) => {
+          const counts = genotypeCounts[geno] || { male: 0, female: 0 };
+          const total = counts.male + counts.female;
+          if (total === 0) return null;
+          return (
+            <div key={geno} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${colors.bg} ${colors.text} ${colors.border}`}>
+              <span className="font-bold text-sm">{GENOTYPE_LABELS[geno] || geno}</span>
+              <span className="text-xs font-semibold">n={total}</span>
+              {counts.male > 0 && <span className="text-xs opacity-80">♂{counts.male}</span>}
+              {counts.female > 0 && <span className="text-xs opacity-80">♀{counts.female}</span>}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Cohort Summary Grid */}
+      {cohortSummaryData.length > 0 && tpAges.length > 0 && (
+        <Card>
+          <CardHeader className="py-2.5 px-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <CardTitle className="text-sm font-medium">Cohort Progress</CardTitle>
+              <div className="flex gap-1">
+                {([
+                  { key: "completed" as const, label: "✓ Done", active: "bg-emerald-100 text-emerald-800 border-emerald-300", inactive: "text-muted-foreground border-muted" },
+                  { key: "scheduled" as const, label: "⏳ Scheduled", active: "bg-blue-100 text-blue-800 border-blue-300", inactive: "text-muted-foreground border-muted" },
+                  { key: "skipped" as const, label: "— Skipped", active: "bg-red-100 text-red-800 border-red-300", inactive: "text-muted-foreground border-muted" },
+                ]).map(opt => (
+                  <button key={opt.key} onClick={() => setSummaryHighlight(opt.key)}
+                    className={`px-2.5 py-0.5 rounded text-xs border font-medium transition-colors ${summaryHighlight === opt.key ? opt.active : opt.inactive}`}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="bg-muted/30 border-b">
+                    <th className="text-left px-3 py-2 font-semibold sticky left-0 bg-muted/30 whitespace-nowrap">Cohort</th>
+                    <th className="text-center px-2 py-2 text-muted-foreground font-medium">n</th>
+                    {tpAges.map(tp => (
+                      <th key={tp} className="text-center px-3 py-2 font-semibold border-l min-w-[70px]">{tp}d</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {cohortSummaryData.map(row => (
+                    <tr key={row.cohortId} className="border-b last:border-0">
+                      <td className="px-3 py-2 font-medium sticky left-0 bg-background whitespace-nowrap">{row.cohortName}</td>
+                      <td className="text-center px-2 py-2 text-muted-foreground">{row.nAnimals}</td>
+                      {row.tpData.map(cell => {
+                        const c = cell as Record<string, number>;
+                        const count = c[summaryHighlight] || 0;
+                        const total = c.total || 0;
+                        const pct = total > 0 ? count / total : 0;
+                        const alpha = pct * 0.55;
+                        const bg = summaryHighlight === "completed"
+                          ? `rgba(16,185,129,${alpha})`
+                          : summaryHighlight === "scheduled"
+                          ? `rgba(59,130,246,${alpha})`
+                          : `rgba(239,68,68,${alpha})`;
+                        const textClass = pct > 0.5
+                          ? summaryHighlight === "completed" ? "text-emerald-900 font-semibold"
+                            : summaryHighlight === "scheduled" ? "text-blue-900 font-semibold"
+                            : "text-red-900 font-semibold"
+                          : "";
+                        return (
+                          <td key={cell.tp} className={`text-center px-3 py-2 border-l ${textClass}`} style={{ background: bg }}>
+                            {total > 0 ? `${count}/${total}` : <span className="text-muted-foreground">—</span>}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Cohort filter + genotype legend */}
       <div className="flex items-center gap-2 flex-wrap">
         {cohorts.length > 1 && (
@@ -1136,12 +1193,13 @@ function PITrackerTab({
                         types.map((type, typeIdx) => {
                           const key = `${animal.id}::${tp}::${type}`;
                           const status = statusMap.get(key);
+                          const skipNote = skipNotesMap.get(key);
                           return (
                             <td
                               key={`${tp}-${type}`}
                               className={`text-center py-1 px-0.5 ${tpIdx > 0 && typeIdx === 0 ? "border-l-[3px] border-l-foreground/30" : ""}`}
                             >
-                              {getStatusIcon(status)}
+                              {getStatusIcon(status, skipNote)}
                             </td>
                           );
                         })
@@ -1160,6 +1218,7 @@ function PITrackerTab({
         <span className="flex items-center gap-1">✅ Completed</span>
         <span className="flex items-center gap-1">🔵 In Progress</span>
         <span className="flex items-center gap-1">⏳ Scheduled</span>
+        <span className="flex items-center gap-1 text-gray-400">— Skipped (hover for reason)</span>
         <span className="flex items-center gap-1">· Not scheduled</span>
       </div>
     </div>
@@ -1207,63 +1266,139 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
   const hasColonyResults = data.can_see.includes("colony_results") && data.colony_results.length > 0;
 
   return (
+    <div className="min-h-screen" style={{ background: "linear-gradient(135deg, #f8faff 0%, #f0f4ff 40%, #f5f0ff 100%)" }}>
     <div className="mx-auto max-w-5xl px-4 py-8 space-y-6">
-      <div>
-        <Badge variant="secondary" className="mb-2">PI Portal — Live View</Badge>
-        <h1 className="text-2xl font-bold">Colony Overview</h1>
-        <p className="text-muted-foreground text-sm">Read-only view for {data.advisor_name}</p>
+
+      {/* Hero header */}
+      <div className="rounded-2xl px-6 py-5 space-y-1" style={{ background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 60%, #6d28d9 100%)" }}>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-300 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
+          </span>
+          <span className="text-indigo-200 text-xs font-medium tracking-wide uppercase">Live View</span>
+        </div>
+        <h1 className="text-3xl font-bold text-white tracking-tight">Colony Overview</h1>
+        <p className="text-indigo-200 text-sm">Read-only view for <span className="text-white font-medium">{data.advisor_name}</span></p>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold">{data.stats.active_animals}</div>
-          <p className="text-xs text-muted-foreground">Active Animals</p>
-        </CardContent></Card>
-        <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold text-green-600">{data.stats.completed_experiments}</div>
-          <p className="text-xs text-muted-foreground">Experiments Done</p>
-        </CardContent></Card>
-        <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold text-amber-600">{data.stats.in_progress_experiments}</div>
-          <p className="text-xs text-muted-foreground">In Progress</p>
-        </CardContent></Card>
-        <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold text-blue-600">{data.stats.pending_experiments}</div>
-          <p className="text-xs text-muted-foreground">Scheduled</p>
-        </CardContent></Card>
-      </div>
+      {(() => {
+        const total = data.stats.completed_experiments + data.stats.in_progress_experiments + data.stats.pending_experiments;
+        const pct = total > 0 ? Math.round((data.stats.completed_experiments / total) * 100) : 0;
+        return (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #ede9fe, #ddd6fe)" }}>
+                <div className="text-2xl font-bold text-violet-800">{data.stats.active_animals}</div>
+                <p className="text-xs text-violet-600 font-medium mt-0.5">Active Animals</p>
+              </div>
+              <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)" }}>
+                <div className="text-3xl font-bold text-emerald-700">{data.stats.completed_experiments}</div>
+                <p className="text-xs text-emerald-700 font-semibold mt-0.5">Done ✓</p>
+              </div>
+              <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)" }}>
+                <div className="text-2xl font-bold text-amber-700">{data.stats.in_progress_experiments}</div>
+                <p className="text-xs text-amber-600 font-medium mt-0.5">Ongoing</p>
+              </div>
+              <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #e0f2fe, #bae6fd)" }}>
+                <div className="text-2xl font-bold text-sky-700">{pct}%</div>
+                <p className="text-xs text-sky-600 font-medium mt-0.5">Complete</p>
+              </div>
+            </div>
+            {total > 0 && (
+              <div className="space-y-1">
+                <div className="w-full bg-white/60 rounded-full h-2.5 overflow-hidden shadow-inner">
+                  <div className="h-2.5 rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: "linear-gradient(90deg, #10b981, #06b6d4)" }} />
+                </div>
+                <p className="text-xs text-slate-500 text-right">{pct}% of protocol complete</p>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Photo Gallery Slideshow */}
       {data.photos && data.photos.length > 0 && (
         <PhotoGallery photos={data.photos} />
       )}
 
-      {/* Tabbed sections: Overview / Tracker / Results / Analysis */}
+      {/* Tabbed sections: Tracker / Results / Analysis / Overview */}
       {hasColonyResults || data.experiments.length > 0 ? (
         <Tabs defaultValue="overview">
-          <TabsList className="w-full flex flex-wrap gap-1 p-1" style={{ height: "auto" }}>
-            <TabsTrigger value="overview" className="flex-1 gap-1.5">
+          <TabsList className="w-full flex flex-wrap gap-1 p-1.5 rounded-2xl" style={{ background: "rgba(255,255,255,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(99,102,241,0.15)", height: "auto" }}>
+            <TabsTrigger value="overview" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
               <Mouse className="h-3.5 w-3.5" /> Overview
             </TabsTrigger>
             {data.experiments.length > 0 && (
-              <TabsTrigger value="tracker" className="flex-1 gap-1.5">
+              <TabsTrigger value="tracker" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
                 <ClipboardCheck className="h-3.5 w-3.5" /> Tracker
               </TabsTrigger>
             )}
             {hasColonyResults && (
               <>
-                <TabsTrigger value="results" className="flex-1 gap-1.5">
+                <TabsTrigger value="results" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
                   <TableIcon className="h-3.5 w-3.5" /> Results Data
                 </TabsTrigger>
-                <TabsTrigger value="analysis" className="flex-1 gap-1.5">
+                <TabsTrigger value="analysis" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
                   <TrendingUp className="h-3.5 w-3.5" /> Analysis & Plots
                 </TabsTrigger>
               </>
             )}
           </TabsList>
 
+          {/* Overview Tab — first (positive landing view) */}
           <TabsContent value="overview" className="space-y-4 mt-4">
+            {/* Recent Activity — TOP for positive first impression */}
+            {data.can_see.includes("experiments") && (() => {
+              const recentCompleted = data.experiments
+                .filter(e => e.status === "completed")
+                .sort((a, b) => (b.completed_date || "").localeCompare(a.completed_date || ""))
+                .slice(0, 30);
+              const recentInProgress = data.experiments
+                .filter(e => e.status === "in_progress")
+                .slice(0, 10);
+              if (recentCompleted.length === 0 && recentInProgress.length === 0) return null;
+              return (
+                <Card>
+                  <CardHeader className="py-3 px-4">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <FlaskConical className="h-4 w-4 text-green-600" />
+                      <span>Recent Activity</span>
+                      {recentCompleted.length > 0 && (
+                        <Badge className="bg-green-100 text-green-700 text-xs ml-1" variant="secondary">
+                          {recentCompleted.length} completed ✓
+                        </Badge>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-1 pb-3">
+                    {recentCompleted.map((exp, i) => (
+                      <div key={`c-${i}`} className="flex items-center gap-2 text-sm">
+                        <span className="text-green-600 text-base leading-none">✓</span>
+                        <span className="font-medium">{exp.animal_identifier}</span>
+                        <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
+                        {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
+                        <span className="text-xs text-muted-foreground ml-auto">{exp.completed_date || ""}</span>
+                      </div>
+                    ))}
+                    {recentInProgress.length > 0 && (
+                      <div className="pt-1 mt-1 border-t">
+                        {recentInProgress.map((exp, i) => (
+                          <div key={`ip-${i}`} className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <span className="text-amber-500 text-base leading-none">○</span>
+                            <span>{exp.animal_identifier}</span>
+                            <span>{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
+                            {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })()}
+
             {/* Upcoming */}
             {data.can_see.includes("timeline") && upcoming.length > 0 && (
               <Card>
@@ -1313,46 +1448,6 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                 </CardContent>
               </Card>
             )}
-
-            {/* Recent Completed Experiments (optimistic view) */}
-            {data.can_see.includes("experiments") && (() => {
-              const recentCompleted = data.experiments
-                .filter(e => e.status === "completed")
-                .sort((a, b) => (b.completed_date || "").localeCompare(a.completed_date || ""))
-                .slice(0, 30);
-              const recentInProgress = data.experiments
-                .filter(e => e.status === "in_progress")
-                .slice(0, 20);
-              if (recentCompleted.length === 0 && recentInProgress.length === 0) return null;
-              return (
-                <Card>
-                  <CardHeader className="py-3 px-4">
-                    <CardTitle className="text-sm font-medium flex items-center gap-2">
-                      <FlaskConical className="h-4 w-4" /> Recent Activity
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-1 pb-3">
-                    {recentInProgress.map((exp, i) => (
-                      <div key={`ip-${i}`} className="flex items-center gap-2 text-sm">
-                        <Badge className="bg-amber-100 text-amber-700 text-xs" variant="secondary">in progress</Badge>
-                        <span className="font-medium">{exp.animal_identifier}</span>
-                        <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
-                        {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
-                      </div>
-                    ))}
-                    {recentCompleted.map((exp, i) => (
-                      <div key={`c-${i}`} className="flex items-center gap-2 text-sm">
-                        <Badge className="bg-green-100 text-green-700 text-xs" variant="secondary">completed</Badge>
-                        <span className="font-medium">{exp.animal_identifier}</span>
-                        <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
-                        {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
-                        <span className="text-xs text-muted-foreground ml-auto">{exp.completed_date || ""}</span>
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              );
-            })()}
           </TabsContent>
 
           {/* Tracker Tab */}
@@ -1383,10 +1478,13 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                   fullAnimals={data.full_animals}
                   colonyResults={data.colony_results}
                   cohorts={data.cohorts}
+                  portalToken={token}
                 />
               </TabsContent>
             </>
           )}
+
+          {/* (Overview TabsContent is rendered first above) */}
         </Tabs>
       ) : (
         <>
@@ -1464,9 +1562,10 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
         </>
       )}
 
-      <div className="text-center text-xs text-muted-foreground py-4">
+      <div className="text-center text-xs text-slate-400 py-4">
         Powered by BPAN Research Platform
       </div>
+    </div>
     </div>
   );
 }

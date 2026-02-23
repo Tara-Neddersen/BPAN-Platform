@@ -327,6 +327,8 @@ export type ExperimentType =
   | "nesting"
   | "rotarod"
   | "rotarod_hab"
+  | "rotarod_test1"
+  | "rotarod_test2"
   | "stamina"
   | "catwalk"
   | "blood_draw"
@@ -438,6 +440,7 @@ export interface HousingCage {
   id: string;
   user_id: string;
   cage_label: string;
+  cage_id: string | null;
   location: string | null;
   max_occupancy: number;
   cage_type: "standard" | "eeg" | "recovery" | "quarantine";

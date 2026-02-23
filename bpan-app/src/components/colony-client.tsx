@@ -8,7 +8,7 @@ import {
   ExternalLink, Eye, ChevronDown, ChevronUp,
   Calendar, AlertTriangle, Link2, Mouse, Home,
   RefreshCw, FileText, CheckCircle2,
-  Upload, CloudOff, Cloud,
+  Upload, CloudOff, Cloud, ImageIcon,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -56,17 +56,26 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   core_acclimation: "Core Acclimation (48hr)",
   catwalk: "CatWalk Gait Analysis",
   rotarod_hab: "Rotarod Habituation",
-  rotarod: "Rotarod Testing",
+  rotarod: "Rotarod Testing (legacy)",
+  rotarod_test1: "Rotarod Test 1",
+  rotarod_test2: "Rotarod Test 2",
   stamina: "Stamina Test (10 RPM)",
   blood_draw: "Plasma Collection",
   eeg_implant: "EEG Implant Surgery",
   eeg_recording: "EEG Recording",
 };
 
+// All experiment types available for batch scheduling
+const ALL_EXPERIMENT_TYPES = [
+  "handling", "y_maze", "marble", "ldb", "nesting", "data_collection",
+  "core_acclimation", "catwalk", "rotarod_hab", "rotarod_test1", "rotarod_test2",
+  "stamina", "blood_draw", "eeg_implant", "eeg_recording",
+];
+
 // Experiments the user can select for timepoints (excludes handling/EEG which are handled separately)
 const EXPERIMENT_TYPES = [
   "y_maze", "marble", "ldb", "nesting", "data_collection",
-  "core_acclimation", "catwalk", "rotarod_hab", "rotarod",
+  "core_acclimation", "catwalk", "rotarod_hab", "rotarod_test1", "rotarod_test2",
   "stamina", "blood_draw",
 ];
 
@@ -79,9 +88,10 @@ const PROTOCOL_DAY_LABELS: Record<string, string> = {
   data_collection: "Day 3",
   core_acclimation: "Day 4–5",
   catwalk: "Day 6",
-  rotarod_hab: "Day 6",
-  rotarod: "Day 7–8",
-  stamina: "Day 9",
+  rotarod_hab: "Day 6 (Rotarod Day 1)",
+  rotarod_test1: "Day 7 (Rotarod Day 2)",
+  rotarod_test2: "Day 8 (Rotarod Day 3)",
+  stamina: "Day 9 (Rotarod Day 4)",
   blood_draw: "Day 10",
 };
 
@@ -149,7 +159,8 @@ interface ColonyClientProps {
     deleteHousingCage: (id: string) => Promise<{ success?: boolean; error?: string }>;
     assignAnimalToCage: (animalId: string, housingCageId: string | null) => Promise<{ success?: boolean; error?: string }>;
     rescheduleTimepointExperiments: (animalId: string, timepointAgeDays: number, newStartDate: string, birthDate: string) => Promise<{ success?: boolean; error?: string; rescheduled?: number; lastDate?: string; message?: string }>;
-    batchUpdateExperimentStatus: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
+    batchUpdateExperimentStatus: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string, notes?: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
+    batchScheduleSingleExperiment: (animalIds: string[], expType: string, date: string, timepointAgeDays: number | null) => Promise<{ success?: boolean; error?: string }>;
   };
 }
 
@@ -287,6 +298,16 @@ export function ColonyClient({
   const [editingTP, setEditingTP] = useState<ColonyTimepoint | null>(null);
   const [editingHousingCage, setEditingHousingCage] = useState<HousingCage | null>(null);
   const [selectedAnimal, setSelectedAnimal] = useState<Animal | null>(null);
+  // Batch Schedule modal state
+  const [showBatchSchedule, setShowBatchSchedule] = useState(false);
+  const [batchExpType, setBatchExpType] = useState<string>("eeg_implant");
+  const [batchDate, setBatchDate] = useState<string>(() => new Date().toISOString().split("T")[0]);
+  const [batchTimepointAgeDays, setBatchTimepointAgeDays] = useState<string>("");
+  const [batchSelectedAnimalIds, setBatchSelectedAnimalIds] = useState<Set<string>>(new Set());
+  // Animal ID auto-suggest
+  const [animalFormSex, setAnimalFormSex] = useState<string>("");
+  const [animalFormGenotype, setAnimalFormGenotype] = useState<string>("");
+  const [suggestedIdentifier, setSuggestedIdentifier] = useState<string>("");
 
   // Schedule / Delete dialog state
   const [scheduleDialog, setScheduleDialog] = useState<{ type: "cohort" | "animal"; id: string; name: string; birthDate?: string } | null>(null);
@@ -297,11 +318,39 @@ export function ColonyClient({
   const [deleteStatusFilter, setDeleteStatusFilter] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [showAddPhoto, setShowAddPhoto] = useState(false);
   const [filterCohort, setFilterCohort] = useState("all");
   const [filterGenotype, setFilterGenotype] = useState("all");
   const [animalFormCohortId, setAnimalFormCohortId] = useState("");
   const [animalFormEarTag, setAnimalFormEarTag] = useState("0000");
   const birthDateRef = useRef<HTMLInputElement>(null);
+  const identifierRef = useRef<HTMLInputElement>(null);
+
+  // Auto-suggest animal identifier when cohort + sex + genotype are selected
+  useEffect(() => {
+    if (!animalFormCohortId || !animalFormSex || !animalFormGenotype || editingAnimal) {
+      setSuggestedIdentifier("");
+      return;
+    }
+    const cohort = cohorts.find(c => c.id === animalFormCohortId);
+    if (!cohort) { setSuggestedIdentifier(""); return; }
+
+    // Build cohort short code from first letter + digits in name
+    const cohortShort = cohort.name.replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase();
+    const genoCode = animalFormGenotype === "hemi" ? "HM" : animalFormGenotype === "het" ? "HT" : "WT";
+    const sexCode = animalFormSex === "male" ? "M" : "F";
+
+    // Count existing animals in this cohort with same genotype+sex
+    const existing = animals.filter(a => a.cohort_id === animalFormCohortId && a.genotype === animalFormGenotype && a.sex === animalFormSex);
+    const nextNum = String(existing.length + 1).padStart(3, "0");
+    const suggested = `${cohortShort}-${genoCode}${sexCode}-${nextNum}`;
+    setSuggestedIdentifier(suggested);
+    // Pre-fill the input if it's currently empty or was previously auto-suggested
+    if (identifierRef.current && (!identifierRef.current.value || identifierRef.current.dataset.autoSuggested === "true")) {
+      identifierRef.current.value = suggested;
+      identifierRef.current.dataset.autoSuggested = "true";
+    }
+  }, [animalFormCohortId, animalFormSex, animalFormGenotype, animals, cohorts, editingAnimal]);
 
   // Google Drive integration
   const [driveStatus, setDriveStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null }>({ configured: false, connected: false });
@@ -510,22 +559,22 @@ export function ColonyClient({
     <>
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold tracking-tight">{activeCount}</div>
-          <p className="text-xs text-muted-foreground">Active Animals</p>
-        </CardContent></Card>
-        <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold tracking-tight">{cohorts.length}</div>
-          <p className="text-xs text-muted-foreground">Cohorts</p>
-        </CardContent></Card>
-        <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold tracking-tight">{pendingExps}</div>
-          <p className="text-xs text-muted-foreground">Scheduled Experiments</p>
-        </CardContent></Card>
-        <Card><CardContent className="pt-4 text-center">
-          <div className="text-2xl font-bold tracking-tight">{completedExps}</div>
-          <p className="text-xs text-muted-foreground">Completed</p>
-        </CardContent></Card>
+        <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #ede9fe, #ddd6fe)" }}>
+          <div className="text-2xl font-bold tracking-tight text-violet-700">{activeCount}</div>
+          <p className="text-xs text-violet-700 font-semibold mt-0.5">Active Animals</p>
+        </div>
+        <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #e0f2fe, #bae6fd)" }}>
+          <div className="text-2xl font-bold tracking-tight text-sky-700">{cohorts.length}</div>
+          <p className="text-xs text-sky-700 font-semibold mt-0.5">Cohorts</p>
+        </div>
+        <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)" }}>
+          <div className="text-2xl font-bold tracking-tight text-amber-700">{pendingExps}</div>
+          <p className="text-xs text-amber-700 font-semibold mt-0.5">Scheduled</p>
+        </div>
+        <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)" }}>
+          <div className="text-2xl font-bold tracking-tight text-emerald-700">{completedExps}</div>
+          <p className="text-xs text-emerald-700 font-semibold mt-0.5">Completed ✓</p>
+        </div>
       </div>
 
       {/* Upcoming alerts — next 7 days + overdue summary */}
@@ -790,17 +839,17 @@ export function ColonyClient({
       </Card>
 
       <Tabs defaultValue="animals">
-        <TabsList className="w-full flex flex-wrap gap-1 p-1" style={{ height: "auto" }}>
-          <TabsTrigger value="animals" className="flex-1 min-w-[80px]">Animals</TabsTrigger>
-          <TabsTrigger value="cohorts" className="flex-1 min-w-[80px]">Cohorts</TabsTrigger>
-          <TabsTrigger value="timepoints" className="flex-1 min-w-[80px]">Timepoints</TabsTrigger>
-          <TabsTrigger value="breeders" className="flex-1 min-w-[80px]">Breeders</TabsTrigger>
-          <TabsTrigger value="tracker" className="flex-1 min-w-[80px] font-semibold text-amber-700 dark:text-amber-300">📋 Tracker</TabsTrigger>
-          <TabsTrigger value="results" className="flex-1 min-w-[80px] font-semibold text-indigo-700 dark:text-indigo-300">📊 Results</TabsTrigger>
-          <TabsTrigger value="analysis" className="flex-1 min-w-[80px] font-semibold text-emerald-700 dark:text-emerald-300">📈 Analysis</TabsTrigger>
-          <TabsTrigger value="housing" className="flex-1 min-w-[80px]">Housing</TabsTrigger>
-          <TabsTrigger value="cages" className="flex-1 min-w-[80px]">Cage Changes</TabsTrigger>
-          <TabsTrigger value="pi" className="flex-1 min-w-[80px]">PI Access</TabsTrigger>
+        <TabsList className="w-full flex flex-wrap gap-1 p-1.5 rounded-2xl" style={{ background: "rgba(255,255,255,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(99,102,241,0.15)", height: "auto" }}>
+          <TabsTrigger value="animals" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Animals</TabsTrigger>
+          <TabsTrigger value="cohorts" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cohorts</TabsTrigger>
+          <TabsTrigger value="timepoints" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Timepoints</TabsTrigger>
+          <TabsTrigger value="breeders" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Breeders</TabsTrigger>
+          <TabsTrigger value="tracker" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">📋 Tracker</TabsTrigger>
+          <TabsTrigger value="results" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">📊 Results</TabsTrigger>
+          <TabsTrigger value="analysis" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">📈 Analysis</TabsTrigger>
+          <TabsTrigger value="housing" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Housing</TabsTrigger>
+          <TabsTrigger value="cages" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cage Changes</TabsTrigger>
+          <TabsTrigger value="pi" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">PI Access</TabsTrigger>
         </TabsList>
 
         {/* ─── Animals Tab ──────────────────────────────────────── */}
@@ -887,7 +936,14 @@ export function ColonyClient({
 
         {/* ─── Cohorts Tab ──────────────────────────────────────── */}
         <TabsContent value="cohorts" className="space-y-4">
-          <div className="flex justify-end">
+          <div className="flex justify-between items-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowBatchSchedule(true)}
+            >
+              <Calendar className="h-4 w-4 mr-1" /> Batch Schedule
+            </Button>
             <Button onClick={() => setShowAddCohort(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Cohort</Button>
           </div>
           {cohorts.length === 0 ? (
@@ -1190,7 +1246,10 @@ export function ColonyClient({
                     </CardHeader>
                     <CardContent className="py-2 space-y-2">
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>{hc.location || "No location"}</span>
+                        <div className="flex flex-col gap-0.5">
+                          {hc.cage_id && <span className="font-medium text-foreground">ID: {hc.cage_id}</span>}
+                          <span>{hc.location || "No location"}</span>
+                        </div>
                         <Badge className={`text-[10px] ${isFull ? "bg-orange-100 text-orange-700" : "bg-green-100 text-green-700"}`}>
                           {occupants.length}/{hc.max_occupancy}
                         </Badge>
@@ -1222,11 +1281,14 @@ export function ColonyClient({
                           <SelectContent>
                             {animals
                               .filter(a => a.status === "active" && !a.housing_cage_id)
-                              .map(a => (
-                                <SelectItem key={a.id} value={a.id}>
-                                  {a.identifier} ({genotypeLabel(a.sex, a.genotype)})
-                                </SelectItem>
-                              ))}
+                              .map(a => {
+                                const cohortName = cohorts.find(c => c.id === a.cohort_id)?.name;
+                                return (
+                                  <SelectItem key={a.id} value={a.id}>
+                                    {a.identifier} — {cohortName ? `${cohortName} · ` : ""}{genotypeLabel(a.sex, a.genotype)}
+                                  </SelectItem>
+                                );
+                              })}
                           </SelectContent>
                         </Select>
                       )}
@@ -1379,20 +1441,110 @@ export function ColonyClient({
               ))}
             </div>
           )}
+
+          {/* ─── Lab Gallery ──────────────────────────────────── */}
+          <div className="mt-6 space-y-3">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <ImageIcon className="h-4 w-4" /> Lab Gallery
+                <span className="text-xs text-muted-foreground font-normal">— auto-rotates on PI portal</span>
+              </h3>
+              <Button size="sm" variant="outline" onClick={() => setShowAddPhoto(true)}>
+                <Plus className="h-4 w-4 mr-1" /> Add Photo
+              </Button>
+            </div>
+            {photos.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-2">
+                No photos yet. Add image URLs (e.g. Google Drive share links) to show a looping gallery on the PI portal.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {photos.map((p) => (
+                  <div key={p.id} className="relative group rounded-md overflow-hidden border bg-muted aspect-video">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={p.image_url}
+                      alt={p.caption || "Lab photo"}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                    {p.caption && (
+                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-1">
+                        <p className="text-white text-xs truncate">{p.caption}</p>
+                      </div>
+                    )}
+                    {!p.show_in_portal && (
+                      <Badge className="absolute top-1 left-1 text-xs bg-yellow-500 text-white border-0">Hidden</Badge>
+                    )}
+                    <Button
+                      variant="destructive" size="sm"
+                      className="absolute top-1 right-1 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => act(actions.deleteColonyPhoto(p.id))}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </TabsContent>
       </Tabs>
 
       {/* ─── Dialogs ────────────────────────────────────────────── */}
 
+      {/* Add Photo */}
+      <Dialog open={showAddPhoto} onOpenChange={setShowAddPhoto}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add Lab Photo</DialogTitle></DialogHeader>
+          <form onSubmit={(e) => handleFormAction(actions.addColonyPhoto, e, () => setShowAddPhoto(false))} className="space-y-3">
+            <div>
+              <Label className="text-xs">Image URL *</Label>
+              <Input name="image_url" required placeholder="https://drive.google.com/... or direct image URL" />
+              <p className="text-xs text-muted-foreground mt-1">Paste a Google Drive share link or any direct image URL</p>
+            </div>
+            <div>
+              <Label className="text-xs">Caption</Label>
+              <Input name="caption" placeholder="e.g. Rotarod test setup, Cohort 3 day 1" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">Experiment Type</Label>
+                <Select name="experiment_type">
+                  <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(EXPERIMENT_LABELS).map(([k, v]) => (
+                      <SelectItem key={k} value={k}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Date Taken</Label>
+                <Input name="taken_date" type="date" />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" name="show_in_portal" id="show_in_portal_check" defaultChecked className="h-4 w-4" />
+              <Label htmlFor="show_in_portal_check" className="text-xs cursor-pointer">Show in PI portal gallery</Label>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setShowAddPhoto(false)}>Cancel</Button>
+              <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Add Photo</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {/* Add / Edit Animal */}
-      <Dialog open={showAddAnimal || !!editingAnimal} onOpenChange={(v) => { if (!v) { setShowAddAnimal(false); setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); } }}>
+      <Dialog open={showAddAnimal || !!editingAnimal} onOpenChange={(v) => { if (!v) { setShowAddAnimal(false); setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{editingAnimal ? "Edit Animal" : "Add Animal"}</DialogTitle></DialogHeader>
           <form onSubmit={(e) => {
             if (editingAnimal) {
-              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => { setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); });
+              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => { setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); });
             } else {
-              handleFormAction(actions.createAnimal, e, () => { setShowAddAnimal(false); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); });
+              handleFormAction(actions.createAnimal, e, () => { setShowAddAnimal(false); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); });
             }
           }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -1407,7 +1559,6 @@ export function ColonyClient({
                     // Auto-fill birth date from cohort
                     const selectedCohort = cohorts.find((c) => c.id === val);
                     if (selectedCohort?.birth_date && birthDateRef.current) {
-                      // Only auto-fill if birth date is empty or user hasn't manually edited it
                       if (!birthDateRef.current.value || birthDateRef.current.value === (cohorts.find((c) => c.id === animalFormCohortId)?.birth_date || "")) {
                         birthDateRef.current.value = selectedCohort.birth_date;
                       }
@@ -1421,12 +1572,8 @@ export function ColonyClient({
                 </Select>
               </div>
               <div>
-                <Label className="text-xs">Identifier *</Label>
-                <Input name="identifier" placeholder="e.g. BPAN1-HM-1" required defaultValue={editingAnimal?.identifier || ""} />
-              </div>
-              <div>
                 <Label className="text-xs">Sex *</Label>
-                <Select name="sex" required defaultValue={editingAnimal?.sex || ""}>
+                <Select name="sex" required defaultValue={editingAnimal?.sex || ""} onValueChange={(v) => setAnimalFormSex(v)}>
                   <SelectTrigger><SelectValue placeholder="Sex" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="male">Male</SelectItem>
@@ -1436,7 +1583,7 @@ export function ColonyClient({
               </div>
               <div>
                 <Label className="text-xs">Genotype *</Label>
-                <Select name="genotype" required defaultValue={editingAnimal?.genotype || ""}>
+                <Select name="genotype" required defaultValue={editingAnimal?.genotype || ""} onValueChange={(v) => setAnimalFormGenotype(v)}>
                   <SelectTrigger><SelectValue placeholder="Genotype" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="hemi">Hemizygous (Hemi)</SelectItem>
@@ -1444,6 +1591,24 @@ export function ColonyClient({
                     <SelectItem value="het">Heterozygous (Het)</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="sm:col-span-2">
+                <Label className="text-xs">
+                  Identifier *
+                  {suggestedIdentifier && !editingAnimal && (
+                    <span className="ml-1 text-muted-foreground font-normal">(auto-suggested: {suggestedIdentifier})</span>
+                  )}
+                </Label>
+                <Input
+                  ref={identifierRef}
+                  name="identifier"
+                  placeholder={suggestedIdentifier || "e.g. BPAN1-HM-001"}
+                  required
+                  defaultValue={editingAnimal?.identifier || ""}
+                  onChange={() => {
+                    if (identifierRef.current) identifierRef.current.dataset.autoSuggested = "false";
+                  }}
+                />
               </div>
               <div>
                 <Label className="text-xs">Birth Date * <span className="text-muted-foreground">(auto-filled from cohort)</span></Label>
@@ -1963,6 +2128,136 @@ export function ColonyClient({
         </DialogContent>
       </Dialog>
 
+      {/* ─── Batch Schedule Dialog ──────────────────────────────── */}
+      <Dialog open={showBatchSchedule} onOpenChange={(v) => { if (!v) { setShowBatchSchedule(false); setBatchSelectedAnimalIds(new Set()); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Batch Schedule Experiment</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label className="text-xs">Experiment Type *</Label>
+                <Select value={batchExpType} onValueChange={setBatchExpType}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {ALL_EXPERIMENT_TYPES.map(t => (
+                      <SelectItem key={t} value={t}>{EXPERIMENT_LABELS[t] || t}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Date *</Label>
+                <Input type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)} className="h-8 text-xs" />
+              </div>
+              <div>
+                <Label className="text-xs">Timepoint (days) <span className="text-muted-foreground font-normal">optional</span></Label>
+                <Select value={batchTimepointAgeDays || "none"} onValueChange={v => setBatchTimepointAgeDays(v === "none" ? "" : v)}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="None" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    {timepoints.map(tp => (
+                      <SelectItem key={tp.id} value={String(tp.age_days)}>{tp.name} ({tp.age_days}d)</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label className="text-xs">Animals *</Label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="text-[10px] text-primary hover:underline"
+                    onClick={() => setBatchSelectedAnimalIds(new Set(animals.filter(a => a.status === "active").map(a => a.id)))}
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    className="text-[10px] text-muted-foreground hover:underline"
+                    onClick={() => setBatchSelectedAnimalIds(new Set())}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="border rounded-md max-h-[240px] overflow-y-auto divide-y">
+                {cohorts.map(cohort => {
+                  const cohortAnimals = animals.filter(a => a.cohort_id === cohort.id && a.status === "active");
+                  if (cohortAnimals.length === 0) return null;
+                  const allSelected = cohortAnimals.every(a => batchSelectedAnimalIds.has(a.id));
+                  return (
+                    <div key={cohort.id}>
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={() => {
+                            const next = new Set(batchSelectedAnimalIds);
+                            if (allSelected) cohortAnimals.forEach(a => next.delete(a.id));
+                            else cohortAnimals.forEach(a => next.add(a.id));
+                            setBatchSelectedAnimalIds(next);
+                          }}
+                          className="rounded"
+                        />
+                        <span className="text-xs font-semibold">{cohort.name}</span>
+                        <span className="text-[10px] text-muted-foreground">({cohortAnimals.length} active)</span>
+                      </div>
+                      {cohortAnimals.map(a => (
+                        <label key={a.id} className="flex items-center gap-2 px-4 py-1 hover:bg-muted/20 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={batchSelectedAnimalIds.has(a.id)}
+                            onChange={() => {
+                              const next = new Set(batchSelectedAnimalIds);
+                              if (next.has(a.id)) next.delete(a.id);
+                              else next.add(a.id);
+                              setBatchSelectedAnimalIds(next);
+                            }}
+                            className="rounded"
+                          />
+                          <span className="text-xs font-medium">{a.identifier}</span>
+                          <span className="text-[10px] text-muted-foreground">{GENOTYPE_LABELS[a.genotype]} · {a.sex}</span>
+                        </label>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1">{batchSelectedAnimalIds.size} animal(s) selected</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" type="button" onClick={() => { setShowBatchSchedule(false); setBatchSelectedAnimalIds(new Set()); }}>Cancel</Button>
+            <Button
+              disabled={busy || batchSelectedAnimalIds.size === 0 || !batchDate}
+              onClick={async () => {
+                setBusy(true);
+                const result = await actions.batchScheduleSingleExperiment(
+                  Array.from(batchSelectedAnimalIds),
+                  batchExpType,
+                  batchDate,
+                  batchTimepointAgeDays ? parseInt(batchTimepointAgeDays) : null
+                );
+                setBusy(false);
+                if (result.error) {
+                  toast.error(`Error: ${result.error}`);
+                } else {
+                  toast.success(`Scheduled ${EXPERIMENT_LABELS[batchExpType] || batchExpType} for ${batchSelectedAnimalIds.size} animal(s)`);
+                  setShowBatchSchedule(false);
+                  setBatchSelectedAnimalIds(new Set());
+                }
+              }}
+            >
+              {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Schedule {batchSelectedAnimalIds.size > 0 ? `(${batchSelectedAnimalIds.size})` : ""}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ─── Add/Edit Housing Cage Dialog ──────────────────────── */}
       <Dialog open={showAddHousingCage || !!editingHousingCage} onOpenChange={(v) => { if (!v) { setShowAddHousingCage(false); setEditingHousingCage(null); } }}>
         <DialogContent>
@@ -1978,9 +2273,15 @@ export function ColonyClient({
               ).then(() => { setShowAddHousingCage(false); setEditingHousingCage(null); });
             }}
           >
-            <div>
-              <Label className="text-xs">Cage Label *</Label>
-              <Input name="cage_label" required defaultValue={editingHousingCage?.cage_label || ""} placeholder="e.g. HC-01" />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label className="text-xs">Cage Label *</Label>
+                <Input name="cage_label" required defaultValue={editingHousingCage?.cage_label || ""} placeholder="e.g. Cohort 2 Group A" />
+              </div>
+              <div>
+                <Label className="text-xs">Cage ID <span className="text-muted-foreground font-normal">(rack/barcode)</span></Label>
+                <Input name="cage_id" defaultValue={editingHousingCage?.cage_id || ""} placeholder="e.g. Rack3-B2" />
+              </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>

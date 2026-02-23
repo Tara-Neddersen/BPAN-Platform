@@ -556,6 +556,61 @@ export async function rescheduleExperimentDate(id: string, newDate: string) {
 }
 
 /**
+ * Batch reschedule: move multiple experiments (a whole group) to a new date.
+ * Used when dragging an experiment group chip on the calendar.
+ */
+export async function rescheduleExperimentDates(ids: string[], newDate: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase
+    .from("animal_experiments")
+    .update({ scheduled_date: newDate })
+    .in("id", ids)
+    .eq("user_id", user.id);
+
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  revalidatePath("/experiments");
+  return { success: true };
+}
+
+/**
+ * Schedule a single experiment type for multiple animals at once.
+ * Used by the Batch Schedule modal.
+ */
+export async function batchScheduleSingleExperiment(
+  animalIds: string[],
+  expType: string,
+  date: string,
+  timepointAgeDays: number | null
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const rows = animalIds.map((animalId) => ({
+    user_id: user.id,
+    animal_id: animalId,
+    experiment_type: expType,
+    scheduled_date: date,
+    timepoint_age_days: timepointAgeDays,
+    status: "scheduled",
+  }));
+
+  // Upsert (conflict on animal_id + experiment_type + timepoint_age_days)
+  const { error } = await supabase
+    .from("animal_experiments")
+    .upsert(rows, { onConflict: "animal_id,experiment_type,timepoint_age_days", ignoreDuplicates: false });
+
+  if (error) return { error: error.message };
+  revalidatePath("/colony");
+  revalidatePath("/experiments");
+  return { success: true };
+}
+
+/**
  * Batch update experiment status — supports multiple cohorts, timepoints, and experiment types.
  * e.g. "Mark all marble+nesting @ 30d+120d for BPAN 3+BPAN 5 as skipped"
  */
@@ -564,6 +619,7 @@ export async function batchUpdateExperimentStatus(
   timepointAgeDays: number[], // which timepoints
   experimentTypes: string[],  // which experiment types
   newStatus: string,
+  notes?: string,
 ) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -610,6 +666,7 @@ export async function batchUpdateExperimentStatus(
   const update: Record<string, unknown> = { status: newStatus };
   if (newStatus === "completed") update.completed_date = today;
   if (newStatus === "scheduled" || newStatus === "pending") update.completed_date = null;
+  if (notes) update.notes = notes;
 
   // Step 4: Update in batches
   for (let i = 0; i < allMatchingIds.length; i += 100) {
@@ -656,9 +713,10 @@ const PROTOCOL_SCHEDULE: { type: string; dayOffset: number; notes?: string }[] =
   { type: "data_collection",   dayOffset: 2,  notes: "Day 3 — Data Collection & Move to Core" },
   { type: "core_acclimation",  dayOffset: 3,  notes: "Day 4–5 — 48hr Mandatory Core Acclimation" },
   { type: "catwalk",           dayOffset: 5,  notes: "Day 6 — CatWalk Gait Analysis" },
-  { type: "rotarod_hab",       dayOffset: 5,  notes: "Day 6 — Rotarod Habituation" },
-  { type: "rotarod",           dayOffset: 6,  notes: "Day 7–8 — Rotarod Testing (Acceleration)" },
-  { type: "stamina",           dayOffset: 8,  notes: "Day 9 — Stamina Test (10 RPM / 60m Cap)" },
+  { type: "rotarod_hab",       dayOffset: 5,  notes: "Day 6 — Rotarod Habituation (Day 1 of 4)" },
+  { type: "rotarod_test1",     dayOffset: 6,  notes: "Day 7 — Rotarod Test 1 (Day 2 of 4)" },
+  { type: "rotarod_test2",     dayOffset: 7,  notes: "Day 8 — Rotarod Test 2 (Day 3 of 4)" },
+  { type: "stamina",           dayOffset: 8,  notes: "Day 9 — Rotarod Stamina (Day 4 of 4, 10 RPM / 60m Cap)" },
   { type: "blood_draw",        dayOffset: 9,  notes: "Day 10 — Plasma Collection (10:00–13:00)" },
 ];
 
@@ -1494,6 +1552,7 @@ export async function createHousingCage(formData: FormData) {
   const { error } = await supabase.from("housing_cages").insert({
     user_id: user.id,
     cage_label: formData.get("cage_label") as string,
+    cage_id: (formData.get("cage_id") as string) || null,
     location: (formData.get("location") as string) || null,
     max_occupancy: parseInt(formData.get("max_occupancy") as string) || 5,
     cage_type: (formData.get("cage_type") as string) || "standard",
@@ -1513,6 +1572,7 @@ export async function updateHousingCage(id: string, formData: FormData) {
     .from("housing_cages")
     .update({
       cage_label: formData.get("cage_label") as string,
+      cage_id: (formData.get("cage_id") as string) || null,
       location: (formData.get("location") as string) || null,
       max_occupancy: parseInt(formData.get("max_occupancy") as string) || 5,
       cage_type: (formData.get("cage_type") as string) || "standard",
