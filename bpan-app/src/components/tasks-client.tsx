@@ -40,8 +40,24 @@ const SOURCE_ICONS: Record<string, React.ReactNode> = {
   reminder: <Clock className="h-3 w-3" />,
 };
 
-function daysUntil(dateStr: string) {
-  return Math.floor((new Date(dateStr).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+const COLONY_EXP_LABELS: Record<string, string> = {
+  handling: "Handling", y_maze: "Y-Maze", ldb: "Light-Dark Box",
+  marble: "Marble Burying", nesting: "Nesting", data_collection: "Data Collection",
+  core_acclimation: "Core Acclim.", catwalk: "CatWalk", rotarod_hab: "Rotarod Hab.",
+  rotarod: "Rotarod", stamina: "Stamina", blood_draw: "Blood Draw",
+  eeg_implant: "EEG Implant", eeg_recording: "EEG Recording",
+};
+
+// ─── Timezone-safe LA date helpers ───────────────────────────────────────
+function toDateStr(d: Date = new Date()): string {
+  return d.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+}
+
+function daysUntil(dateStr: string): number {
+  const todayLA = toDateStr();
+  const [ty, tm, td] = todayLA.split("-").map(Number);
+  const [ey, em, ed] = dateStr.split("-").map(Number);
+  return Math.floor((Date.UTC(ey, em - 1, ed) - Date.UTC(ty, tm - 1, td)) / 86400000);
 }
 
 function formatDate(dateStr: string) {
@@ -93,29 +109,36 @@ type ViewFilter = "all" | "today" | "upcoming" | "overdue" | "completed";
 
 // ─── Mini Week Calendar ──────────────────────────────────────────────────
 
-function WeekCalendar({ tasks, upcomingExperiments }: { tasks: Task[]; upcomingExperiments: any[] }) {
-  const todayStr = new Date().toISOString().split("T")[0];
-
-  // Start of current week (Monday)
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  const dow = now.getDay();
-  const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
+function WeekCalendar({
+  tasks,
+  upcomingExperiments,
+  cohorts,
+}: {
+  tasks: Task[];
+  upcomingExperiments: any[];
+  cohorts: any[];
+}) {
+  const todayStr = toDateStr();
+  const [ty, tm, td] = todayStr.split("-").map(Number);
+  const todayMs = Date.UTC(ty, tm - 1, td);
+  const dow = new Date(todayMs).getUTCDay();
+  const weekStartMs = todayMs - (dow === 0 ? 6 : dow - 1) * 86400000;
 
   const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(startOfWeek);
-    d.setDate(startOfWeek.getDate() + i);
+    const ms = weekStartMs + i * 86400000;
+    const d = new Date(ms);
     const dateStr = d.toISOString().split("T")[0];
     return {
       dateStr,
-      num: d.getDate(),
+      num: d.getUTCDate(),
       name: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i],
       isToday: dateStr === todayStr,
       isPast: dateStr < todayStr,
       isWeekend: i >= 5,
     };
   });
+
+  const [selectedDay, setSelectedDay] = useState<string>(todayStr);
 
   const counts = (dateStr: string) => {
     const t = tasks.filter(
@@ -126,31 +149,70 @@ function WeekCalendar({ tasks, upcomingExperiments }: { tasks: Task[]; upcomingE
   };
 
   const rangeLabel =
-    new Date(days[0].dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
+    new Date(weekStartMs).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" }) +
     " – " +
-    new Date(days[6].dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    new Date(weekStartMs + 6 * 86400000).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" });
+
+  // Day detail — experiments grouped by type + tasks
+  const cohortMap = new Map(cohorts.map((c: { id: string; name: string }) => [c.id, c.name]));
+  const selExps = upcomingExperiments.filter((e) => e.scheduled_date === selectedDay);
+  const selTasks = tasks.filter(
+    (t) => t.due_date === selectedDay && t.status !== "completed" && t.status !== "skipped"
+  );
+  const seenGroups = new Map<string, { cohorts: Set<string>; count: number }>();
+  for (const exp of selExps) {
+    const key = exp.experiment_type as string;
+    if (!seenGroups.has(key)) seenGroups.set(key, { cohorts: new Set(), count: 0 });
+    const g = seenGroups.get(key)!;
+    const cId = exp.animals?.cohort_id;
+    if (cId) g.cohorts.add(cohortMap.get(cId) || "?");
+    g.count++;
+  }
+  const expGroups = [...seenGroups.entries()]
+    .map(([type, v]) => ({ type, cohortNames: [...v.cohorts], count: v.count }))
+    .sort((a, b) => a.type.localeCompare(b.type));
+
+  const [sy, sm, sd] = selectedDay.split("-").map(Number);
+  const selDate = new Date(Date.UTC(sy, sm - 1, sd));
+  const selLabel =
+    selectedDay === todayStr
+      ? "Today"
+      : selDate.toLocaleDateString("en-US", { timeZone: "UTC", weekday: "long", month: "short", day: "numeric" });
 
   return (
-    <div className="rounded-2xl border bg-card p-4">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">This Week</span>
-        <span className="text-xs text-muted-foreground">{rangeLabel}</span>
+    <div className="rounded-2xl border bg-card overflow-hidden shadow-sm">
+      {/* Gradient header */}
+      <div
+        className="px-4 py-3 flex items-center justify-between"
+        style={{ background: "linear-gradient(135deg, #ede9fe 0%, #ddd6fe 60%, #c4b5fd 100%)" }}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xl" role="img" aria-label="mouse">🐭</span>
+          <span className="text-xs font-bold text-violet-800 uppercase tracking-wide">This Week</span>
+        </div>
+        <span className="text-xs font-medium text-violet-700">{rangeLabel}</span>
       </div>
-      <div className="grid grid-cols-7 gap-1.5">
+
+      {/* Day strip */}
+      <div className="grid grid-cols-7 gap-1.5 p-3 pb-2">
         {days.map((day) => {
           const { t, e } = counts(day.dateStr);
           const total = t + e;
+          const isSelected = day.dateStr === selectedDay;
           return (
-            <div
+            <button
               key={day.dateStr}
-              className={`flex flex-col items-center gap-1 rounded-xl py-2.5 px-1 text-center select-none transition-colors ${
+              onClick={() => setSelectedDay(day.dateStr)}
+              className={`flex flex-col items-center gap-1 rounded-xl py-2.5 px-1 text-center select-none transition-all ${
                 day.isToday
                   ? "bg-primary text-primary-foreground shadow-sm"
+                  : isSelected && !day.isToday
+                  ? "bg-violet-100 text-violet-800 ring-2 ring-violet-300"
                   : day.isPast
-                  ? "opacity-40"
+                  ? "opacity-40 hover:opacity-60 cursor-pointer"
                   : day.isWeekend
-                  ? "bg-muted/40"
-                  : "hover:bg-accent"
+                  ? "bg-muted/40 hover:bg-muted/60 cursor-pointer"
+                  : "hover:bg-accent cursor-pointer"
               }`}
             >
               <span className={`text-[10px] font-semibold ${day.isToday ? "opacity-75" : "text-muted-foreground"}`}>
@@ -180,11 +242,45 @@ function WeekCalendar({ tasks, upcomingExperiments }: { tasks: Task[]; upcomingE
                 )}
                 {total === 0 && <span className="h-[18px]" />}
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
-      <div className="flex gap-4 mt-3 justify-end">
+
+      {/* Day detail panel */}
+      <div className="border-t mx-3 pt-3 pb-3 min-h-[52px]">
+        <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wide mb-1.5">{selLabel}</p>
+        {expGroups.length === 0 && selTasks.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic">Nothing scheduled — enjoy the break! 🎉</p>
+        ) : (
+          <div className="space-y-1">
+            {expGroups.map((g) => (
+              <div key={g.type} className="flex items-center gap-2 text-xs">
+                <span className="h-2 w-2 rounded-full bg-purple-400 flex-shrink-0" />
+                <span className="font-semibold text-purple-800">{COLONY_EXP_LABELS[g.type] || g.type}</span>
+                {g.cohortNames.length > 0 && (
+                  <span className="text-muted-foreground">· {g.cohortNames.join(", ")}</span>
+                )}
+                <span className="text-muted-foreground">· {g.count} animal{g.count !== 1 ? "s" : ""}</span>
+              </div>
+            ))}
+            {selTasks.map((t) => (
+              <div key={t.id} className="flex items-center gap-2 text-xs">
+                <span className="h-2 w-2 rounded-full bg-blue-400 flex-shrink-0" />
+                <span className="font-medium">{t.title}</span>
+                {(t.priority === "urgent" || t.priority === "high") && (
+                  <span className={`text-[10px] rounded px-1 font-medium ${t.priority === "urgent" ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700"}`}>
+                    {t.priority}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Legend */}
+      <div className="px-4 pb-3 flex gap-4 justify-end">
         <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
           <span className="h-2.5 w-2.5 rounded-full bg-purple-200 border border-purple-300" />
           Experiments
@@ -215,7 +311,7 @@ export function TasksClient({
   const [busy, setBusy] = useState(false);
 
   // ─── Stats ──────────────────────────────────
-  const today = new Date().toISOString().split("T")[0];
+  const today = toDateStr();
   const stats = useMemo(() => {
     const pending = tasks.filter((t) => t.status !== "completed" && t.status !== "skipped");
     const overdue = pending.filter((t) => t.due_date && t.due_date < today);
@@ -264,64 +360,60 @@ export function TasksClient({
   return (
     <>
       {/* ─── Week Calendar ────────────────────────────── */}
-      <WeekCalendar tasks={tasks} upcomingExperiments={upcomingExperiments} />
+      <WeekCalendar tasks={tasks} upcomingExperiments={upcomingExperiments} cohorts={cohorts} />
 
       {/* ─── Stats Cards ──────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <button
           onClick={() => setView("overdue")}
-          className={`flex items-center gap-3 rounded-xl border bg-card p-4 text-left transition-all hover:shadow-md ${
-            view === "overdue" ? "border-red-300 ring-2 ring-red-100 shadow-sm" : ""
-          }`}
+          style={{ background: "linear-gradient(135deg, #fee2e2, #fecaca)" }}
+          className={`flex items-center gap-3 rounded-xl p-4 text-left transition-all hover:shadow-md shadow-sm ${view === "overdue" ? "ring-2 ring-red-300" : ""}`}
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-50 text-red-500">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/60 text-red-500">
             <AlertTriangle className="h-5 w-5" />
           </div>
           <div>
-            <div className="text-2xl font-bold tracking-tight">{stats.overdue.length}</div>
-            <div className="text-xs text-muted-foreground">Overdue</div>
+            <div className="text-2xl font-bold tracking-tight text-red-700">{stats.overdue.length}</div>
+            <div className="text-xs text-red-700 font-semibold">Overdue</div>
           </div>
         </button>
         <button
           onClick={() => setView("today")}
-          className={`flex items-center gap-3 rounded-xl border bg-card p-4 text-left transition-all hover:shadow-md ${
-            view === "today" ? "border-amber-300 ring-2 ring-amber-100 shadow-sm" : ""
-          }`}
+          style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)" }}
+          className={`flex items-center gap-3 rounded-xl p-4 text-left transition-all hover:shadow-md shadow-sm ${view === "today" ? "ring-2 ring-amber-300" : ""}`}
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-500">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/60 text-amber-600">
             <Clock className="h-5 w-5" />
           </div>
           <div>
-            <div className="text-2xl font-bold tracking-tight">{stats.dueToday.length}</div>
-            <div className="text-xs text-muted-foreground">Due Today</div>
+            <div className="text-2xl font-bold tracking-tight text-amber-700">{stats.dueToday.length}</div>
+            <div className="text-xs text-amber-700 font-semibold">Due Today</div>
           </div>
         </button>
         <button
           onClick={() => setView("upcoming")}
-          className={`flex items-center gap-3 rounded-xl border bg-card p-4 text-left transition-all hover:shadow-md ${
-            view === "upcoming" ? "border-blue-300 ring-2 ring-blue-100 shadow-sm" : ""
-          }`}
+          style={{ background: "linear-gradient(135deg, #dbeafe, #bfdbfe)" }}
+          className={`flex items-center gap-3 rounded-xl p-4 text-left transition-all hover:shadow-md shadow-sm ${view === "upcoming" ? "ring-2 ring-blue-300" : ""}`}
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-500">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/60 text-blue-500">
             <Calendar className="h-5 w-5" />
           </div>
           <div>
-            <div className="text-2xl font-bold tracking-tight">{stats.upcoming.length}</div>
-            <div className="text-xs text-muted-foreground">Upcoming</div>
+            <div className="text-2xl font-bold tracking-tight text-blue-700">{stats.upcoming.length}</div>
+            <div className="text-xs text-blue-700 font-semibold">Upcoming</div>
           </div>
         </button>
         <button
           onClick={() => setView("completed")}
-          className={`flex items-center gap-3 rounded-xl border bg-card p-4 text-left transition-all hover:shadow-md ${
-            view === "completed" ? "border-green-300 ring-2 ring-green-100 shadow-sm" : ""
-          }`}
+          style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)" }}
+          className={`flex items-center gap-3 rounded-xl p-4 text-left transition-all hover:shadow-md shadow-sm ${view === "completed" ? "ring-2 ring-green-300" : ""}`}
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-50 text-green-500">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/60 text-green-600">
             <CheckCircle2 className="h-5 w-5" />
           </div>
           <div>
-            <div className="text-2xl font-bold tracking-tight">{stats.completed.length}</div>
-            <div className="text-xs text-muted-foreground">Completed</div>
+            <div className="text-2xl font-bold tracking-tight text-green-700">{stats.completed.length}</div>
+            <div className="text-xs text-green-700 font-semibold">Completed</div>
           </div>
         </button>
       </div>

@@ -488,8 +488,7 @@ function CalendarView({
     return Array.from(groups.values()).sort((a, b) => a.type.localeCompare(b.type));
   }
 
-  const today = new Date();
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
 
   // Upcoming timepoints
   const upcoming = timepoints
@@ -1092,7 +1091,7 @@ function GanttView({
     cursor.setMonth(cursor.getMonth() + 1);
   }
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
   const todayOffset = dayOffset(today);
 
   return (
