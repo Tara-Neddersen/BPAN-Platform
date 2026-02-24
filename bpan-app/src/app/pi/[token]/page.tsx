@@ -1081,27 +1081,22 @@ function PITrackerTab({
                         let badge: React.ReactNode = <span className="text-muted-foreground/30">·</span>;
 
                         if (total > 0) {
-                          if (completed >= total * 0.95) {
-                            // All (or nearly all) done ✓
-                            bg = "rgba(16,185,129,0.55)";
+                          if (completed > 0) {
+                            // Any completion → ✓
+                            // Full green if all done, lighter if partial
+                            const allDone = completed >= total;
+                            bg = allDone
+                              ? "rgba(16,185,129,0.6)"
+                              : `rgba(16,185,129,${0.15 + (completed / total) * 0.35})`;
                             badge = (
-                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-500 text-white font-bold text-sm shadow-sm select-none">✓</span>
+                              <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full font-bold text-sm shadow-sm select-none ${allDone ? "bg-emerald-500 text-white" : "bg-emerald-200 text-emerald-800"}`}>✓</span>
                             );
-                          } else if (skipped > 0 && skipped > completed && skipped >= scheduled) {
-                            // Majority skipped
+                          } else if (skipped > 0 && skipped >= scheduled) {
+                            // All/majority skipped, nothing done
                             bg = "rgba(156,163,175,0.2)";
                             badge = <span className="text-gray-400 font-bold text-lg select-none">−</span>;
-                          } else if (completed > 0) {
-                            // Partial completion — show fraction
-                            const pct = completed / total;
-                            bg = `rgba(16,185,129,${0.1 + pct * 0.4})`;
-                            badge = (
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 whitespace-nowrap">
-                                {completed}/{total}
-                              </span>
-                            );
                           } else {
-                            // Scheduled / pending
+                            // Scheduled / pending, nothing done yet
                             const pct = scheduled / total;
                             bg = `rgba(59,130,246,${0.1 + pct * 0.35})`;
                             badge = (
