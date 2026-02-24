@@ -54,9 +54,9 @@ export default async function TasksPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Tasks & Schedule</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Meetings, experiments, cage changes, and custom tasks — all in one place.
+            Your week at a glance — tasks, experiments, and upcoming schedule.
           </p>
         </div>
       </div>

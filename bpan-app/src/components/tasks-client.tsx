@@ -91,6 +91,113 @@ interface TasksClientProps {
 
 type ViewFilter = "all" | "today" | "upcoming" | "overdue" | "completed";
 
+// ─── Mini Week Calendar ──────────────────────────────────────────────────
+
+function WeekCalendar({ tasks, upcomingExperiments }: { tasks: Task[]; upcomingExperiments: any[] }) {
+  const todayStr = new Date().toISOString().split("T")[0];
+
+  // Start of current week (Monday)
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  const dow = now.getDay();
+  const startOfWeek = new Date(now);
+  startOfWeek.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
+
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(startOfWeek);
+    d.setDate(startOfWeek.getDate() + i);
+    const dateStr = d.toISOString().split("T")[0];
+    return {
+      dateStr,
+      num: d.getDate(),
+      name: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i],
+      isToday: dateStr === todayStr,
+      isPast: dateStr < todayStr,
+      isWeekend: i >= 5,
+    };
+  });
+
+  const counts = (dateStr: string) => {
+    const t = tasks.filter(
+      (t) => t.due_date === dateStr && t.status !== "completed" && t.status !== "skipped"
+    ).length;
+    const e = upcomingExperiments.filter((e) => e.scheduled_date === dateStr).length;
+    return { t, e };
+  };
+
+  const rangeLabel =
+    new Date(days[0].dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
+    " – " +
+    new Date(days[6].dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+  return (
+    <div className="rounded-2xl border bg-card p-4">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">This Week</span>
+        <span className="text-xs text-muted-foreground">{rangeLabel}</span>
+      </div>
+      <div className="grid grid-cols-7 gap-1.5">
+        {days.map((day) => {
+          const { t, e } = counts(day.dateStr);
+          const total = t + e;
+          return (
+            <div
+              key={day.dateStr}
+              className={`flex flex-col items-center gap-1 rounded-xl py-2.5 px-1 text-center select-none transition-colors ${
+                day.isToday
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : day.isPast
+                  ? "opacity-40"
+                  : day.isWeekend
+                  ? "bg-muted/40"
+                  : "hover:bg-accent"
+              }`}
+            >
+              <span className={`text-[10px] font-semibold ${day.isToday ? "opacity-75" : "text-muted-foreground"}`}>
+                {day.name}
+              </span>
+              <span className="text-sm font-bold leading-none">{day.num}</span>
+              <div className="flex gap-0.5 min-h-[18px] items-center justify-center flex-wrap">
+                {e > 0 && (
+                  <span
+                    title={`${e} experiment${e !== 1 ? "s" : ""}`}
+                    className={`text-[9px] font-bold rounded-full w-[18px] h-[18px] flex items-center justify-center ${
+                      day.isToday ? "bg-white/25 text-white" : "bg-purple-100 text-purple-700"
+                    }`}
+                  >
+                    {e}
+                  </span>
+                )}
+                {t > 0 && (
+                  <span
+                    title={`${t} task${t !== 1 ? "s" : ""}`}
+                    className={`text-[9px] font-bold rounded-full w-[18px] h-[18px] flex items-center justify-center ${
+                      day.isToday ? "bg-white/25 text-white" : "bg-blue-100 text-blue-700"
+                    }`}
+                  >
+                    {t}
+                  </span>
+                )}
+                {total === 0 && <span className="h-[18px]" />}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex gap-4 mt-3 justify-end">
+        <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <span className="h-2.5 w-2.5 rounded-full bg-purple-200 border border-purple-300" />
+          Experiments
+        </span>
+        <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <span className="h-2.5 w-2.5 rounded-full bg-blue-200 border border-blue-300" />
+          Tasks
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────
 
 export function TasksClient({
@@ -156,6 +263,9 @@ export function TasksClient({
 
   return (
     <>
+      {/* ─── Week Calendar ────────────────────────────── */}
+      <WeekCalendar tasks={tasks} upcomingExperiments={upcomingExperiments} />
+
       {/* ─── Stats Cards ──────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <button

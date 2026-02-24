@@ -29,14 +29,14 @@ type NavGroup = {
 type NavItem = NavLink | NavGroup;
 
 const NAV_ITEMS: NavItem[] = [
-  { type: "link", href: "/dashboard", label: "Dashboard" },
-  { type: "link", href: "/tasks", label: "Tasks" },
+  { type: "link", href: "/tasks", label: "Dashboard" },
   { type: "link", href: "/experiments", label: "Calendar" },
   {
     type: "group",
     label: "Literature",
-    basePaths: ["/library", "/scout"],
+    basePaths: ["/dashboard", "/library", "/scout"],
     items: [
+      { href: "/dashboard", label: "Search" },
       { href: "/library", label: "Library" },
       { href: "/scout", label: "Scout" },
     ],
@@ -162,7 +162,7 @@ export function Nav({ userEmail }: NavProps) {
             </button>
           )}
 
-          <Link href="/dashboard" className="flex items-center gap-2 group">
+          <Link href="/tasks" className="flex items-center gap-2 group">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground text-xs font-bold shadow-sm shadow-primary/25 transition-shadow group-hover:shadow-md group-hover:shadow-primary/30">
               B
             </div>
