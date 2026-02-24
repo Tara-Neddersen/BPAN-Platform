@@ -860,10 +860,14 @@ function CalendarView({
 
       {/* Experiment list */}
       <div className="space-y-3">
-        <h3 className="text-sm font-semibold">All Experiments</h3>
+        <div>
+          <h3 className="text-sm font-semibold">Planner Experiments</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">Custom lab experiments you track manually (Western blots, behavioral assays, etc.) — separate from the colony animal experiments shown in the calendar above.</p>
+        </div>
         {experiments.length === 0 ? (
           <div className="rounded-lg border border-dashed p-8 text-center">
-            <p className="text-muted-foreground">No experiments yet. Create one to get started.</p>
+            <p className="text-muted-foreground text-sm font-medium">No planner experiments yet</p>
+            <p className="text-xs text-muted-foreground mt-1.5 max-w-sm mx-auto">Hit <span className="font-semibold">+ New Experiment</span> above to log a custom experiment. Colony animal experiments are managed under <span className="font-semibold">Colony → Tracker</span>.</p>
           </div>
         ) : (
           experiments.map((e) => (

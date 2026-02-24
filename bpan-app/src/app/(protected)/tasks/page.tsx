@@ -24,10 +24,10 @@ export default async function TasksPage() {
     .from("animal_experiments")
     .select("*, animals(identifier, cohort_id, birth_date)")
     .eq("user_id", user.id)
-    .in("status", ["pending", "scheduled"])
+    .not("status", "in", '("completed","skipped")')
     .not("scheduled_date", "is", null)
     .order("scheduled_date")
-    .limit(100);
+    .limit(500);
 
   // Get cohort names for display
   const { data: cohorts } = await supabase

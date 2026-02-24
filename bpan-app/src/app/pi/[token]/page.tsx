@@ -1071,23 +1071,50 @@ function PITrackerTab({
                       <td className="text-center px-2 py-2 text-muted-foreground">{row.nAnimals}</td>
                       {row.tpData.map(cell => {
                         const c = cell as Record<string, number>;
-                        const count = c[summaryHighlight] || 0;
+                        const completed = c.completed || 0;
+                        const scheduled = (c.scheduled || 0) + (c.in_progress || 0);
+                        const skipped = c.skipped || 0;
                         const total = c.total || 0;
-                        const pct = total > 0 ? count / total : 0;
-                        const alpha = pct * 0.55;
-                        const bg = summaryHighlight === "completed"
-                          ? `rgba(16,185,129,${alpha})`
-                          : summaryHighlight === "scheduled"
-                          ? `rgba(59,130,246,${alpha})`
-                          : `rgba(239,68,68,${alpha})`;
-                        const textClass = pct > 0.5
-                          ? summaryHighlight === "completed" ? "text-emerald-900 font-semibold"
-                            : summaryHighlight === "scheduled" ? "text-blue-900 font-semibold"
-                            : "text-red-900 font-semibold"
-                          : "";
+
+                        // Determine dominant status & sticker
+                        let bg = "transparent";
+                        let badge: React.ReactNode = <span className="text-muted-foreground/30">·</span>;
+
+                        if (total > 0) {
+                          if (completed >= total * 0.95) {
+                            // All (or nearly all) done ✓
+                            bg = "rgba(16,185,129,0.55)";
+                            badge = (
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-500 text-white font-bold text-sm shadow-sm select-none">✓</span>
+                            );
+                          } else if (skipped > 0 && skipped > completed && skipped >= scheduled) {
+                            // Majority skipped
+                            bg = "rgba(156,163,175,0.2)";
+                            badge = <span className="text-gray-400 font-bold text-lg select-none">−</span>;
+                          } else if (completed > 0) {
+                            // Partial completion — show fraction
+                            const pct = completed / total;
+                            bg = `rgba(16,185,129,${0.1 + pct * 0.4})`;
+                            badge = (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 whitespace-nowrap">
+                                {completed}/{total}
+                              </span>
+                            );
+                          } else {
+                            // Scheduled / pending
+                            const pct = scheduled / total;
+                            bg = `rgba(59,130,246,${0.1 + pct * 0.35})`;
+                            badge = (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700 whitespace-nowrap">
+                                Sched.
+                              </span>
+                            );
+                          }
+                        }
+
                         return (
-                          <td key={cell.tp} className={`text-center px-3 py-2 border-l ${textClass}`} style={{ background: bg }}>
-                            {total > 0 ? `${count}/${total}` : <span className="text-muted-foreground">—</span>}
+                          <td key={cell.tp} className="text-center px-3 py-2 border-l transition-colors" style={{ background: bg }}>
+                            {badge}
                           </td>
                         );
                       })}
