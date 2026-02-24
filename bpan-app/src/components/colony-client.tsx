@@ -104,6 +104,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 interface ColonyClientProps {
+  defaultTab?: string;
   breederCages: BreederCage[];
   cohorts: Cohort[];
   animals: Animal[];
@@ -192,6 +193,7 @@ function convertDriveUrl(url: string): string {
 // ─── Main Component ─────────────────────────────────────────────────────
 
 export function ColonyClient({
+  defaultTab = "animals",
   breederCages: initCages,
   cohorts: initCohorts,
   animals: initAnimals,
@@ -838,11 +840,10 @@ export function ColonyClient({
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="animals">
+      <Tabs defaultValue={defaultTab}>
         <TabsList className="w-full flex flex-wrap gap-1 p-1.5 rounded-2xl" style={{ background: "rgba(255,255,255,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(99,102,241,0.15)", height: "auto" }}>
           <TabsTrigger value="animals" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Animals</TabsTrigger>
           <TabsTrigger value="cohorts" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cohorts</TabsTrigger>
-          <TabsTrigger value="timepoints" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Timepoints</TabsTrigger>
           <TabsTrigger value="breeders" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Breeders</TabsTrigger>
           <TabsTrigger value="tracker" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">📋 Tracker</TabsTrigger>
           <TabsTrigger value="results" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">📊 Results</TabsTrigger>
@@ -1011,28 +1012,26 @@ export function ColonyClient({
               })}
             </div>
           )}
-        </TabsContent>
 
-        {/* ─── Timepoints Tab ──────────────────────────────────── */}
-        <TabsContent value="timepoints" className="space-y-4">
+          {/* ─── Protocol Timepoints (merged from Timepoints tab) ── */}
+          <Separator className="my-2" />
           <div className="flex justify-between items-center">
-            <div className="space-y-1">
-              <p className="text-sm text-muted-foreground">
-                Define experiment timepoints (e.g. 30d, 120d, 210d). The protocol follows your experiment timeline:
-              </p>
-              <p className="text-xs text-muted-foreground italic">
-                Week 0: Handling → Day 1: Y-Maze + Marble → Day 2: LDB + Nesting → Day 3: Move to Core → Day 4–5: Acclimation → Day 6: CatWalk + RR Hab → Day 7–8: Rotarod → Day 9: Stamina → Day 10: Plasma
+            <div>
+              <p className="text-sm font-medium">Protocol Timepoints</p>
+              <p className="text-xs text-muted-foreground mt-0.5 italic">
+                Week 0: Handling → Day 1: Y-Maze + Marble → Day 2: LDB + Nesting → Day 3: Core → Day 4–5: Acclimation → Day 6: CatWalk + RR Hab → Day 7–8: Rotarod → Day 9: Stamina → Day 10: Plasma
               </p>
             </div>
-            <Button onClick={() => setShowAddTP(true)} size="sm" className="flex-shrink-0"><Plus className="h-4 w-4 mr-1" /> Add Timepoint</Button>
+            <Button onClick={() => setShowAddTP(true)} size="sm" className="flex-shrink-0">
+              <Plus className="h-4 w-4 mr-1" /> Add Timepoint
+            </Button>
           </div>
           {timepoints.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <p>No timepoints configured.</p>
-              <p className="text-xs mt-1">Add timepoints like &quot;30-day&quot;, &quot;120-day&quot;, &quot;210-day&quot; with the experiments for each.</p>
+            <div className="text-center py-8 text-muted-foreground text-sm">
+              No timepoints yet. Add timepoints like &quot;30-day&quot;, &quot;120-day&quot;, &quot;210-day&quot;.
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {timepoints.map((tp) => (
                 <Card key={tp.id}>
                   <CardContent className="py-3">

@@ -87,10 +87,12 @@ async function fetchAllRows(supabase: any, table: string, userId: string, orderB
   return all;
 }
 
-export default async function ColonyPage() {
+export default async function ColonyPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
+  const params = await searchParams;
+  const defaultTab = params?.tab || "animals";
 
   // Small tables use normal queries (well under 1000 rows)
   // Large tables use paginated RPC to bypass PostgREST 1000-row hard limit
@@ -130,6 +132,7 @@ export default async function ColonyPage() {
       </div>
 
       <ColonyClient
+        defaultTab={defaultTab}
         breederCages={(breederCages || []) as BreederCage[]}
         cohorts={(cohorts || []) as Cohort[]}
         animals={(animals || []) as Animal[]}
