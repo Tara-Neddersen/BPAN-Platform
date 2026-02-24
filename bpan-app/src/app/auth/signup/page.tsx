@@ -4,12 +4,15 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { AuthShell } from "@/components/auth/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function SignupPage() {
+  const hasSupabaseEnv = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -21,140 +24,134 @@ export default function SignupPage() {
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (!hasSupabaseEnv) {
+      setError("Preview mode: add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to enable sign up.");
+      return;
+    }
+
     setLoading(true);
 
-    const supabase = createClient();
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          display_name: displayName || email.split("@")[0],
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            display_name: displayName || email.split("@")[0],
+          },
         },
-      },
-    });
+      });
 
-    if (error) {
-      setError(error.message);
-      setLoading(false);
-    } else {
-      setSuccess(true);
+      if (error) {
+        setError(error.message);
+        setLoading(false);
+      } else {
+        setSuccess(true);
+        setLoading(false);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to connect to Supabase. Check your URL/key and internet connection.";
+      setError(message);
       setLoading(false);
     }
   }
 
   if (success) {
     return (
-      <div className="auth-gradient min-h-screen flex items-center justify-center px-4">
-        <div className="w-full max-w-md space-y-6">
-          <div className="text-center space-y-2">
-            <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground text-xl font-bold shadow-lg shadow-primary/25">
-              B
-            </div>
+      <AuthShell mode="signup">
+        <div className="rounded-xl border border-slate-200/80 bg-white p-6 text-center shadow-[0_10px_20px_-16px_rgba(15,23,42,0.35)]">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+            <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
           </div>
-          <Card className="shadow-xl shadow-black/[0.04] border-border/60">
-            <CardHeader className="text-center">
-              <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-green-100 text-green-600">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              </div>
-              <CardTitle className="text-xl font-semibold">Check your email</CardTitle>
-              <CardDescription>
-                We&apos;ve sent a confirmation link to <strong>{email}</strong>.
-                Click the link to activate your account, then come back and sign in.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button
-                className="w-full h-10 rounded-lg"
-                variant="outline"
-                onClick={() => router.push("/auth/login")}
-              >
-                Back to sign in
-              </Button>
-            </CardContent>
-          </Card>
+          <h2 className="text-xl font-semibold text-slate-900">Check your email</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            We&apos;ve sent a confirmation link to <strong>{email}</strong>. Activate your account, then return to sign in.
+          </p>
+          <Button
+            className="mt-5 h-11 w-full rounded-xl border-slate-200"
+            variant="outline"
+            onClick={() => router.push("/auth/login")}
+          >
+            Back to sign in
+          </Button>
         </div>
-      </div>
+      </AuthShell>
     );
   }
 
   return (
-    <div className="auth-gradient min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-md space-y-6">
-        {/* Logo & Branding */}
-        <div className="text-center space-y-2">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground text-xl font-bold shadow-lg shadow-primary/25">
-            B
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            BPAN <span className="font-light text-muted-foreground">Platform</span>
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            AI-powered research assistant
-          </p>
+    <AuthShell mode="signup">
+      <div className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-[0_10px_20px_-16px_rgba(15,23,42,0.35)] sm:p-6">
+        <div className="mb-5">
+          <h2 className="text-xl font-semibold text-slate-900">Create account</h2>
+          <p className="mt-1 text-sm text-slate-600">Get started with the BPAN platform</p>
         </div>
 
-        <Card className="shadow-xl shadow-black/[0.04] border-border/60">
-          <CardHeader className="text-center pb-2">
-            <CardTitle className="text-xl font-semibold">Create an account</CardTitle>
-            <CardDescription>Get started with the BPAN Research Platform</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSignup} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="displayName" className="text-sm font-medium">Display name</Label>
-                <Input
-                  id="displayName"
-                  type="text"
-                  placeholder="Your name"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  className="h-10 rounded-lg"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="email" className="text-sm font-medium">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="h-10 rounded-lg"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="password" className="text-sm font-medium">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="At least 6 characters"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={6}
-                  className="h-10 rounded-lg"
-                />
-              </div>
-              {error && (
-                <p className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{error}</p>
-              )}
-              <Button type="submit" className="w-full h-10 rounded-lg shadow-sm shadow-primary/25" disabled={loading}>
-                {loading ? "Creating account..." : "Sign up"}
-              </Button>
-            </form>
-            <p className="mt-6 text-center text-sm text-muted-foreground">
-              Already have an account?{" "}
-              <Link href="/auth/login" className="text-primary font-medium hover:text-primary/80 transition-colors">
-                Sign in
-              </Link>
+        <form onSubmit={handleSignup} className="space-y-4">
+          {!hasSupabaseEnv && (
+            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              UI preview mode is on. Supabase environment variables are not configured locally yet.
             </p>
-          </CardContent>
-        </Card>
+          )}
+          <div className="space-y-2">
+            <Label htmlFor="displayName" className="text-sm font-medium text-slate-700">Display name</Label>
+            <Input
+              id="displayName"
+              type="text"
+              placeholder="Your name"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="h-11 rounded-xl border-slate-200 bg-slate-50/50"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="email" className="text-sm font-medium text-slate-700">Email</Label>
+            <Input
+              id="email"
+              type="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className="h-11 rounded-xl border-slate-200 bg-slate-50/50"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="password" className="text-sm font-medium text-slate-700">Password</Label>
+            <Input
+              id="password"
+              type="password"
+              placeholder="At least 6 characters"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={6}
+              className="h-11 rounded-xl border-slate-200 bg-slate-50/50"
+            />
+          </div>
+          {error && (
+            <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+          )}
+          <Button
+            type="submit"
+            className="h-11 w-full rounded-xl bg-[linear-gradient(135deg,#5aa5bb,#3d8397)] text-white shadow-[0_10px_20px_-12px_rgba(45,110,128,0.8)] hover:opacity-95"
+            disabled={loading}
+          >
+            {loading ? "Creating account..." : hasSupabaseEnv ? "Sign up" : "Sign up (Preview only)"}
+          </Button>
+        </form>
+
+        <p className="mt-5 text-center text-sm text-slate-600">
+          Already have an account?{" "}
+          <Link href="/auth/login" className="font-semibold text-cyan-700 hover:text-cyan-800">
+            Sign in
+          </Link>
+        </p>
       </div>
-    </div>
+    </AuthShell>
   );
 }

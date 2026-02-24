@@ -210,6 +210,9 @@ export function ColonyClient({
 }: ColonyClientProps) {
   const router = useRouter();
   const supabaseRef = useRef(createBrowserClient());
+  const validTabs = useRef(new Set(["animals", "cohorts", "breeders", "tracker", "results", "analysis", "housing", "cages", "pi"]));
+  const initialTab = validTabs.current.has(defaultTab) ? defaultTab : "animals";
+  const [activeTab, setActiveTab] = useState(initialTab);
 
   // Local state — updated via refetch after each action
   const [cages, setCages] = useState(initCages);
@@ -223,6 +226,16 @@ export function ColonyClient({
   const [photos, setPhotos] = useState(initPhotos);
   const [housingCages, setHousingCages] = useState(initHousingCages);
   const [colonyResults, setColonyResults] = useState(initColonyResults);
+
+  useEffect(() => {
+    setActiveTab(validTabs.current.has(defaultTab) ? defaultTab : "animals");
+  }, [defaultTab]);
+
+  function handleTabChange(nextTab: string) {
+    setActiveTab(nextTab);
+    const url = nextTab === "animals" ? "/colony" : `/colony?tab=${encodeURIComponent(nextTab)}`;
+    router.replace(url, { scroll: false });
+  }
 
   // Cursor-based pagination helper for large tables (client-side)
   const fetchAllClientRows = useCallback(async (
@@ -840,7 +853,7 @@ export function ColonyClient({
         </CardContent>
       </Card>
 
-      <Tabs defaultValue={defaultTab}>
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList className="w-full flex flex-wrap gap-1 p-1.5 rounded-2xl" style={{ background: "rgba(255,255,255,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(99,102,241,0.15)", height: "auto" }}>
           <TabsTrigger value="animals" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Animals</TabsTrigger>
           <TabsTrigger value="cohorts" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cohorts</TabsTrigger>

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { User, LogOut, Menu, X, ChevronDown } from "lucide-react";
 import { SearchTrigger } from "@/components/unified-search";
+import { BrandLogo } from "@/components/brand-logo";
 
 interface NavProps {
   userEmail: string | null;
@@ -86,8 +87,8 @@ function NavGroupItem({ item, pathname }: { item: NavGroup; pathname: string }) 
       <button
         className={`relative flex items-center gap-0.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${
           isActive
-            ? "text-primary bg-primary/8"
-            : "text-muted-foreground hover:text-foreground hover:bg-accent"
+            ? "text-cyan-900 bg-cyan-100/70"
+            : "text-slate-600 hover:text-slate-900 hover:bg-white"
         }`}
       >
         {item.label}
@@ -95,17 +96,17 @@ function NavGroupItem({ item, pathname }: { item: NavGroup; pathname: string }) 
           className={`h-3 w-3 opacity-60 transition-transform duration-150 ${open ? "rotate-180" : ""}`}
         />
         {isActive && (
-          <span className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] w-3/5 bg-primary rounded-full" />
+          <span className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] w-3/5 bg-cyan-600 rounded-full" />
         )}
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1.5 min-w-[160px] rounded-xl border bg-background/95 backdrop-blur-xl shadow-lg shadow-black/8 p-1 z-50">
+        <div className="absolute top-full left-0 z-50 mt-1.5 min-w-[170px] rounded-xl border border-white/80 bg-white/90 p-1 shadow-[0_14px_30px_-18px_rgba(15,23,42,0.28)] backdrop-blur-xl">
           {item.items.map((sub) => (
             <Link
               key={sub.href}
               href={sub.href}
-              className="flex items-center px-3 py-2 rounded-lg text-[13px] font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              className="flex items-center rounded-lg px-3 py-2 text-[13px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
             >
               {sub.label}
             </Link>
@@ -147,10 +148,10 @@ export function Nav({ userEmail }: NavProps) {
   }
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
-      <div className="h-[2px] w-full bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
+    <header className="sticky top-0 z-50 w-full border-b border-white/70 bg-white/75 backdrop-blur-xl supports-[backdrop-filter]:bg-white/65">
+      <div className="h-[2px] w-full bg-gradient-to-r from-transparent via-cyan-500/45 to-transparent" />
 
-      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-6">
+      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
         <div className="flex items-center gap-4">
           {userEmail && (
             <button
@@ -162,12 +163,17 @@ export function Nav({ userEmail }: NavProps) {
             </button>
           )}
 
-          <Link href="/tasks" className="flex items-center gap-2 group">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground text-xs font-bold shadow-sm shadow-primary/25 transition-shadow group-hover:shadow-md group-hover:shadow-primary/30">
-              B
+          <Link href="/tasks" className="flex items-center gap-2.5 group">
+            <BrandLogo
+              className="h-8 w-8 transition-transform group-hover:scale-[1.03]"
+              imageClassName="drop-shadow-[0_4px_8px_rgba(15,23,42,0.12)]"
+              fallbackClassName="text-xs shadow-sm shadow-cyan-900/20 group-hover:shadow-md group-hover:shadow-cyan-900/25"
+              alt="BPAN mouse scientist logo"
+            />
+            <div className="leading-none">
+              <span className="block text-[15px] font-semibold tracking-tight text-slate-900">BPAN Platform</span>
+              <span className="hidden sm:block text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">Care + Research Workspace</span>
             </div>
-            <span className="text-lg font-semibold tracking-tight">BPAN</span>
-            <span className="hidden sm:inline text-lg font-light tracking-tight text-muted-foreground">Platform</span>
           </Link>
 
           {userEmail && (
@@ -181,13 +187,13 @@ export function Nav({ userEmail }: NavProps) {
                       href={item.href}
                       className={`relative px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${
                         isActive
-                          ? "text-primary bg-primary/8"
-                          : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                          ? "text-cyan-900 bg-cyan-100/70"
+                          : "text-slate-600 hover:text-slate-900 hover:bg-white"
                       }`}
                     >
                       {item.label}
                       {isActive && (
-                        <span className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] w-3/5 bg-primary rounded-full" />
+                        <span className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] w-3/5 bg-cyan-600 rounded-full" />
                       )}
                     </Link>
                   );
@@ -205,17 +211,17 @@ export function Nav({ userEmail }: NavProps) {
             mounted ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" className="gap-2 rounded-lg hover:bg-accent">
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <Button variant="ghost" size="sm" className="gap-2 rounded-xl hover:bg-white/90">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-cyan-100 text-cyan-700">
                       <User className="h-3.5 w-3.5" />
                     </div>
-                    <span className="hidden sm:inline text-xs truncate max-w-[140px] text-muted-foreground">
+                    <span className="hidden max-w-[140px] truncate text-xs text-slate-600 sm:inline">
                       {userEmail}
                     </span>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+                <DropdownMenuContent align="end" className="w-56 border-white/80 bg-white/95 backdrop-blur-xl">
+                  <DropdownMenuItem disabled className="text-xs text-slate-500">
                     {userEmail}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
@@ -230,7 +236,7 @@ export function Nav({ userEmail }: NavProps) {
               </DropdownMenu>
             ) : (
               <Button variant="ghost" size="sm" className="gap-2">
-                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-cyan-100 text-cyan-700">
                   <User className="h-3.5 w-3.5" />
                 </div>
               </Button>
@@ -250,7 +256,7 @@ export function Nav({ userEmail }: NavProps) {
 
       {/* Mobile drawer */}
       {userEmail && mobileOpen && (
-        <div className="sm:hidden border-t bg-background/95 backdrop-blur-lg">
+        <div className="sm:hidden border-t border-white/70 bg-white/90 backdrop-blur-lg">
           <nav className="flex flex-col py-2 px-4 space-y-0.5">
             {mobileLinks.map((link) => {
               const isActive = pathname === link.href.split("?")[0];
@@ -260,8 +266,8 @@ export function Nav({ userEmail }: NavProps) {
                   href={link.href}
                   className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
                     isActive
-                      ? "text-primary bg-primary/8"
-                      : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                      ? "text-cyan-900 bg-cyan-100/70"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-white"
                   }`}
                 >
                   {link.label}
