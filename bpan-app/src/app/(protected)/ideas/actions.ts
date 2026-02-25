@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
 // ─── Ideas ───────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,7 @@ export async function createIdea(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/ideas");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return data.id;
 }
 
@@ -59,6 +61,7 @@ export async function updateIdea(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/ideas");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function updateIdeaStatus(id: string, status: string) {
@@ -74,6 +77,7 @@ export async function updateIdeaStatus(id: string, status: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/ideas");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function deleteIdea(id: string) {
@@ -89,6 +93,7 @@ export async function deleteIdea(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/ideas");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function linkPaperToIdea(ideaId: string, paperId: string) {
@@ -116,6 +121,7 @@ export async function linkPaperToIdea(ideaId: string, paperId: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/ideas");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function unlinkPaperFromIdea(ideaId: string, paperId: string) {
@@ -142,6 +148,7 @@ export async function unlinkPaperFromIdea(ideaId: string, paperId: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/ideas");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 // ─── Idea Entries ────────────────────────────────────────────────────────────
@@ -168,6 +175,7 @@ export async function addIdeaEntry(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/ideas");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function deleteIdeaEntry(id: string) {
@@ -183,5 +191,5 @@ export async function deleteIdeaEntry(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/ideas");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
-

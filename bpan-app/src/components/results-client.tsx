@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
@@ -122,6 +123,10 @@ interface Props {
   initialAnalyses: Analysis[];
   initialFigures: Figure[];
   experiments: Pick<Experiment, "id" | "title">[];
+  initialDatasetId?: string | null;
+  initialTab?: "data" | "analyze" | "visualize";
+  initialAnalysisId?: string | null;
+  initialFigureId?: string | null;
 }
 
 export function ResultsClient({
@@ -129,12 +134,20 @@ export function ResultsClient({
   initialAnalyses,
   initialFigures,
   experiments,
+  initialDatasetId = null,
+  initialTab = "data",
+  initialAnalysisId = null,
+  initialFigureId = null,
 }: Props) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [datasets, setDatasets] = useState(initialDatasets);
   const [analyses, setAnalyses] = useState(initialAnalyses);
   const [figures] = useState(initialFigures);
+  const [activeTab, setActiveTab] = useState<"data" | "analyze" | "visualize">(initialTab);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
-    initialDatasets[0]?.id || null
+    initialDatasets.find((d) => d.id === initialDatasetId)?.id || initialDatasets[0]?.id || null
   );
   const [showImport, setShowImport] = useState(false);
   const [showPaste, setShowPaste] = useState(false);
@@ -151,6 +164,24 @@ export function ResultsClient({
         : [],
     [analyses, selectedDatasetId]
   );
+
+  const highlightedAnalysisId = initialAnalysisId;
+  const highlightedFigureId = initialFigureId;
+
+  useEffect(() => {
+    if (!selectedDatasetId) return;
+    const next = new URLSearchParams(searchParams?.toString() || "");
+    next.set("dataset", selectedDatasetId);
+    next.set("tab", activeTab);
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  }, [selectedDatasetId, activeTab, router, pathname, searchParams]);
+
+  useEffect(() => {
+    if (!highlightedAnalysisId && !highlightedFigureId) return;
+    const targetId = highlightedAnalysisId ? `analysis-${highlightedAnalysisId}` : `figure-${highlightedFigureId}`;
+    const el = document.getElementById(targetId);
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlightedAnalysisId, highlightedFigureId, selectedDatasetId, activeTab]);
 
   return (
     <div className="space-y-6">
@@ -227,7 +258,7 @@ export function ResultsClient({
           </div>
         </div>
       ) : (
-        <Tabs defaultValue="data" className="space-y-4">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "data" | "analyze" | "visualize")} className="space-y-4">
           <TabsList>
             <TabsTrigger value="data" className="gap-1.5">
               <TableIcon className="h-3.5 w-3.5" /> Data
@@ -250,6 +281,7 @@ export function ResultsClient({
             <AnalyzePanel
               dataset={selectedDataset}
               analyses={datasetAnalyses}
+              highlightedAnalysisId={highlightedAnalysisId}
               onNewAnalysis={(a) => setAnalyses((prev) => [a, ...prev])}
               onDeleteAnalysis={(id) =>
                 setAnalyses((prev) => prev.filter((a) => a.id !== id))
@@ -262,6 +294,7 @@ export function ResultsClient({
             <VisualizePanel
               dataset={selectedDataset}
               figures={figures.filter((f) => f.dataset_id === selectedDatasetId)}
+              highlightedFigureId={highlightedFigureId}
             />
           </TabsContent>
         </Tabs>
@@ -390,11 +423,13 @@ function DataTable({ dataset }: { dataset: Dataset }) {
 function AnalyzePanel({
   dataset,
   analyses,
+  highlightedAnalysisId,
   onNewAnalysis,
   onDeleteAnalysis,
 }: {
   dataset: Dataset;
   analyses: Analysis[];
+  highlightedAnalysisId?: string | null;
   onNewAnalysis: (a: Analysis) => void;
   onDeleteAnalysis: (id: string) => void;
 }) {
@@ -675,6 +710,7 @@ function AnalyzePanel({
               <SavedAnalysisCard
                 key={a.id}
                 analysis={a}
+                highlighted={a.id === highlightedAnalysisId}
                 onDelete={() => {
                   deleteAnalysis(a.id);
                   onDeleteAnalysis(a.id);
@@ -753,15 +789,17 @@ function ResultsDisplay({ results }: { results: Record<string, unknown> }) {
 
 function SavedAnalysisCard({
   analysis,
+  highlighted = false,
   onDelete,
 }: {
   analysis: Analysis;
+  highlighted?: boolean;
   onDelete: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(highlighted);
 
   return (
-    <Card>
+    <Card id={`analysis-${analysis.id}`} className={highlighted ? "ring-2 ring-cyan-300 border-cyan-300" : ""}>
       <CardContent className="pt-3 pb-3">
         <div className="flex items-center justify-between">
           <button
@@ -807,10 +845,12 @@ function SavedAnalysisCard({
 
 function VisualizePanel({
   dataset,
-  figures: _figures,
+  figures,
+  highlightedFigureId,
 }: {
   dataset: Dataset;
   figures: Figure[];
+  highlightedFigureId?: string | null;
 }) {
   const [chartType, setChartType] = useState("bar");
   const [xCol, setXCol] = useState("");
@@ -1106,6 +1146,35 @@ function VisualizePanel({
                 style={{ width: "100%", height: 450 }}
               />
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {figures.length > 0 && (
+        <Card>
+          <CardHeader className="py-3 px-4">
+            <CardTitle className="text-sm font-medium">Saved Figures</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {figures.map((fig) => (
+              <div
+                key={fig.id}
+                id={`figure-${fig.id}`}
+                className={`rounded-lg border px-3 py-2 ${fig.id === highlightedFigureId ? "border-cyan-300 ring-2 ring-cyan-200" : ""}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{fig.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {fig.chart_type} • {new Date(fig.updated_at || fig.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  {fig.analysis_id && (
+                    <Badge variant="secondary" className="text-[10px]">linked analysis</Badge>
+                  )}
+                </div>
+              </div>
+            ))}
           </CardContent>
         </Card>
       )}
@@ -1436,4 +1505,3 @@ function PasteDialog({
     </Dialog>
   );
 }
-

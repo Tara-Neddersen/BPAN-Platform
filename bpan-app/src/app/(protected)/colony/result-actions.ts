@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 import { redirect } from "next/navigation";
 
 /**
@@ -110,6 +111,7 @@ export async function upsertColonyResult(
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -180,6 +182,7 @@ export async function batchUpsertColonyResults(
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   if (errors.length > 0)
     return { success: true, saved: successCount, errors };
   return { success: true, saved: successCount };
@@ -232,6 +235,6 @@ export async function deleteColonyResult(id: string) {
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
-

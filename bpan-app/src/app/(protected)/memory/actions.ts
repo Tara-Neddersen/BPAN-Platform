@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
 export async function createMemory(formData: FormData) {
   const supabase = await createClient();
@@ -25,6 +26,7 @@ export async function createMemory(formData: FormData) {
 
   if (error) return { error: error.message };
   revalidatePath("/memory");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -53,6 +55,7 @@ export async function updateMemory(id: string, formData: FormData) {
 
   if (error) return { error: error.message };
   revalidatePath("/memory");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -69,6 +72,7 @@ export async function deleteMemory(id: string) {
 
   if (error) return { error: error.message };
   revalidatePath("/memory");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -85,6 +89,6 @@ export async function togglePin(id: string, pinned: boolean) {
 
   if (error) return { error: error.message };
   revalidatePath("/memory");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
-

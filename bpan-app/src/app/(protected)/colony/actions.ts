@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
 /**
  * Cursor-based pagination: fetch ALL rows from a table using id > lastId.
@@ -68,6 +69,7 @@ export async function createBreederCage(formData: FormData) {
   });
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -94,6 +96,7 @@ export async function updateBreederCage(id: string, formData: FormData) {
     .eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -105,6 +108,7 @@ export async function deleteBreederCage(id: string) {
   const { error } = await supabase.from("breeder_cages").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -125,6 +129,7 @@ export async function createCohort(formData: FormData) {
   });
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -197,6 +202,7 @@ export async function updateCohort(id: string, formData: FormData) {
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -208,6 +214,7 @@ export async function deleteCohort(id: string) {
   const { error } = await supabase.from("cohorts").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -236,6 +243,7 @@ export async function createAnimal(formData: FormData) {
 
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, id: data.id };
 }
 
@@ -315,6 +323,7 @@ export async function updateAnimal(id: string, formData: FormData) {
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -326,6 +335,7 @@ export async function deleteAnimal(id: string) {
   const { error } = await supabase.from("animals").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -354,6 +364,7 @@ export async function createColonyTimepoint(formData: FormData) {
   });
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -439,6 +450,7 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -478,6 +490,7 @@ export async function deleteColonyTimepoint(id: string) {
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -499,6 +512,7 @@ export async function createAnimalExperiment(formData: FormData) {
   });
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -531,6 +545,7 @@ export async function updateAnimalExperiment(id: string, formData: FormData) {
     .eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -551,6 +566,7 @@ export async function rescheduleExperimentDate(id: string, newDate: string) {
 
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   revalidatePath("/experiments");
   return { success: true };
 }
@@ -572,6 +588,7 @@ export async function rescheduleExperimentDates(ids: string[], newDate: string) 
 
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   revalidatePath("/experiments");
   return { success: true };
 }
@@ -606,6 +623,7 @@ export async function batchScheduleSingleExperiment(
 
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   revalidatePath("/experiments");
   return { success: true };
 }
@@ -676,6 +694,7 @@ export async function batchUpdateExperimentStatus(
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, updated: allMatchingIds.length };
 }
 
@@ -687,6 +706,7 @@ export async function deleteAnimalExperiment(id: string) {
   const { error } = await supabase.from("animal_experiments").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -935,6 +955,7 @@ export async function scheduleExperimentsForAnimal(
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, count: records.length + skippedIdsToReschedule.length, rescheduled: skippedIdsToReschedule.length };
 }
 
@@ -1147,6 +1168,7 @@ export async function scheduleExperimentsForCohort(
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 
   const totalChanged = allRecords.length + skippedIdsToReschedule.length;
   if (totalChanged === 0) {
@@ -1204,6 +1226,7 @@ export async function deleteExperimentsForAnimal(
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, deleted: deleteCount };
 }
 
@@ -1256,6 +1279,7 @@ export async function deleteExperimentsForCohort(
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, deleted: allIds.length, animals: cohortAnimals.length };
 }
 
@@ -1356,6 +1380,7 @@ export async function rescheduleTimepointExperiments(
   }
 
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, rescheduled: updates.length, lastDate: lastDate.toISOString().split("T")[0] };
 }
 
@@ -1380,6 +1405,7 @@ export async function createAdvisorAccess(formData: FormData) {
     .single();
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, token: data.token };
 }
 
@@ -1391,6 +1417,7 @@ export async function deleteAdvisorAccess(id: string) {
   const { error } = await supabase.from("advisor_portal").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1415,6 +1442,7 @@ export async function createMeetingNote(formData: FormData) {
   if (error) return { error: error.message };
   revalidatePath("/colony");
   revalidatePath("/meetings");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1440,6 +1468,7 @@ export async function updateMeetingNote(id: string, formData: FormData) {
   if (error) return { error: error.message };
   revalidatePath("/colony");
   revalidatePath("/meetings");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1452,6 +1481,7 @@ export async function deleteMeetingNote(id: string) {
   if (error) return { error: error.message };
   revalidatePath("/colony");
   revalidatePath("/meetings");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1478,6 +1508,7 @@ export async function generateCageChanges(startDateStr: string, count: number) {
   const { error } = await supabase.from("cage_changes").insert(records);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, count: records.length };
 }
 
@@ -1496,6 +1527,7 @@ export async function toggleCageChange(id: string, completed: boolean) {
     .eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1507,6 +1539,7 @@ export async function deleteCageChange(id: string) {
   const { error } = await supabase.from("cage_changes").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1528,6 +1561,7 @@ export async function addColonyPhoto(formData: FormData) {
   });
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1539,6 +1573,7 @@ export async function deleteColonyPhoto(id: string) {
   const { error } = await supabase.from("colony_photos").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1560,6 +1595,7 @@ export async function createHousingCage(formData: FormData) {
   });
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1583,6 +1619,7 @@ export async function updateHousingCage(id: string, formData: FormData) {
     .eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1594,6 +1631,7 @@ export async function deleteHousingCage(id: string) {
   const { error } = await supabase.from("housing_cages").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -1631,6 +1669,6 @@ export async function assignAnimalToCage(animalId: string, housingCageId: string
 
   if (error) return { error: error.message };
   revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
-

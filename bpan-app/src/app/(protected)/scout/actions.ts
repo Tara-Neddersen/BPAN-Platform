@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -98,6 +99,6 @@ export async function saveFindingToPapers(id: string) {
 
   revalidatePath("/scout");
   revalidatePath("/papers");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
-

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
 export async function createTask(formData: FormData) {
   const supabase = await createClient();
@@ -23,6 +24,7 @@ export async function createTask(formData: FormData) {
   });
   if (error) return { error: error.message };
   revalidatePath("/tasks");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -48,6 +50,7 @@ export async function updateTask(id: string, formData: FormData) {
   const { error } = await supabase.from("tasks").update(update).eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/tasks");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -64,6 +67,7 @@ export async function toggleTask(id: string, completed: boolean) {
   const { error } = await supabase.from("tasks").update(update).eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/tasks");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -75,6 +79,7 @@ export async function deleteTask(id: string) {
   const { error } = await supabase.from("tasks").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/tasks");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
 
@@ -164,5 +169,6 @@ export async function syncMeetingActionsToTasks(meetingId: string, meetingTitle:
   }
 
   revalidatePath("/tasks");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, synced: newTasks.length, removed: orphanIds.length, preserved: preserveAsManual.length };
 }

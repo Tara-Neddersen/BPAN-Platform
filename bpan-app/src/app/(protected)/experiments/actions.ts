@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
 // ─── Experiments ─────────────────────────────────────────────────────────────
 
@@ -47,6 +48,7 @@ export async function createExperiment(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function updateExperiment(formData: FormData) {
@@ -97,6 +99,7 @@ export async function updateExperiment(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function deleteExperiment(id: string) {
@@ -114,6 +117,7 @@ export async function deleteExperiment(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function updateExperimentStatus(id: string, status: string) {
@@ -131,6 +135,7 @@ export async function updateExperimentStatus(id: string, status: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 // ─── Timepoints ──────────────────────────────────────────────────────────────
@@ -157,6 +162,7 @@ export async function createTimepoint(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function completeTimepoint(id: string) {
@@ -174,6 +180,7 @@ export async function completeTimepoint(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function deleteTimepoint(id: string) {
@@ -191,6 +198,7 @@ export async function deleteTimepoint(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 // ─── Protocols ───────────────────────────────────────────────────────────────
@@ -224,6 +232,7 @@ export async function createProtocol(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function updateProtocol(formData: FormData) {
@@ -254,6 +263,7 @@ export async function updateProtocol(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function deleteProtocol(id: string) {
@@ -271,6 +281,7 @@ export async function deleteProtocol(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 // ─── Reagents ────────────────────────────────────────────────────────────────
@@ -308,6 +319,7 @@ export async function createReagent(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function updateReagent(formData: FormData) {
@@ -347,6 +359,7 @@ export async function updateReagent(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function deleteReagent(id: string) {
@@ -364,5 +377,5 @@ export async function deleteReagent(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
-

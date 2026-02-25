@@ -2,7 +2,12 @@ import { createClient } from "@/lib/supabase/server";
 import { ResultsClient } from "@/components/results-client";
 import type { Dataset, Analysis, Figure, Experiment } from "@/types";
 
-export default async function ResultsPage() {
+export default async function ResultsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ dataset?: string; tab?: string; analysis?: string; figure?: string }>;
+}) {
+  const params = searchParams ? await searchParams : undefined;
   const supabase = await createClient();
   const {
     data: { user },
@@ -44,7 +49,10 @@ export default async function ResultsPage() {
       initialAnalyses={(analyses as Analysis[]) || []}
       initialFigures={(figures as Figure[]) || []}
       experiments={(experiments as Pick<Experiment, "id" | "title">[]) || []}
+      initialDatasetId={params?.dataset ?? null}
+      initialTab={(params?.tab as "data" | "analyze" | "visualize" | undefined) ?? undefined}
+      initialAnalysisId={params?.analysis ?? null}
+      initialFigureId={params?.figure ?? null}
     />
   );
 }
-

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
 export async function savePaper(formData: FormData) {
   const supabase = await createClient();
@@ -27,6 +28,7 @@ export async function savePaper(formData: FormData) {
   if (error) throw new Error(error.message);
   revalidatePath("/library");
   revalidatePath("/search");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function unsavePaper(formData: FormData) {
@@ -45,4 +47,5 @@ export async function unsavePaper(formData: FormData) {
   if (error) throw new Error(error.message);
   revalidatePath("/library");
   revalidatePath("/search");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }

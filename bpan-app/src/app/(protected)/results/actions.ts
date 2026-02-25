@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
 // ─── Datasets ────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,7 @@ export async function createDataset(payload: {
 
   if (error) throw new Error(error.message);
   revalidatePath("/results");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return data.id;
 }
 
@@ -56,6 +58,7 @@ export async function deleteDataset(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/results");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 // ─── Analyses ────────────────────────────────────────────────────────────────
@@ -90,6 +93,7 @@ export async function saveAnalysis(payload: {
 
   if (error) throw new Error(error.message);
   revalidatePath("/results");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return data.id;
 }
 
@@ -108,6 +112,7 @@ export async function deleteAnalysis(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/results");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 // ─── Figures ─────────────────────────────────────────────────────────────────
@@ -140,6 +145,7 @@ export async function saveFigure(payload: {
 
   if (error) throw new Error(error.message);
   revalidatePath("/results");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return data.id;
 }
 
@@ -158,5 +164,5 @@ export async function deleteFigure(id: string) {
 
   if (error) throw new Error(error.message);
   revalidatePath("/results");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
-

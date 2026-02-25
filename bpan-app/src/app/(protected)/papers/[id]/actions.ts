@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { generateEmbedding } from "@/lib/ai";
+import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
 export async function createNote(formData: FormData) {
   const supabase = await createClient();
@@ -40,6 +41,7 @@ export async function createNote(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath(`/papers/${paperId}`);
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function updateNote(formData: FormData) {
@@ -62,6 +64,7 @@ export async function updateNote(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath(`/papers/${paperId}`);
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
 export async function deleteNote(formData: FormData) {
@@ -80,4 +83,5 @@ export async function deleteNote(formData: FormData) {
 
   if (error) throw new Error(error.message);
   revalidatePath(`/papers/${paperId}`);
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
