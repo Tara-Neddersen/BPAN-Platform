@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Plus, Trash2, Loader2, Check, X,
-  MessageSquare, Mic, MicOff, Sparkles,
+  MessageSquare, Mic, MicOff, Sparkles, Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,8 @@ import { syncMeetingActionsToTasks } from "@/app/(protected)/tasks/actions";
 
 interface MeetingsClientProps {
   meetings: MeetingNote[];
+  initialOpenMeetingId?: string | null;
+  linkedTaskCounts?: Record<string, number>;
   actions: {
     createMeetingNote: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateMeetingNote: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -32,20 +34,19 @@ interface MeetingsClientProps {
 
 // ─── Speech-to-Text Hook ─────────────────────────────────────────────────
 
-function useSpeechToText(onTranscript: (text: string) => void) {
+function useSpeechToText(onTranscriptChunk: (text: string) => void) {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
   const [debugInfo, setDebugInfo] = useState("");
   const wantRef = useRef(false);
-  const cbRef = useRef(onTranscript);
-  const transcriptRef = useRef("");
+  const cbRef = useRef(onTranscriptChunk);
   const recRef = useRef<SpeechRecognition | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startTimeRef = useRef(0);
   const rapidFailCount = useRef(0);
   const gotResultRef = useRef(false);
 
-  cbRef.current = onTranscript;
+  cbRef.current = onTranscriptChunk;
 
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -86,6 +87,7 @@ function useSpeechToText(onTranscript: (text: string) => void) {
     rec.lang = "en-US";
     rec.maxAlternatives = 1;
     recRef.current = rec;
+    // eslint-disable-next-line react-hooks/purity
     startTimeRef.current = Date.now();
     gotResultRef.current = false;
 
@@ -97,13 +99,20 @@ function useSpeechToText(onTranscript: (text: string) => void) {
     rec.onresult = (e: SpeechRecognitionEvent) => {
       gotResultRef.current = true;
       rapidFailCount.current = 0;
-      let text = "";
-      for (let i = 0; i < e.results.length; i++) {
-        text += e.results[i][0].transcript;
+      const finalized: string[] = [];
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const result = e.results[i];
+        const text = result[0]?.transcript?.trim();
+        if (!text) continue;
+        if (result.isFinal) finalized.push(text);
+        else interim += (interim ? " " : "") + text;
       }
-      transcriptRef.current = text;
-      setDebugInfo("📝 Heard: " + text.substring(0, 60) + (text.length > 60 ? "..." : ""));
-      cbRef.current(text);
+      if (finalized.length > 0) cbRef.current(finalized.join(" "));
+      const preview = interim || finalized.join(" ");
+      if (preview) {
+        setDebugInfo("📝 Heard: " + preview.substring(0, 80) + (preview.length > 80 ? "..." : ""));
+      }
     };
 
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
@@ -164,7 +173,6 @@ function useSpeechToText(onTranscript: (text: string) => void) {
       if (recRef.current) try { recRef.current.stop(); } catch { /* */ }
       setDebugInfo("Stopped.");
     } else {
-      transcriptRef.current = "";
       rapidFailCount.current = 0;
       wantRef.current = true;
       setIsListening(true);
@@ -181,6 +189,53 @@ function useSpeechToText(onTranscript: (text: string) => void) {
   }
 
   return { isListening, isSupported, toggle, stop, debugInfo };
+}
+
+function inferActionDueDate(text: string, meetingDate: string): string | undefined {
+  const raw = text.trim();
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+  const base = new Date(`${meetingDate || new Date().toISOString().slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(base.getTime())) return undefined;
+
+  const toISO = (d: Date) => d.toISOString().slice(0, 10);
+  const addDays = (days: number) => {
+    const d = new Date(base);
+    d.setDate(d.getDate() + days);
+    return toISO(d);
+  };
+
+  if (/\btoday\b/.test(lower)) return toISO(base);
+  if (/\btomorrow\b/.test(lower)) return addDays(1);
+  if (/\bnext week\b/.test(lower)) return addDays(7);
+
+  const iso = raw.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (iso) return iso[1];
+
+  const md = raw.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (md) {
+    const month = Number(md[1]);
+    const day = Number(md[2]);
+    let year = md[3] ? Number(md[3]) : base.getFullYear();
+    if (year < 100) year += 2000;
+    const parsed = new Date(year, month - 1, day, 12);
+    if (!Number.isNaN(parsed.getTime())) return toISO(parsed);
+  }
+
+  const weekdayMatch = lower.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  if (weekdayMatch) {
+    const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const target = dayNames.indexOf(weekdayMatch[1]);
+    if (target >= 0) {
+      const d = new Date(base);
+      let delta = (target - d.getDay() + 7) % 7;
+      if (delta === 0) delta = 7;
+      d.setDate(d.getDate() + delta);
+      return toISO(d);
+    }
+  }
+
+  return undefined;
 }
 
 // ─── Meeting Detail Sub-component ────────────────────────────────────────
@@ -202,15 +257,23 @@ function MeetingDetail({
   const [aiSummary, setAiSummary] = useState(meeting.ai_summary || "");
   const [summarizing, setSummarizing] = useState(false);
   const [extracting, setExtracting] = useState(false);
+  const [uploadingTranscript, setUploadingTranscript] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const baseContentRef = useRef(content);
-  const { isListening, isSupported, toggle: toggleMic, stop: stopMic, debugInfo } = useSpeechToText((text) => {
-    const base = baseContentRef.current;
-    setContent(base ? base + "\n\n" + text : text);
+  const insertedDictationPrefixRef = useRef(false);
+  const { isListening, isSupported, toggle: toggleMic, stop: stopMic, debugInfo } = useSpeechToText((chunk) => {
+    setContent((prev) => {
+      const trimmed = prev.trimEnd();
+      if (!insertedDictationPrefixRef.current) {
+        insertedDictationPrefixRef.current = true;
+        return trimmed ? `${trimmed}\n\n${chunk}` : chunk;
+      }
+      return trimmed ? `${trimmed} ${chunk}` : chunk;
+    });
   });
 
   function handleToggleMic() {
-    if (!isListening) baseContentRef.current = content;
+    if (!isListening) insertedDictationPrefixRef.current = false;
     toggleMic();
   }
 
@@ -260,7 +323,7 @@ function MeetingDetail({
         const existingTexts = new Set(actionItems.map((a) => a.text.toLowerCase().trim()));
         const newItems = items
           .filter((t) => !existingTexts.has(t.toLowerCase().trim()))
-          .map((t) => ({ text: t, done: false }));
+          .map((t) => ({ text: t, done: false, due_date: inferActionDueDate(t, meeting.meeting_date) }));
         setActionItems([...actionItems, ...newItems]);
         toast.success(`Found ${newItems.length} new action item${newItems.length !== 1 ? "s" : ""}!`);
       }
@@ -270,9 +333,41 @@ function MeetingDetail({
     setExtracting(false);
   }
 
+  async function handleUploadTranscriptFile(file: File) {
+    setUploadingTranscript(true);
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      const res = await fetch("/api/meeting-transcribe", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Failed to transcribe recording");
+
+      const transcript = (data.transcript || "").trim();
+      if (!transcript) throw new Error("No transcript returned");
+
+      stopMic();
+      insertedDictationPrefixRef.current = false;
+      setContent((prev) => {
+        const trimmed = prev.trimEnd();
+        const block = `[Transcript upload: ${file.name}]\n${transcript}`;
+        return trimmed ? `${trimmed}\n\n${block}` : block;
+      });
+      toast.success("Recording transcribed and added to notes");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to transcribe recording");
+    } finally {
+      setUploadingTranscript(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
   function addAction() {
     if (!newAction.trim()) return;
-    setActionItems([...actionItems, { text: newAction.trim(), done: false }]);
+    const text = newAction.trim();
+    setActionItems([...actionItems, { text, done: false, due_date: inferActionDueDate(text, meeting.meeting_date) }]);
     setNewAction("");
   }
 
@@ -284,11 +379,23 @@ function MeetingDetail({
     setActionItems(actionItems.filter((_, i) => i !== idx));
   }
 
+  function setActionDueDate(idx: number, dueDate: string) {
+    setActionItems(actionItems.map((a, i) => i === idx ? { ...a, due_date: dueDate || undefined } : a));
+  }
+
   function handleSave() {
     stopMic();
     const fd = new FormData();
     fd.set("content", content);
-    fd.set("action_items", JSON.stringify(actionItems));
+    fd.set(
+      "action_items",
+      JSON.stringify(
+        actionItems.map((item) => ({
+          ...item,
+          due_date: item.due_date || inferActionDueDate(item.text, meeting.meeting_date),
+        }))
+      )
+    );
     if (aiSummary) fd.set("ai_summary", aiSummary);
     onSave(fd);
   }
@@ -318,20 +425,43 @@ function MeetingDetail({
                 Recording...
               </div>
             )}
-            {isSupported ? (
+            <div className="flex items-center gap-1.5">
+              {isSupported ? (
+                <Button
+                  variant={isListening ? "destructive" : "outline"}
+                  size="sm"
+                  className="h-7 text-xs gap-1"
+                  onClick={handleToggleMic}
+                  type="button"
+                >
+                  {isListening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+                  {isListening ? "Stop" : "Dictate"}
+                </Button>
+              ) : (
+                <span className="text-[10px] text-muted-foreground">Use Chrome for live dictation</span>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*,video/mp4,video/mpeg,video/quicktime,video/webm,video/x-m4v,.m4a,.mp3,.wav,.aac,.mp4,.mov,.webm"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleUploadTranscriptFile(file);
+                }}
+              />
               <Button
-                variant={isListening ? "destructive" : "outline"}
+                variant="outline"
                 size="sm"
                 className="h-7 text-xs gap-1"
-                onClick={handleToggleMic}
                 type="button"
+                disabled={uploadingTranscript}
+                onClick={() => fileInputRef.current?.click()}
               >
-                {isListening ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
-                {isListening ? "Stop" : "Dictate"}
+                {uploadingTranscript ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                {uploadingTranscript ? "Transcribing..." : "Upload recording (free/local)"}
               </Button>
-            ) : (
-              <span className="text-[10px] text-muted-foreground">Use Chrome for speech-to-text</span>
-            )}
+            </div>
           </div>
         </div>
         <Textarea
@@ -405,7 +535,18 @@ function MeetingDetail({
                 >
                   {item.done && <Check className="h-3 w-3" />}
                 </button>
-                <span className={`flex-1 ${item.done ? "line-through text-muted-foreground" : ""}`}>{item.text}</span>
+                <div className="flex-1 min-w-0">
+                  <span className={`${item.done ? "line-through text-muted-foreground" : ""}`}>{item.text}</span>
+                  <div className="mt-1">
+                    <Input
+                      type="date"
+                      value={item.due_date || ""}
+                      onChange={(e) => setActionDueDate(idx, e.target.value)}
+                      className="h-7 w-[150px] text-xs"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                </div>
                 <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => removeAction(idx)}>
                   <X className="h-3 w-3" />
                 </Button>
@@ -440,7 +581,12 @@ function MeetingDetail({
 
 // ─── Main Meetings Component ─────────────────────────────────────────────
 
-export function MeetingsClient({ meetings: initMeetings, actions }: MeetingsClientProps) {
+export function MeetingsClient({
+  meetings: initMeetings,
+  initialOpenMeetingId = null,
+  linkedTaskCounts = {},
+  actions,
+}: MeetingsClientProps) {
   const [meetings, setMeetings] = useState(initMeetings);
   const [showAddMeeting, setShowAddMeeting] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<MeetingNote | null>(null);
@@ -448,6 +594,12 @@ export function MeetingsClient({ meetings: initMeetings, actions }: MeetingsClie
 
   // Sync from props when they change (server revalidation)
   useEffect(() => { setMeetings(initMeetings); }, [initMeetings]);
+
+  useEffect(() => {
+    if (!initialOpenMeetingId) return;
+    const target = initMeetings.find((m) => m.id === initialOpenMeetingId);
+    if (target) setEditingMeeting(target);
+  }, [initialOpenMeetingId, initMeetings]);
 
   async function act(promise: Promise<{ success?: boolean; error?: string }>) {
     setBusy(true);
@@ -494,6 +646,7 @@ export function MeetingsClient({ meetings: initMeetings, actions }: MeetingsClie
           {meetings.map((m) => {
             const actionCount = m.action_items?.length || 0;
             const doneActions = m.action_items?.filter((a: ActionItem) => a.done).length || 0;
+            const syncedCount = linkedTaskCounts[m.id] || 0;
             return (
               <Card key={m.id} className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => setEditingMeeting(m)}>
                 <CardContent className="py-4">
@@ -506,6 +659,11 @@ export function MeetingsClient({ meetings: initMeetings, actions }: MeetingsClie
                         {actionCount > 0 && (
                           <Badge variant="secondary" className="text-xs">
                             {doneActions}/{actionCount} actions done
+                          </Badge>
+                        )}
+                        {syncedCount > 0 && (
+                          <Badge variant="outline" className="text-xs">
+                            {syncedCount} synced task{syncedCount === 1 ? "" : "s"}
                           </Badge>
                         )}
                       </div>
@@ -591,14 +749,21 @@ export function MeetingsClient({ meetings: initMeetings, actions }: MeetingsClie
                     const aiRaw = fd.get("action_items") as string;
                     if (aiRaw) {
                       const actionItems = JSON.parse(aiRaw) as ActionItem[];
-                      if (actionItems.length > 0) {
-                        const syncResult = await syncMeetingActionsToTasks(
-                          editingMeeting.id,
-                          editingMeeting.title,
-                          actionItems
-                        );
-                        if (syncResult.synced && syncResult.synced > 0) {
-                          toast.success(`${syncResult.synced} action item${syncResult.synced > 1 ? "s" : ""} synced to Tasks`);
+                      const syncResult = await syncMeetingActionsToTasks(
+                        editingMeeting.id,
+                        editingMeeting.title,
+                        actionItems
+                      );
+                      if (syncResult?.error) {
+                        toast.error(syncResult.error);
+                      } else if (syncResult) {
+                        const synced = syncResult.synced || 0;
+                        const removed = syncResult.removed || 0;
+                        const preserved = syncResult.preserved || 0;
+                        if (synced || removed || preserved) {
+                          toast.success(
+                            `Task sync: ${synced} new, ${removed} removed${preserved ? `, ${preserved} preserved` : ""}`
+                          );
                         }
                       }
                     }
@@ -615,4 +780,3 @@ export function MeetingsClient({ meetings: initMeetings, actions }: MeetingsClie
     </>
   );
 }
-

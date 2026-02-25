@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import {
   Plus, Trash2, Loader2, Check, Calendar,
   AlertTriangle, CheckCircle2, Clock, Flag,
@@ -106,6 +107,7 @@ interface TasksClientProps {
 }
 
 type ViewFilter = "all" | "today" | "upcoming" | "overdue" | "completed";
+type SourceFilter = "all" | "meeting_action" | "manual" | "experiment" | "cage_change";
 
 // ─── Mini Week Calendar ──────────────────────────────────────────────────
 
@@ -306,6 +308,7 @@ export function TasksClient({
 }: TasksClientProps) {
   const [tasks, setTasks] = useState(initTasks);
   const [view, setView] = useState<ViewFilter>("all");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [showAddTask, setShowAddTask] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [busy, setBusy] = useState(false);
@@ -323,15 +326,16 @@ export function TasksClient({
 
   // ─── Filtered Tasks ──────────────────────────
   const filteredTasks = useMemo(() => {
-    const pending = tasks.filter((t) => t.status !== "completed" && t.status !== "skipped");
+    const sourceMatches = (t: Task) => sourceFilter === "all" || (t.source_type || "manual") === sourceFilter;
+    const pending = tasks.filter((t) => t.status !== "completed" && t.status !== "skipped" && sourceMatches(t));
     switch (view) {
       case "today": return pending.filter((t) => t.due_date === today);
       case "upcoming": return pending.filter((t) => t.due_date && t.due_date > today);
       case "overdue": return pending.filter((t) => t.due_date && t.due_date < today);
-      case "completed": return tasks.filter((t) => t.status === "completed").slice(0, 20);
+      case "completed": return tasks.filter((t) => t.status === "completed" && sourceMatches(t)).slice(0, 20);
       default: return pending;
     }
-  }, [tasks, view, today]);
+  }, [tasks, view, today, sourceFilter]);
 
   async function act(promise: Promise<{ success?: boolean; error?: string }>) {
     setBusy(true);
@@ -554,9 +558,23 @@ export function TasksClient({
             </Button>
           ))}
         </div>
-        <Button onClick={() => setShowAddTask(true)} size="sm">
-          <Plus className="h-4 w-4 mr-1" /> Add Task
-        </Button>
+        <div className="flex items-center gap-2">
+          <Select value={sourceFilter} onValueChange={(v) => setSourceFilter(v as SourceFilter)}>
+            <SelectTrigger className="h-8 w-[170px] text-xs">
+              <SelectValue placeholder="Filter source" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All sources</SelectItem>
+              <SelectItem value="meeting_action">Meetings</SelectItem>
+              <SelectItem value="manual">Manual</SelectItem>
+              <SelectItem value="experiment">Experiments</SelectItem>
+              <SelectItem value="cage_change">Cage changes</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={() => setShowAddTask(true)} size="sm">
+            <Plus className="h-4 w-4 mr-1" /> Add Task
+          </Button>
+        </div>
       </div>
 
       {/* ─── Task List ─────────────────────────────────── */}
@@ -609,6 +627,16 @@ export function TasksClient({
                             {SOURCE_ICONS[task.source_type]}
                             {task.source_label || task.source_type}
                           </Badge>
+                        )}
+                        {task.source_type === "meeting_action" && task.source_id && (
+                          <Link
+                            href={`/meetings?meeting=${encodeURIComponent(task.source_id)}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-100"
+                          >
+                            <MessageSquare className="h-3 w-3" />
+                            Open meeting
+                          </Link>
                         )}
                       </div>
                       <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
@@ -721,9 +749,20 @@ export function TasksClient({
                 <Textarea name="notes" defaultValue={editingTask.notes || ""} rows={2} />
               </div>
               {editingTask.source_label && (
-                <div className="text-xs text-muted-foreground flex items-center gap-1">
-                  {SOURCE_ICONS[editingTask.source_type || "manual"]}
-                  Source: {editingTask.source_label}
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1">
+                    {SOURCE_ICONS[editingTask.source_type || "manual"]}
+                    <span>Source: {editingTask.source_label}</span>
+                  </div>
+                  {editingTask.source_type === "meeting_action" && editingTask.source_id && (
+                    <Link
+                      href={`/meetings?meeting=${encodeURIComponent(editingTask.source_id)}`}
+                      className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-100"
+                    >
+                      <MessageSquare className="h-3 w-3" />
+                      Open source meeting
+                    </Link>
+                  )}
                 </div>
               )}
               <DialogFooter>
@@ -737,4 +776,3 @@ export function TasksClient({
     </>
   );
 }
-

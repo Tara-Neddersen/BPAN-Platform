@@ -7,7 +7,12 @@ import {
   deleteMeetingNote,
 } from "../colony/actions";
 
-export default async function MeetingsPage() {
+export default async function MeetingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ meeting?: string }>;
+}) {
+  const params = searchParams ? await searchParams : undefined;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
@@ -17,6 +22,23 @@ export default async function MeetingsPage() {
     .select("*")
     .eq("user_id", user.id)
     .order("meeting_date", { ascending: false });
+
+  const meetingIds = (meetingNotes || []).map((m) => m.id);
+  let linkedTaskCounts: Record<string, number> = {};
+  if (meetingIds.length > 0) {
+    const { data: linkedTasks } = await supabase
+      .from("tasks")
+      .select("source_id")
+      .eq("user_id", user.id)
+      .eq("source_type", "meeting_action")
+      .in("source_id", meetingIds);
+
+    linkedTaskCounts = (linkedTasks || []).reduce<Record<string, number>>((acc, row) => {
+      if (!row.source_id) return acc;
+      acc[row.source_id] = (acc[row.source_id] || 0) + 1;
+      return acc;
+    }, {});
+  }
 
   return (
     <div className="space-y-6">
@@ -29,6 +51,8 @@ export default async function MeetingsPage() {
 
       <MeetingsClient
         meetings={(meetingNotes || []) as MeetingNote[]}
+        initialOpenMeetingId={params?.meeting ?? null}
+        linkedTaskCounts={linkedTaskCounts}
         actions={{
           createMeetingNote,
           updateMeetingNote,
@@ -38,4 +62,3 @@ export default async function MeetingsPage() {
     </div>
   );
 }
-

@@ -87,12 +87,13 @@ export async function syncMeetingActionsToTasks(meetingId: string, meetingTitle:
   // Get existing tasks for this meeting
   const { data: existing } = await supabase
     .from("tasks")
-    .select("id, title, status")
+    .select("id, title, status, due_date, due_time, priority, description, notes, tags")
     .eq("user_id", user.id)
     .eq("source_type", "meeting_action")
     .eq("source_id", meetingId);
 
   const existingTitles = new Set((existing || []).map((t) => t.title.toLowerCase().trim()));
+  const incomingTitles = new Set(actionItems.map((a) => a.text.toLowerCase().trim()).filter(Boolean));
 
   // Create tasks for new action items
   const newTasks = actionItems
@@ -114,21 +115,54 @@ export async function syncMeetingActionsToTasks(meetingId: string, meetingTitle:
     if (error) return { error: error.message };
   }
 
+  // Remove synced tasks whose action items were deleted from the meeting
+  const orphaned = (existing || []).filter((t) => !incomingTitles.has(t.title.toLowerCase().trim()));
+  const safeToDelete = orphaned.filter((t) => {
+    const hasManualDetails = Boolean(t.description?.trim() || t.notes?.trim());
+    const hasCustomTiming = Boolean(t.due_time);
+    const hasCustomPriority = t.priority && t.priority !== "medium";
+    const hasTags = Array.isArray(t.tags) && t.tags.length > 0;
+    const manuallyAdvanced = t.status === "in_progress" || t.status === "skipped";
+    return !(hasManualDetails || hasCustomTiming || hasCustomPriority || hasTags || manuallyAdvanced);
+  });
+  const preserveAsManual = orphaned.filter((t) => !safeToDelete.some((s) => s.id === t.id));
+  const orphanIds = safeToDelete.map((t) => t.id);
+
+  if (orphanIds.length > 0) {
+    const { error } = await supabase
+      .from("tasks")
+      .delete()
+      .eq("user_id", user.id)
+      .in("id", orphanIds);
+    if (error) return { error: error.message };
+  }
+
+  if (preserveAsManual.length > 0) {
+    const { error } = await supabase
+      .from("tasks")
+      .update({
+        source_type: "manual",
+        source_id: null,
+        source_label: "Preserved from meeting sync",
+      })
+      .in("id", preserveAsManual.map((t) => t.id))
+      .eq("user_id", user.id);
+    if (error) return { error: error.message };
+  }
+
   // Update completion status for existing tasks
   for (const a of actionItems) {
     const match = (existing || []).find((t) => t.title.toLowerCase().trim() === a.text.toLowerCase().trim());
     if (match) {
       const newStatus = a.done ? "completed" : "pending";
-      if (match.status !== newStatus) {
-        await supabase.from("tasks").update({
-          status: newStatus,
-          completed_at: a.done ? new Date().toISOString() : null,
-        }).eq("id", match.id);
-      }
+      await supabase.from("tasks").update({
+        status: newStatus,
+        due_date: a.due_date || null,
+        completed_at: a.done ? new Date().toISOString() : null,
+      }).eq("id", match.id);
     }
   }
 
   revalidatePath("/tasks");
-  return { success: true, synced: newTasks.length };
+  return { success: true, synced: newTasks.length, removed: orphanIds.length, preserved: preserveAsManual.length };
 }
-
