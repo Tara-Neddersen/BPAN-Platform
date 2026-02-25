@@ -165,12 +165,11 @@ export async function rebuildWorkspaceBackstageGraph() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Not authenticated");
 
-  const result = await rebuildWorkspaceBackstageIndex(supabase, user.id);
+  await rebuildWorkspaceBackstageIndex(supabase, user.id);
   revalidatePath("/dashboard");
   revalidatePath("/experiments");
   revalidatePath("/results");
   revalidatePath("/tasks");
   revalidatePath("/meetings");
   revalidatePath("/notes");
-  return result;
 }
