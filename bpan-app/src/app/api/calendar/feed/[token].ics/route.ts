@@ -17,8 +17,11 @@ function fmtDate(dateStr: string) {
   return dateStr.replace(/-/g, "");
 }
 
-export async function GET(_: Request, { params }: { params: Promise<{ token: string }> }) {
-  const { token } = await params;
+export async function GET(_: Request, context: { params: Promise<Record<string, string | string[] | undefined>> }) {
+  const params = await context.params;
+  const tokenParam = params.token;
+  const token = Array.isArray(tokenParam) ? tokenParam[0] : tokenParam;
+  if (!token) return new NextResponse("Not found", { status: 404 });
   const supabase = createServiceClient();
 
   const { data: feed } = await supabase
@@ -109,4 +112,3 @@ export async function GET(_: Request, { params }: { params: Promise<{ token: str
     },
   });
 }
-
