@@ -431,7 +431,7 @@ export function AdvisorSidebar() {
                     <div className="rounded-lg border p-3 space-y-2">
                       <p className="text-sm font-medium">Workspace Operator</p>
                       <p className="text-xs text-muted-foreground">
-                        I can create/move/delete workspace calendar events, tasks, and meetings using simple commands.
+                        I can create/move/update/delete workspace calendar events, tasks, and meetings. You can chain multiple commands with “then” or semicolons.
                       </p>
                       <div className="space-y-1">
                         {[
@@ -439,6 +439,8 @@ export function AdvisorSidebar() {
                           "move event EEG review to 2026-03-21",
                           "add task annotate catwalk videos by 2026-03-22",
                           "create meeting PI update on 2026-03-24",
+                          "schedule plasma review on 2026-03-25 then add task prep tubes by 2026-03-24",
+                          "mark event EEG review as completed",
                         ].map((q) => (
                           <button
                             key={q}

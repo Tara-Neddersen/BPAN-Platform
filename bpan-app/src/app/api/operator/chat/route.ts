@@ -49,6 +49,27 @@ export async function POST(req: Request) {
     const message = String(body?.message || "").trim();
     if (!message) return NextResponse.json({ error: "Message is required" }, { status: 400 });
 
+    const multiParts = message
+      .split(/\s*(?:\n+|;\s*|(?:and\s+then)|(?:then))\s*/i)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (multiParts.length > 1) {
+      const responses: string[] = [];
+      let executedAny = false;
+      for (const part of multiParts) {
+        const res = await fetch(new URL("/api/operator/chat", req.url), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", cookie: req.headers.get("cookie") || "" },
+          body: JSON.stringify({ message: part }),
+        });
+        const data = await res.json();
+        const line = data?.response || data?.error || "Operator step failed.";
+        responses.push(`• ${part}\n${line}`);
+        if (data?.executed) executedAny = true;
+      }
+      return NextResponse.json({ response: responses.join("\n\n"), executed: executedAny } as OperatorReply);
+    }
+
     const lower = message.toLowerCase();
 
     // create task: "add task Review X by 2026-03-01"

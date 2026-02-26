@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
+import { getWorkspaceCalendarFeedEvents } from "@/lib/workspace-calendar-feed";
 
 /**
  * Cursor-based pagination: fetch ALL rows from a table using id > lastId.
@@ -166,13 +167,25 @@ export async function GET(
     }
 
     if (canSee.includes("calendar") || canSee.includes("timeline") || canSee.includes("experiments")) {
-      const { data: calendarData } = await supabase
-        .from("workspace_calendar_events")
-        .select("*")
-        .eq("user_id", userId)
-        .order("start_at", { ascending: true })
-        .limit(500);
-      calendarEvents = calendarData || [];
+      const feedEvents = await getWorkspaceCalendarFeedEvents(supabase, userId);
+      calendarEvents = feedEvents.map((ev) => ({
+        id: `${ev.sourceKind}:${ev.sourceId}`,
+        user_id: userId,
+        title: ev.summary,
+        description: ev.description || null,
+        start_at: ev.startAt,
+        end_at: ev.endAt || null,
+        all_day: ev.allDay,
+        status: "scheduled",
+        category: ev.sourceKind,
+        location: ev.location || null,
+        source_type: ev.sourceKind,
+        source_id: ev.sourceId,
+        source_label: ev.summary,
+        metadata: { source_kind: ev.sourceKind },
+        created_at: ev.startAt,
+        updated_at: ev.startAt,
+      }));
     }
 
     // Fetch photos for gallery (always included if they exist)
