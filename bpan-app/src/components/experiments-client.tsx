@@ -728,7 +728,7 @@ function CalendarView({
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                One-way sync for workspace calendar events. Planner/colony events are available via ICS feed below.
+                One-way sync for BPAN calendar feed (workspace events + planner + timepoints + colony schedule) into Google Calendar.
               </p>
               {googleCalendarStatus?.email && (
                 <p className="text-xs text-muted-foreground">Account: {googleCalendarStatus.email}</p>
@@ -767,7 +767,7 @@ function CalendarView({
                   }}
                 >
                   {syncingGoogleCalendar ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
-                  Sync workspace events
+                  Sync BPAN calendar
                 </Button>
                 {googleCalendarStatus?.connected && (
                   <Button
@@ -794,7 +794,7 @@ function CalendarView({
             <div className="rounded-md border bg-background p-3 space-y-2">
               <p className="text-sm font-medium">Apple / Outlook / Google (Subscribe URL)</p>
               <p className="text-xs text-muted-foreground">
-                Subscribe to one live BPAN calendar feed (workspace events + planner + colony schedule).
+                Subscribe to one live BPAN calendar feed in Apple Calendar, Outlook, or Google Calendar.
               </p>
               <div className="flex gap-2">
                 <Input readOnly value={calendarFeed?.icsUrl || ""} className="h-8 text-xs" />
@@ -812,7 +812,7 @@ function CalendarView({
                 </Button>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Use “Add calendar from URL” in Google Calendar, Apple Calendar, or Outlook.
+                Apple/Outlook use this URL for subscription sync. Google also supports subscription, but direct Google sync above gives richer event updates.
               </p>
             </div>
           </div>

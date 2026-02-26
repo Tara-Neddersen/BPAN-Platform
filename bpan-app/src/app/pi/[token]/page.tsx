@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import {
   Loader2, AlertCircle, Mouse, Calendar, Check, Clock,
   FlaskConical, BarChart3, ChevronLeft, ChevronRight, ImageIcon,
-  Table as TableIcon, TrendingUp, ClipboardCheck,
+  Table as TableIcon, TrendingUp, ClipboardCheck, Bot, Send,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1256,6 +1256,9 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
   const [data, setData] = useState<PortalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [piOperatorInput, setPiOperatorInput] = useState("");
+  const [piOperatorSending, setPiOperatorSending] = useState(false);
+  const [piOperatorMessages, setPiOperatorMessages] = useState<Array<{ id: string; role: "user" | "assistant"; content: string }>>([]);
 
   useEffect(() => {
     fetch(`/api/pi/${token}`)
@@ -1376,6 +1379,14 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                 <ClipboardCheck className="h-3.5 w-3.5" /> Tracker
               </TabsTrigger>
             )}
+            {data.can_see.includes("calendar") && (
+              <TabsTrigger value="calendar" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
+                <Calendar className="h-3.5 w-3.5" /> Calendar
+              </TabsTrigger>
+            )}
+            <TabsTrigger value="operator" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
+              <Bot className="h-3.5 w-3.5" /> Operator
+            </TabsTrigger>
             {hasColonyResults && (
               <>
                 <TabsTrigger value="results" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
@@ -1546,6 +1557,138 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
               />
             </TabsContent>
           )}
+
+          {data.can_see.includes("calendar") && (
+            <TabsContent value="calendar" className="mt-4">
+              <Card>
+                <CardHeader className="py-3 px-4">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <Calendar className="h-4 w-4" /> Calendar Feed
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 pb-3">
+                  {upcomingCalendarEvents.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No calendar events visible in this portal.</p>
+                  ) : (
+                    Array.from(upcomingCalendarByDate.entries()).map(([date, items]) => (
+                      <div key={`tab-cal-${date}`} className="space-y-1.5">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{date}</div>
+                        {items.map((ev, i) => (
+                          <div key={`${date}-${ev.id}-${i}`} className="flex items-center justify-between gap-2 text-sm border-b last:border-0 pb-1 last:pb-0">
+                            <div className="flex items-center gap-2 flex-wrap min-w-0">
+                              <span className="font-medium truncate">{ev.title}</span>
+                              <Badge variant="outline" className="text-xs capitalize">{String(ev.category || "event").replace(/_/g, " ")}</Badge>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {ev.status && <Badge variant="secondary" className="text-xs capitalize">{String(ev.status).replace(/_/g, " ")}</Badge>}
+                              <span className="text-xs text-muted-foreground">{ev.all_day ? "All day" : String(ev.start_at).slice(11, 16)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
+          <TabsContent value="operator" className="mt-4">
+            <Card>
+              <CardHeader className="py-3 px-4">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Bot className="h-4 w-4" /> PI Operator (Read-only)
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  Ask read-only questions about this portal’s connected data (calendar, cohorts, animals). This view cannot change data.
+                </p>
+                {piOperatorMessages.length === 0 && (
+                  <div className="rounded-lg border p-3 space-y-1.5">
+                    {["summary", "show upcoming", "what's on 2026-03-20", "cohort BPAN 5"].map((q) => (
+                      <button
+                        key={q}
+                        onClick={() => setPiOperatorInput(q)}
+                        className="block w-full text-left text-xs px-2 py-1.5 rounded border hover:bg-accent"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                  {piOperatorMessages.map((msg) => (
+                    <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-[90%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                        {msg.content}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <textarea
+                    value={piOperatorInput}
+                    onChange={(e) => setPiOperatorInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        if (!piOperatorInput.trim() || piOperatorSending) return;
+                        (async () => {
+                          const msg = piOperatorInput.trim();
+                          setPiOperatorInput("");
+                          setPiOperatorSending(true);
+                          setPiOperatorMessages((prev) => [...prev, { id: `pi-op-u-${Date.now()}`, role: "user", content: msg }]);
+                          try {
+                            const res = await fetch(`/api/pi/${token}/operator`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ message: msg }),
+                            });
+                            const json = await res.json();
+                            setPiOperatorMessages((prev) => [...prev, { id: `pi-op-a-${Date.now()}`, role: "assistant", content: json.response || json.error || "Request failed" }]);
+                          } catch {
+                            setPiOperatorMessages((prev) => [...prev, { id: `pi-op-e-${Date.now()}`, role: "assistant", content: "Request failed" }]);
+                          } finally {
+                            setPiOperatorSending(false);
+                          }
+                        })();
+                      }
+                    }}
+                    placeholder="Ask PI Operator..."
+                    className="flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 min-h-[38px] max-h-[120px]"
+                    rows={1}
+                  />
+                  <Button
+                    size="sm"
+                    disabled={piOperatorSending || !piOperatorInput.trim()}
+                    onClick={async () => {
+                      const msg = piOperatorInput.trim();
+                      if (!msg) return;
+                      setPiOperatorInput("");
+                      setPiOperatorSending(true);
+                      setPiOperatorMessages((prev) => [...prev, { id: `pi-op-u-${Date.now()}`, role: "user", content: msg }]);
+                      try {
+                        const res = await fetch(`/api/pi/${token}/operator`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ message: msg }),
+                        });
+                        const json = await res.json();
+                        setPiOperatorMessages((prev) => [...prev, { id: `pi-op-a-${Date.now()}`, role: "assistant", content: json.response || json.error || "Request failed" }]);
+                      } catch {
+                        setPiOperatorMessages((prev) => [...prev, { id: `pi-op-e-${Date.now()}`, role: "assistant", content: "Request failed" }]);
+                      } finally {
+                        setPiOperatorSending(false);
+                      }
+                    }}
+                  >
+                    {piOperatorSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           {hasColonyResults && (
             <>

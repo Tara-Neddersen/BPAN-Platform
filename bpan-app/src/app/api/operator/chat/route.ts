@@ -72,6 +72,73 @@ export async function POST(req: Request) {
 
     const lower = message.toLowerCase();
 
+    if (/^(summary|workspace summary|status summary)$/i.test(lower)) {
+      const today = new Date().toISOString().slice(0, 10);
+      const [taskCounts, eventCount, meetingCount, upcomingColony] = await Promise.all([
+        supabase.from("tasks").select("id,status").eq("user_id", user.id),
+        supabase.from("workspace_calendar_events").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+        supabase.from("meeting_notes").select("id", { count: "exact", head: true }).eq("user_id", user.id),
+        supabase
+          .from("animal_experiments")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .gte("scheduled_date", today)
+          .in("status", ["scheduled", "in_progress"]),
+      ]);
+      const tasks = taskCounts.data || [];
+      const pending = tasks.filter((t) => t.status === "pending").length;
+      const inProgress = tasks.filter((t) => t.status === "in_progress").length;
+      const completed = tasks.filter((t) => t.status === "completed").length;
+      return NextResponse.json({
+        response:
+          "Workspace summary:\n" +
+          `• Tasks — pending: ${pending}, in progress: ${inProgress}, completed: ${completed}\n` +
+          `• Workspace calendar events: ${eventCount.count ?? 0}\n` +
+          `• Meetings logged: ${meetingCount.count ?? 0}\n` +
+          `• Upcoming colony experiments: ${upcomingColony.count ?? 0}`,
+      } as OperatorReply);
+    }
+
+    if (/overdue tasks?/i.test(lower)) {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: overdue } = await supabase
+        .from("tasks")
+        .select("title,status,due_date")
+        .eq("user_id", user.id)
+        .lt("due_date", today)
+        .not("status", "eq", "completed")
+        .order("due_date", { ascending: true })
+        .limit(20);
+      return NextResponse.json({
+        response: overdue && overdue.length
+          ? "Overdue tasks:\n" + overdue.map((t) => `• ${t.due_date || "No date"} — ${t.title} (${t.status})`).join("\n")
+          : "No overdue tasks found.",
+      } as OperatorReply);
+    }
+
+    if (/this week|next 7 days|coming week/i.test(lower)) {
+      const start = new Date();
+      const end = new Date(start);
+      end.setDate(end.getDate() + 7);
+      const s = start.toISOString().slice(0, 10);
+      const e = end.toISOString().slice(0, 10);
+      const [{ data: events }, { data: tasks }, { data: colony }] = await Promise.all([
+        supabase.from("workspace_calendar_events").select("title,start_at,status").eq("user_id", user.id).gte("start_at", `${s}T00:00:00.000Z`).lt("start_at", `${e}T23:59:59.999Z`).order("start_at").limit(20),
+        supabase.from("tasks").select("title,due_date,status").eq("user_id", user.id).gte("due_date", s).lte("due_date", e).order("due_date").limit(20),
+        supabase.from("animal_experiments").select("experiment_type,scheduled_date,status,animals(identifier)", { count: "exact" }).eq("user_id", user.id).gte("scheduled_date", s).lte("scheduled_date", e).order("scheduled_date").limit(20),
+      ]);
+      const lines: string[] = [];
+      for (const ev of events || []) lines.push(`• Event ${String(ev.start_at).slice(0, 10)} — ${ev.title} (${ev.status || "scheduled"})`);
+      for (const t of tasks || []) lines.push(`• Task due ${t.due_date} — ${t.title} (${t.status})`);
+      for (const c of colony || []) {
+        const animal = (c.animals as { identifier?: string } | null)?.identifier || "?";
+        lines.push(`• Colony ${c.scheduled_date} — ${String(c.experiment_type).replace(/_/g, " ")} (#${animal}, ${c.status})`);
+      }
+      return NextResponse.json({
+        response: lines.length ? `Next 7 days:\n${lines.join("\n")}` : "No events/tasks/colony experiments found in the next 7 days.",
+      } as OperatorReply);
+    }
+
     // create task: "add task Review X by 2026-03-01"
     if (lower.startsWith("add task ") || lower.startsWith("create task ")) {
       const title = message.replace(/^(add|create)\s+task\s+/i, "").trim();
