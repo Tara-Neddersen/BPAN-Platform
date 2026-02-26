@@ -119,15 +119,90 @@ export async function createCohort(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const { error } = await supabase.from("cohorts").insert({
+  const birthDate = formData.get("birth_date") as string;
+  const cohortName = formData.get("name") as string;
+  const litterSizeRaw = formData.get("litter_size") as string | null;
+
+  const { data: cohort, error } = await supabase.from("cohorts").insert({
     user_id: user.id,
     breeder_cage_id: (formData.get("breeder_cage_id") as string) || null,
-    name: formData.get("name") as string,
-    birth_date: formData.get("birth_date") as string,
-    litter_size: formData.get("litter_size") ? parseInt(formData.get("litter_size") as string) : null,
+    name: cohortName,
+    birth_date: birthDate,
+    litter_size: litterSizeRaw ? parseInt(litterSizeRaw) : null,
     notes: (formData.get("notes") as string) || null,
-  });
+  }).select("id, name, birth_date").single();
   if (error) return { error: error.message };
+
+  // Auto-create litter follow-up reminders (default on) so you can enter minimal info now and fill details later.
+  const createFollowups = formData.get("create_followup_tasks") === "true";
+  if (createFollowups && cohort?.birth_date) {
+    const birth = new Date(cohort.birth_date);
+    if (!Number.isNaN(birth.getTime())) {
+      const addDays = (d: Date, days: number) => {
+        const next = new Date(d);
+        next.setDate(next.getDate() + days);
+        return next.toISOString().split("T")[0];
+      };
+      const day21 = addDays(birth, 21);
+      const day30 = addDays(birth, 30);
+      const day35 = addDays(birth, 35);
+
+      const sourceLabel = `Cohort follow-up: ${cohort.name}`;
+      const followupTasks = [
+        {
+          user_id: user.id,
+          title: `Cohort details check-in (${cohort.name})`,
+          description: "Enter/confirm pup count, sex breakdown, weaning status, and any notes once pups are old enough.",
+          due_date: day21,
+          priority: "high" as const,
+          status: "pending" as const,
+          source_type: "cohort_followup" as const,
+          source_id: cohort.id,
+          source_label: sourceLabel,
+          tags: ["colony", "cohort", "weaning"],
+        },
+        {
+          user_id: user.id,
+          title: `Genotyping follow-up (${cohort.name})`,
+          description: `Genotyping usually lands around day 30–35. Start checking at day 30 and finalize genotype entry by day 35 (${day35}).`,
+          due_date: day30,
+          priority: "high" as const,
+          status: "pending" as const,
+          source_type: "cohort_followup" as const,
+          source_id: cohort.id,
+          source_label: sourceLabel,
+          tags: ["colony", "cohort", "genotyping"],
+        },
+      ];
+      await supabase.from("tasks").insert(followupTasks);
+
+      // Add calendar reminders too when the workspace calendar table exists.
+      await supabase.from("workspace_calendar_events").insert([
+        {
+          user_id: user.id,
+          title: `Cohort details check-in (${cohort.name})`,
+          category: "colony",
+          status: "planned",
+          start_at: `${day21}T09:00:00`,
+          end_at: `${day21}T09:30:00`,
+          source_type: "cohort",
+          source_id: cohort.id,
+          source_label: cohort.name,
+        },
+        {
+          user_id: user.id,
+          title: `Genotyping follow-up (${cohort.name})`,
+          category: "colony",
+          status: "planned",
+          start_at: `${day30}T09:00:00`,
+          end_at: `${day30}T09:30:00`,
+          source_type: "cohort",
+          source_id: cohort.id,
+          source_label: cohort.name,
+        },
+      ]);
+    }
+  }
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };

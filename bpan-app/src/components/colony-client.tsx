@@ -1751,6 +1751,26 @@ export function ColonyClient({
               <Label className="text-xs">Notes</Label>
               <Textarea name="notes" placeholder="Optional" rows={2} defaultValue={editingCohort?.notes || ""} />
             </div>
+            {!editingCohort && (
+              <div className="rounded-md border border-slate-200 bg-slate-50/70 p-3">
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input type="hidden" name="create_followup_tasks" value="false" />
+                  <input
+                    type="checkbox"
+                    name="create_followup_tasks"
+                    value="true"
+                    defaultChecked
+                    className="mt-0.5 h-4 w-4"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Create follow-up reminders automatically from DOB:
+                    <span className="block mt-1">
+                      Day 21 for pup count/sex/weaning details, and Day 30 (30–35d window) for genotyping follow-up.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
             <DialogFooter>
               <Button variant="outline" type="button" onClick={() => { setShowAddCohort(false); setEditingCohort(null); }}>Cancel</Button>
               <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}{editingCohort ? "Save Changes" : "Add Cohort"}</Button>
