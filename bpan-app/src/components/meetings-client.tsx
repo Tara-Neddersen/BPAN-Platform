@@ -746,6 +746,28 @@ export function MeetingsClient({
                 if (result.error) {
                   toast.error(result.error);
                 } else {
+                  const nextContent = (fd.get("content") as string) ?? editingMeeting.content ?? "";
+                  const nextAiSummary = (fd.get("ai_summary") as string) ?? editingMeeting.ai_summary ?? "";
+                  let nextActionItems = editingMeeting.action_items || [];
+                  try {
+                    const raw = fd.get("action_items") as string | null;
+                    if (raw) nextActionItems = JSON.parse(raw) as ActionItem[];
+                  } catch {
+                    // keep existing if parsing fails
+                  }
+                  setMeetings((prev) =>
+                    prev.map((m) =>
+                      m.id === editingMeeting.id
+                        ? {
+                            ...m,
+                            content: nextContent,
+                            ai_summary: nextAiSummary,
+                            action_items: nextActionItems,
+                            updated_at: new Date().toISOString(),
+                          }
+                        : m
+                    )
+                  );
                   toast.success("Saved!");
                   // Auto-sync action items to Tasks
                   try {
