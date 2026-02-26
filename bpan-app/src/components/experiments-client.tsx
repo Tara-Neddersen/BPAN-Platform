@@ -383,6 +383,10 @@ function CalendarView({
   const [manualEventCategory, setManualEventCategory] = useState("general");
   const [manualEventDescription, setManualEventDescription] = useState("");
   const [manualEventSaving, setManualEventSaving] = useState(false);
+  const [calendarIntegrationsOpen, setCalendarIntegrationsOpen] = useState(false);
+  const [googleCalendarStatus, setGoogleCalendarStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null } | null>(null);
+  const [calendarFeed, setCalendarFeed] = useState<{ icsUrl: string } | null>(null);
+  const [syncingGoogleCalendar, setSyncingGoogleCalendar] = useState(false);
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
@@ -620,6 +624,21 @@ function CalendarView({
     }
   }, [manualEventTitle, manualEventCategory, manualEventDescription, router]);
 
+  const loadCalendarIntegrations = useCallback(async () => {
+    try {
+      const [gRes, feedRes] = await Promise.all([
+        fetch("/api/calendar/google/status"),
+        fetch("/api/calendar/feed/status"),
+      ]);
+      const g = await gRes.json();
+      const feed = await feedRes.json();
+      setGoogleCalendarStatus(g);
+      if (feed?.icsUrl) setCalendarFeed({ icsUrl: feed.icsUrl });
+    } catch {
+      toast.error("Failed to load calendar integrations");
+    }
+  }, []);
+
   return (
     <div className="space-y-4">
       {/* Month navigation + colony toggle */}
@@ -649,6 +668,18 @@ function CalendarView({
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            onClick={() => {
+              const next = !calendarIntegrationsOpen;
+              setCalendarIntegrationsOpen(next);
+              if (next) void loadCalendarIntegrations();
+            }}
+          >
+            Calendar Integrations
+          </Button>
           {/* Colony experiment toggle */}
           <label className="flex items-center gap-1.5 text-xs cursor-pointer">
             <input
@@ -675,6 +706,108 @@ function CalendarView({
           )}
         </div>
       </div>
+
+      {calendarIntegrationsOpen && (
+        <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-md border bg-background p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium">Google Calendar</p>
+                <Badge variant={googleCalendarStatus?.connected ? "default" : "secondary"} className="text-[10px]">
+                  {googleCalendarStatus?.connected ? "Connected" : "Not connected"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                One-way sync for workspace calendar events. Planner/colony events are available via ICS feed below.
+              </p>
+              {googleCalendarStatus?.email && (
+                <p className="text-xs text-muted-foreground">Account: {googleCalendarStatus.email}</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                  onClick={async () => {
+                    const res = await fetch("/api/calendar/google/auth");
+                    const data = await res.json();
+                    if (!res.ok || !data.url) {
+                      toast.error(data.error || "Google Calendar auth not available");
+                      return;
+                    }
+                    window.location.href = data.url;
+                  }}
+                >
+                  {googleCalendarStatus?.connected ? "Reconnect Google" : "Connect Google"}
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-8 text-xs"
+                  disabled={syncingGoogleCalendar || !googleCalendarStatus?.connected}
+                  onClick={async () => {
+                    setSyncingGoogleCalendar(true);
+                    try {
+                      const res = await fetch("/api/calendar/google/sync", { method: "POST" });
+                      const data = await res.json();
+                      if (!res.ok) toast.error(data.error || "Sync failed");
+                      else toast.success(`Synced ${data.synced || 0} workspace event${(data.synced || 0) === 1 ? "" : "s"} to Google Calendar`);
+                    } finally {
+                      setSyncingGoogleCalendar(false);
+                    }
+                  }}
+                >
+                  {syncingGoogleCalendar ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
+                  Sync workspace events
+                </Button>
+                {googleCalendarStatus?.connected && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 text-xs text-destructive"
+                    onClick={async () => {
+                      const res = await fetch("/api/calendar/google/disconnect", { method: "POST" });
+                      if (res.ok) {
+                        toast.success("Google Calendar disconnected");
+                        await loadCalendarIntegrations();
+                      } else {
+                        const data = await res.json();
+                        toast.error(data.error || "Disconnect failed");
+                      }
+                    }}
+                  >
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-md border bg-background p-3 space-y-2">
+              <p className="text-sm font-medium">Apple / Outlook / Google (Subscribe URL)</p>
+              <p className="text-xs text-muted-foreground">
+                Subscribe to one live BPAN calendar feed (workspace events + planner + colony schedule).
+              </p>
+              <div className="flex gap-2">
+                <Input readOnly value={calendarFeed?.icsUrl || ""} className="h-8 text-xs" />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                  onClick={async () => {
+                    if (!calendarFeed?.icsUrl) return;
+                    await navigator.clipboard.writeText(calendarFeed.icsUrl);
+                    toast.success("ICS URL copied");
+                  }}
+                >
+                  Copy
+                </Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Use “Add calendar from URL” in Google Calendar, Apple Calendar, or Outlook.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* This-month colony summary */}
       {showColonyExps && (scheduledThisMonth + inProgressThisMonth) > 0 && (

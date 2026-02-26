@@ -26,7 +26,7 @@ import type { ProactiveSuggestion } from "@/lib/advisor";
 
 // ─── Sub-views ───────────────────────────────────────────────────────────────
 
-type SidebarView = "chat" | "conversations" | "suggestions" | "hypotheses" | "context";
+type SidebarView = "chat" | "operator" | "conversations" | "suggestions" | "hypotheses" | "context";
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
@@ -40,6 +40,9 @@ export function AdvisorSidebar() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [operatorMessages, setOperatorMessages] = useState<Array<{ id: string; role: "user" | "assistant"; content: string }>>([]);
+  const [operatorInput, setOperatorInput] = useState("");
+  const [operatorSending, setOperatorSending] = useState(false);
 
   // Conversations list
   const [conversations, setConversations] = useState<AdvisorConversation[]>([]);
@@ -264,6 +267,7 @@ export function AdvisorSidebar() {
           <div className="flex border-b">
             {[
               { key: "chat" as const, label: "Chat", icon: <Bot className="h-3.5 w-3.5" /> },
+              { key: "operator" as const, label: "Operator", icon: <Check className="h-3.5 w-3.5" /> },
               { key: "conversations" as const, label: "History", icon: <ChevronLeft className="h-3.5 w-3.5" /> },
               { key: "suggestions" as const, label: "Ideas", icon: <Lightbulb className="h-3.5 w-3.5" /> },
               { key: "hypotheses" as const, label: "Hypotheses", icon: <FlaskConical className="h-3.5 w-3.5" /> },
@@ -413,6 +417,113 @@ export function AdvisorSidebar() {
                       ) : (
                         <Send className="h-4 w-4" />
                       )}
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* ─── OPERATOR VIEW ─── */}
+            {view === "operator" && (
+              <>
+                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+                  {operatorMessages.length === 0 && (
+                    <div className="rounded-lg border p-3 space-y-2">
+                      <p className="text-sm font-medium">Workspace Operator</p>
+                      <p className="text-xs text-muted-foreground">
+                        I can create/move/delete workspace calendar events, tasks, and meetings using simple commands.
+                      </p>
+                      <div className="space-y-1">
+                        {[
+                          "schedule EEG review block on 2026-03-20",
+                          "move event EEG review to 2026-03-21",
+                          "add task annotate catwalk videos by 2026-03-22",
+                          "create meeting PI update on 2026-03-24",
+                        ].map((q) => (
+                          <button
+                            key={q}
+                            onClick={() => setOperatorInput(q)}
+                            className="w-full text-left text-xs px-2 py-1.5 rounded border hover:bg-accent"
+                          >
+                            {q}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {operatorMessages.map((msg) => (
+                    <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-[90%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                        {msg.content}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="border-t px-4 py-3">
+                  <div className="flex gap-2">
+                    <textarea
+                      value={operatorInput}
+                      onChange={(e) => setOperatorInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          if (operatorSending || !operatorInput.trim()) return;
+                          (async () => {
+                            const msg = operatorInput.trim();
+                            setOperatorInput("");
+                            setOperatorSending(true);
+                            const userMsg = { id: `op-u-${Date.now()}`, role: "user" as const, content: msg };
+                            setOperatorMessages((prev) => [...prev, userMsg]);
+                            try {
+                              const res = await fetch("/api/operator/chat", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ message: msg }),
+                              });
+                              const data = await res.json();
+                              setOperatorMessages((prev) => [
+                                ...prev,
+                                { id: `op-a-${Date.now()}`, role: "assistant", content: data.response || data.error || "Operator request failed." },
+                              ]);
+                            } catch {
+                              setOperatorMessages((prev) => [...prev, { id: `op-e-${Date.now()}`, role: "assistant", content: "Operator request failed." }]);
+                            } finally {
+                              setOperatorSending(false);
+                            }
+                          })();
+                        }
+                      }}
+                      placeholder="Ask Operator to do something..."
+                      className="flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 min-h-[38px] max-h-[120px]"
+                      rows={1}
+                    />
+                    <Button
+                      size="sm"
+                      className="self-end"
+                      disabled={operatorSending || !operatorInput.trim()}
+                      onClick={async () => {
+                        const msg = operatorInput.trim();
+                        if (!msg) return;
+                        setOperatorInput("");
+                        setOperatorSending(true);
+                        setOperatorMessages((prev) => [...prev, { id: `op-u-${Date.now()}`, role: "user", content: msg }]);
+                        try {
+                          const res = await fetch("/api/operator/chat", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ message: msg }),
+                          });
+                          const data = await res.json();
+                          setOperatorMessages((prev) => [...prev, { id: `op-a-${Date.now()}`, role: "assistant", content: data.response || data.error || "Operator request failed." }]);
+                        } catch {
+                          setOperatorMessages((prev) => [...prev, { id: `op-e-${Date.now()}`, role: "assistant", content: "Operator request failed." }]);
+                        } finally {
+                          setOperatorSending(false);
+                        }
+                      }}
+                    >
+                      {operatorSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                     </Button>
                   </div>
                 </div>
@@ -1122,4 +1233,3 @@ function ResearchContextView() {
     </div>
   );
 }
-
