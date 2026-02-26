@@ -50,7 +50,29 @@ export async function POST(
       const feed = await getWorkspaceCalendarFeedEvents(supabase, userId);
       const items = feed.filter((e) => String(e.startAt).slice(0, 10) === date).slice(0, 25);
       if (items.length === 0) {
-        return NextResponse.json({ response: `No calendar events found on ${date}.` });
+        const { data: colonyRows } = await supabase
+          .from("animal_experiments")
+          .select("experiment_type,status,timepoint_age_days,animals(identifier),cohorts(name)")
+          .eq("user_id", userId)
+          .eq("scheduled_date", date)
+          .order("experiment_type");
+
+        if (!colonyRows || colonyRows.length === 0) {
+          return NextResponse.json({ response: `No calendar events found on ${date}.` });
+        }
+
+        const colonyLines = colonyRows.slice(0, 30).map((r) => {
+          const animalRel = r.animals as { identifier?: string } | null;
+          const cohortRel = r.cohorts as { name?: string } | null;
+          const animal = animalRel?.identifier || "?";
+          const cohort = cohortRel?.name ? ` · ${String(cohortRel.name)}` : "";
+          const tp = r.timepoint_age_days != null ? ` @ ${String(r.timepoint_age_days)}d` : "";
+          return `• [Colony] ${String(r.experiment_type).replace(/_/g, " ")} · #${animal}${tp}${cohort} (${String(r.status || "scheduled")})`;
+        });
+
+        return NextResponse.json({
+          response: `PI calendar on ${fmtDateLabel(date)}:\n${colonyLines.join("\n")}`,
+        });
       }
       return NextResponse.json({
         response: `PI calendar on ${fmtDateLabel(date)}:\n` + items.map((e) => `• ${e.summary}${e.allDay ? " (all day)" : ` (${String(e.startAt).slice(11, 16)})`}`).join("\n"),
