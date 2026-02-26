@@ -27,6 +27,13 @@ import type { ProactiveSuggestion } from "@/lib/advisor";
 // ─── Sub-views ───────────────────────────────────────────────────────────────
 
 type SidebarView = "chat" | "operator" | "conversations" | "suggestions" | "hypotheses" | "context";
+type OperatorHistoryItem = {
+  id: string;
+  kind: "plan" | "run";
+  text: string;
+  createdAt: string;
+  meta?: string;
+};
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
@@ -52,6 +59,7 @@ export function AdvisorSidebar() {
     hasDestructive: boolean;
     steps: Array<{ step: string; kind: string; action: string; destructive: boolean; supported: boolean; note?: string }>;
   } | null>(null);
+  const [operatorHistory, setOperatorHistory] = useState<OperatorHistoryItem[]>([]);
 
   // Conversations list
   const [conversations, setConversations] = useState<AdvisorConversation[]>([]);
@@ -213,6 +221,25 @@ export function AdvisorSidebar() {
     }
   }, [open, view, loadConversations]);
 
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("bpan_operator_history_v1");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as OperatorHistoryItem[];
+      if (Array.isArray(parsed)) setOperatorHistory(parsed.slice(0, 20));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("bpan_operator_history_v1", JSON.stringify(operatorHistory.slice(0, 20)));
+    } catch {
+      // ignore
+    }
+  }, [operatorHistory]);
+
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   const runOperatorMessage = useCallback(async (msg: string) => {
@@ -227,6 +254,16 @@ export function AdvisorSidebar() {
       });
       const data = await res.json();
       setOperatorMessages((prev) => [...prev, { id: `op-a-${Date.now()}`, role: "assistant", content: data.response || data.error || "Operator request failed." }]);
+      setOperatorHistory((prev) => [
+        {
+          id: `opr-${Date.now()}`,
+          kind: "run" as const,
+          text: msg,
+          createdAt: new Date().toISOString(),
+          meta: data.executed ? "Executed" : "Response only",
+        },
+        ...prev,
+      ].slice(0, 20));
     } catch {
       setOperatorMessages((prev) => [...prev, { id: `op-e-${Date.now()}`, role: "assistant", content: "Operator request failed." }]);
     } finally {
@@ -482,6 +519,44 @@ export function AdvisorSidebar() {
                     </div>
                   )}
 
+                  {operatorHistory.length > 0 && (
+                    <div className="rounded-lg border p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium">Recent Operator Plans & Runs</p>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2 text-[10px]"
+                          onClick={() => setOperatorHistory([])}
+                        >
+                          Clear
+                        </Button>
+                      </div>
+                      <div className="space-y-1.5">
+                        {operatorHistory.slice(0, 6).map((item) => (
+                          <div key={item.id} className="rounded-md border bg-background px-2 py-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-medium truncate">{item.text}</p>
+                                <p className="text-[10px] text-muted-foreground">
+                                  {item.kind === "plan" ? "Plan" : "Run"} · {item.meta || ""} · {new Date(item.createdAt).toLocaleString()}
+                                </p>
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[10px]"
+                                onClick={() => setOperatorInput(item.text)}
+                              >
+                                Reuse
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {operatorMessages.map((msg) => (
                     <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                       <div className={`max-w-[90%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
@@ -578,6 +653,16 @@ export function AdvisorSidebar() {
                             return;
                           }
                           setOperatorPlan(data.plan);
+                          setOperatorHistory((prev) => [
+                            {
+                              id: `opp-${Date.now()}`,
+                              kind: "plan" as const,
+                              text: msg,
+                              createdAt: new Date().toISOString(),
+                              meta: `${data.plan.supportedSteps}/${data.plan.totalSteps} supported`,
+                            },
+                            ...prev,
+                          ].slice(0, 20));
                         } catch {
                           setOperatorMessages((prev) => [...prev, { id: `op-plan-e-${Date.now()}`, role: "assistant", content: "Failed to generate plan." }]);
                         } finally {
