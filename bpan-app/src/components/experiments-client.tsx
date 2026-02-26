@@ -514,13 +514,21 @@ function CalendarView({
     return workspaceCalendarEvents.filter((ev) => String(ev.start_at).slice(0, 10) === dateStr);
   }
 
+  function ageOnDateDays(birthDate: string | null | undefined, dateStr: string) {
+    if (!birthDate) return null;
+    const birth = new Date(`${birthDate}T12:00:00`);
+    const target = new Date(`${dateStr}T12:00:00`);
+    if (Number.isNaN(birth.getTime()) || Number.isNaN(target.getTime())) return null;
+    return Math.floor((target.getTime() - birth.getTime()) / (24 * 60 * 60 * 1000));
+  }
+
   // Group colony experiments by date → experiment_type → list of animals
   function getColonyExpsForDay(day: number) {
     const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     const dayExps = filteredColonyExps.filter(ae => ae.scheduled_date === dateStr);
 
     // Group by experiment_type + status
-    const groups = new Map<string, { type: string; status: string; isVirtual?: boolean; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string }[] }>();
+    const groups = new Map<string, { type: string; status: string; isVirtual?: boolean; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string; ageAtEventDays: number | null }[] }>();
     for (const ae of dayExps) {
       const key = `${ae.experiment_type}::${ae.status}`;
       if (!groups.has(key)) {
@@ -539,6 +547,7 @@ function CalendarView({
         identifier: animal?.identifier || "?",
         cohortName: cohort?.name || "",
         tpName: tp?.name || `${ae.timepoint_age_days}d`,
+        ageAtEventDays: ageOnDateDays(animal?.birth_date, dateStr),
       });
     }
 
@@ -565,6 +574,7 @@ function CalendarView({
             identifier: animal?.identifier || "?",
             cohortName: cohort?.name || "",
             tpName: tp?.name || `${ae.timepoint_age_days}d`,
+            ageAtEventDays: ageOnDateDays(animal?.birth_date, dateStr),
           };
         }),
       });
@@ -1198,7 +1208,7 @@ function CalendarView({
                             <span
                               key={a.id}
                               className="inline-flex items-center gap-1 text-[10px] bg-white/60 dark:bg-black/20 rounded px-1.5 py-0.5 hover:ring-1 hover:ring-primary/50"
-                              title={`Drag to reschedule · ${a.cohortName} #${a.identifier} (${a.tpName})`}
+                              title={`Drag to reschedule · ${a.cohortName} #${a.identifier} (${a.tpName})${a.ageAtEventDays != null ? ` · age ${a.ageAtEventDays}d` : ""}`}
                               draggable={g.type !== "rotarod_recovery"}
                               onDragStart={(e) => {
                                 if (g.type === "rotarod_recovery") return;
@@ -1210,6 +1220,7 @@ function CalendarView({
                               {g.type !== "rotarod_recovery" && <GripVertical className="h-2.5 w-2.5 opacity-40 mr-0.5 flex-shrink-0" />}
                               {a.cohortName && <span className="font-medium mr-0.5">{a.cohortName.replace("BPAN ", "B")}</span>}
                               #{a.identifier}
+                              {a.ageAtEventDays != null && <span className="opacity-80">· {a.ageAtEventDays}d old</span>}
                               <span className="ml-1 opacity-60">{a.tpName}</span>
                               {g.type !== "rotarod_recovery" && (
                                 <select
