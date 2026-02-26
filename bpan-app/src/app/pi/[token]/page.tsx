@@ -144,7 +144,7 @@ function PhotoGallery({ photos }: { photos: PortalPhoto[] }) {
         </CardTitle>
       </CardHeader>
       <div className="relative">
-        <div className="aspect-video bg-black flex items-center justify-center overflow-hidden">
+        <div className="aspect-[16/7] max-h-[320px] bg-black flex items-center justify-center overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={displayUrl}
@@ -157,14 +157,14 @@ function PhotoGallery({ photos }: { photos: PortalPhoto[] }) {
           <>
             <Button
               variant="ghost" size="sm"
-              className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white h-8 w-8 p-0 rounded-full"
+              className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white h-7 w-7 p-0 rounded-full"
               onClick={prev}
             >
               <ChevronLeft className="h-5 w-5" />
             </Button>
             <Button
               variant="ghost" size="sm"
-              className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white h-8 w-8 p-0 rounded-full"
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white h-7 w-7 p-0 rounded-full"
               onClick={next}
             >
               <ChevronRight className="h-5 w-5" />
@@ -172,8 +172,8 @@ function PhotoGallery({ photos }: { photos: PortalPhoto[] }) {
           </>
         )}
         {(photo.caption || photo.experiment_type) && (
-          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-4 pt-8">
-            <p className="text-white text-sm font-medium">{photo.caption || ""}</p>
+          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-3 pt-6">
+            <p className="text-white text-xs sm:text-sm font-medium">{photo.caption || ""}</p>
             <div className="flex items-center gap-2 mt-1">
               {photo.experiment_type && (
                 <Badge className="bg-white/20 text-white border-0 text-xs" variant="secondary">
@@ -188,7 +188,7 @@ function PhotoGallery({ photos }: { photos: PortalPhoto[] }) {
         )}
       </div>
       {photos.length > 1 && (
-        <div className="flex justify-center gap-1.5 py-2">
+        <div className="flex justify-center gap-1.5 py-1.5">
           {photos.map((_, idx) => (
             <button
               key={idx}
@@ -1286,6 +1286,13 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
     .filter((e) => e.status === "scheduled" && e.scheduled_date)
     .sort((a, b) => (a.scheduled_date || "").localeCompare(b.scheduled_date || ""))
     .slice(0, 15);
+  const cohortNameById = new Map(data.cohorts.map((c) => [c.id, c.name]));
+  const upcomingByDate = upcoming.reduce((acc, exp) => {
+    const dateKey = exp.scheduled_date || "Unscheduled";
+    if (!acc.has(dateKey)) acc.set(dateKey, []);
+    acc.get(dateKey)!.push(exp);
+    return acc;
+  }, new Map<string, typeof upcoming>());
 
   const hasColonyResults = data.can_see.includes("colony_results") && data.colony_results.length > 0;
 
@@ -1431,15 +1438,24 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                     <Calendar className="h-4 w-4" /> Upcoming Experiments
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-1.5 pb-3">
-                  {upcoming.map((exp, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{exp.animal_identifier}</span>
-                        <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
-                        {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
+                <CardContent className="space-y-3 pb-3">
+                  {Array.from(upcomingByDate.entries()).map(([date, items]) => (
+                    <div key={date} className="space-y-1.5">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        {date}
                       </div>
-                      <span className="text-xs text-muted-foreground">{exp.scheduled_date}</span>
+                      {items.map((exp, i) => (
+                        <div key={`${date}-${i}`} className="flex items-center justify-between text-sm">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium">{exp.animal_identifier}</span>
+                            {exp.cohort_id && (
+                              <Badge variant="outline" className="text-xs">{cohortNameById.get(exp.cohort_id) || "Unknown cohort"}</Badge>
+                            )}
+                            <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
+                            {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </CardContent>
@@ -1520,15 +1536,24 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                   <Calendar className="h-4 w-4" /> Upcoming Experiments
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-1.5 pb-3">
-                {upcoming.map((exp, i) => (
-                  <div key={i} className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{exp.animal_identifier}</span>
-                      <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
-                      {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
+              <CardContent className="space-y-3 pb-3">
+                {Array.from(upcomingByDate.entries()).map(([date, items]) => (
+                  <div key={date} className="space-y-1.5">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {date}
                     </div>
-                    <span className="text-xs text-muted-foreground">{exp.scheduled_date}</span>
+                    {items.map((exp, i) => (
+                      <div key={`${date}-${i}`} className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium">{exp.animal_identifier}</span>
+                          {exp.cohort_id && (
+                            <Badge variant="outline" className="text-xs">{cohortNameById.get(exp.cohort_id) || "Unknown cohort"}</Badge>
+                          )}
+                          <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
+                          {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ))}
               </CardContent>
