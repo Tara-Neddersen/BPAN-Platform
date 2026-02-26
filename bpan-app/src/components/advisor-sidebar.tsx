@@ -40,9 +40,15 @@ type OperatorJob = {
   description?: string;
   command: string;
   status: "queued" | "paused";
+  autoRun?: boolean;
+  intervalHours?: number | null;
+  nextRunAt?: string | null;
+  maxRetries?: number;
+  consecutiveFailures?: number;
   runCount?: number;
   lastRunAt?: string | null;
   lastResult?: string | null;
+  lastError?: string | null;
   createdAt: string;
 };
 
@@ -74,6 +80,7 @@ export function AdvisorSidebar() {
   const [operatorJobs, setOperatorJobs] = useState<OperatorJob[]>([]);
   const [operatorJobsLoading, setOperatorJobsLoading] = useState(false);
   const [operatorJobRunningId, setOperatorJobRunningId] = useState<string | null>(null);
+  const [operatorRunDueLoading, setOperatorRunDueLoading] = useState(false);
 
   // Conversations list
   const [conversations, setConversations] = useState<AdvisorConversation[]>([]);
@@ -685,6 +692,11 @@ export function AdvisorSidebar() {
                           onClick={async () => {
                             const name = window.prompt("Save as Operator job (name):", "Operator Job");
                             if (!name) return;
+                            const intervalRaw = window.prompt("Auto-run every N hours? (optional, leave blank for manual)", "");
+                            const intervalHours =
+                              intervalRaw && intervalRaw.trim()
+                                ? Number(intervalRaw.trim())
+                                : null;
                             const res = await fetch("/api/operator/jobs", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
@@ -693,6 +705,10 @@ export function AdvisorSidebar() {
                                 description: `Saved from Operator plan (${operatorPlan.supportedSteps}/${operatorPlan.totalSteps} supported)`,
                                 command: operatorPlan.original,
                                 status: "queued",
+                                intervalHours:
+                                  intervalHours && Number.isFinite(intervalHours) && intervalHours > 0
+                                    ? Math.max(1, Math.round(intervalHours))
+                                    : null,
                               }),
                             });
                             const data = await res.json();
@@ -721,6 +737,31 @@ export function AdvisorSidebar() {
                         disabled={operatorJobsLoading}
                       >
                         {operatorJobsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Refresh"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[10px]"
+                        disabled={operatorRunDueLoading}
+                        onClick={async () => {
+                          setOperatorRunDueLoading(true);
+                          try {
+                            const res = await fetch("/api/operator/jobs/run-due", { method: "POST" });
+                            const data = await res.json();
+                            const summary = res.ok
+                              ? `Ran due jobs: ${data.ran ?? 0} succeeded, ${data.failed ?? 0} failed (${data.due ?? 0} due).`
+                              : data.error || "Failed to run due jobs.";
+                            setOperatorMessages((prev) => [
+                              ...prev,
+                              { id: `op-rundue-${Date.now()}`, role: "assistant", content: summary },
+                            ]);
+                            await loadOperatorJobs();
+                          } finally {
+                            setOperatorRunDueLoading(false);
+                          }
+                        }}
+                      >
+                        {operatorRunDueLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Run Due"}
                       </Button>
                     </div>
                     {operatorJobs.length === 0 ? (
@@ -794,8 +835,28 @@ export function AdvisorSidebar() {
                                 </Button>
                               </div>
                             </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {job.intervalHours ? (
+                                <Badge variant="outline" className="text-[10px]">
+                                  every {job.intervalHours}h
+                                </Badge>
+                              ) : null}
+                              {job.nextRunAt ? (
+                                <Badge variant="outline" className="text-[10px]">
+                                  next {new Date(job.nextRunAt).toLocaleString()}
+                                </Badge>
+                              ) : null}
+                              {typeof job.consecutiveFailures === "number" && job.consecutiveFailures > 0 ? (
+                                <Badge variant="destructive" className="text-[10px]">
+                                  failures {job.consecutiveFailures}
+                                </Badge>
+                              ) : null}
+                            </div>
                             {job.lastResult ? (
                               <p className="text-[10px] text-muted-foreground line-clamp-2">{job.lastResult}</p>
+                            ) : null}
+                            {job.lastError ? (
+                              <p className="text-[10px] text-destructive line-clamp-2">{job.lastError}</p>
                             ) : null}
                           </div>
                         ))}

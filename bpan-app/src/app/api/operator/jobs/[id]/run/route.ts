@@ -28,15 +28,47 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     body: JSON.stringify({ message: command }),
   });
   const chatData = await chatRes.json();
+  const intervalHours =
+    typeof payload.intervalHours === "number" && Number.isFinite(payload.intervalHours) && payload.intervalHours > 0
+      ? Math.max(1, Math.min(168, Math.round(payload.intervalHours)))
+      : null;
+  const prevFailures =
+    typeof payload.consecutiveFailures === "number" && Number.isFinite(payload.consecutiveFailures)
+      ? Math.max(0, Math.round(payload.consecutiveFailures))
+      : 0;
+  const maxRetries =
+    typeof payload.maxRetries === "number" && Number.isFinite(payload.maxRetries)
+      ? Math.max(0, Math.min(10, Math.round(payload.maxRetries)))
+      : 2;
+  const nextFailures = chatRes.ok ? 0 : prevFailures + 1;
+  const retryDelayHours = Math.min(24, Math.max(1, nextFailures));
+  const nextRunAt = chatRes.ok
+    ? intervalHours
+      ? new Date(Date.now() + intervalHours * 3600_000).toISOString()
+      : null
+    : nextFailures <= maxRetries
+      ? new Date(Date.now() + retryDelayHours * 3600_000).toISOString()
+      : null;
 
-  const nextPayload = {
+  const nextPayload: Record<string, unknown> = {
     ...payload,
     runCount: typeof payload.runCount === "number" ? payload.runCount + 1 : 1,
     lastRunAt: new Date().toISOString(),
     lastResult: String(chatData?.response || chatData?.error || (chatRes.ok ? "ok" : "failed")).slice(0, 1000),
+    lastError: chatRes.ok ? null : String(chatData?.error || "Operator job failed").slice(0, 1000),
+    consecutiveFailures: nextFailures,
+    nextRunAt,
   };
+  if (!chatRes.ok && nextFailures > maxRetries) {
+    nextPayload.status = "paused";
+  }
   await supabase.from("workspace_events").update({ payload: nextPayload }).eq("id", id).eq("user_id", user.id);
 
-  return NextResponse.json({ success: chatRes.ok, response: chatData?.response || null, error: chatData?.error || null });
+  return NextResponse.json({
+    success: chatRes.ok,
+    response: chatData?.response || null,
+    error: chatData?.error || null,
+    pausedForRetries: !chatRes.ok && nextFailures > maxRetries,
+    nextRunAt,
+  });
 }
-
