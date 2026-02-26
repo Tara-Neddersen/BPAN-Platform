@@ -67,6 +67,7 @@ interface ExperimentTrackerMatrixProps {
   timepoints: ColonyTimepoint[];
   experiments: AnimalExperiment[];
   onBatchUpdateStatus?: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string, notes?: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
+  onBatchUpdated?: () => Promise<void> | void;
 }
 
 // ─── Multi-toggle helper ────────────────────────────────────────────────
@@ -86,6 +87,7 @@ export function ExperimentTrackerMatrix({
   timepoints,
   experiments,
   onBatchUpdateStatus,
+  onBatchUpdated,
 }: ExperimentTrackerMatrixProps) {
   const router = useRouter();
   const [filterCohort, setFilterCohort] = useState("all");
@@ -428,7 +430,8 @@ export function ExperimentTrackerMatrix({
                       setBatchResult(`❌ ${res.error}`);
                     } else {
                       setBatchResult(`✅ Updated ${res.updated} experiments`);
-                      router.refresh();
+                      if (onBatchUpdated) await onBatchUpdated();
+                      else router.refresh();
                     }
                   });
                 }}
@@ -509,7 +512,7 @@ export function ExperimentTrackerMatrix({
 
                   // Count completed for this animal
                   let animalCompleted = 0;
-                  let animalTotal = columns.length;
+                  const animalTotal = columns.length;
                   for (const col of columns) {
                     const st = animalStatuses?.get(col.tpAge)?.get(col.expType);
                     if (st === "completed") animalCompleted++;
@@ -598,4 +601,3 @@ export function ExperimentTrackerMatrix({
     </Card>
   );
 }
-

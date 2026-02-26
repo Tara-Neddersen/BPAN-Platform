@@ -1328,6 +1328,7 @@ export function ColonyClient({
             timepoints={timepoints}
             experiments={experiments}
             onBatchUpdateStatus={actions.batchUpdateExperimentStatus}
+            onBatchUpdated={refetchAll}
           />
         </TabsContent>
 
