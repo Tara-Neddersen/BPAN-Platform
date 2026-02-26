@@ -28,7 +28,7 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   rotarod_hab: "Rotarod Hab", rotarod_test1: "Rotarod Test 1", rotarod_test2: "Rotarod Test 2",
   stamina: "Stamina",
   catwalk: "CatWalk", blood_draw: "Plasma Collection",
-  data_collection: "Data Collection", core_acclimation: "Core Acclimation",
+  data_collection: "Transport to Core", core_acclimation: "Core Acclimation",
   eeg_implant: "EEG Implant", eeg_recording: "EEG Recording",
 };
 

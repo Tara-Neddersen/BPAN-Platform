@@ -43,7 +43,7 @@ const SOURCE_ICONS: Record<string, React.ReactNode> = {
 
 const COLONY_EXP_LABELS: Record<string, string> = {
   handling: "Handling", y_maze: "Y-Maze", ldb: "Light-Dark Box",
-  marble: "Marble Burying", nesting: "Nesting", data_collection: "Data Collection",
+  marble: "Marble Burying", nesting: "Nesting", data_collection: "Transport to Core",
   core_acclimation: "Core Acclim.", catwalk: "CatWalk", rotarod_hab: "Rotarod Hab.",
   rotarod: "Rotarod", stamina: "Stamina", blood_draw: "Blood Draw",
   eeg_implant: "EEG Implant", eeg_recording: "EEG Recording",
@@ -82,7 +82,7 @@ const BEHAVIOR_EXP_TYPES = new Set([
 
 const EXP_TYPE_LABELS: Record<string, string> = {
   handling: "Handling", y_maze: "Y-Maze", marble: "Marble Burying",
-  ldb: "Light-Dark Box", nesting: "Nesting", data_collection: "Data Collection",
+  ldb: "Light-Dark Box", nesting: "Nesting", data_collection: "Transport to Core",
   core_acclimation: "Core Acclimation", catwalk: "CatWalk", rotarod_hab: "Rotarod Hab",
   rotarod: "Rotarod", stamina: "Stamina", blood_draw: "Plasma Collection",
   eeg_implant: "EEG Implant", eeg_recording: "EEG Recording",

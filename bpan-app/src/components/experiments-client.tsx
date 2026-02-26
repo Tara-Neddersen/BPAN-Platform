@@ -63,7 +63,7 @@ const COLONY_EXP_LABELS: Record<string, string> = {
   ldb: "Light-Dark Box",
   marble: "Marble Burying",
   nesting: "Nesting",
-  data_collection: "Data Collection",
+  data_collection: "Transport to Core",
   core_acclimation: "Core Acclim.",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Hab.",

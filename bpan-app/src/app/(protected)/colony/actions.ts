@@ -819,7 +819,7 @@ export async function deleteAnimalExperiment(id: string) {
 //   Week 0   : 5 days handling (Mon–Fri before Day 1)
 //   Day 1    : Y-Maze (AM) + Marble Burying (PM)
 //   Day 2    : Light-Dark Box (AM) + Overnight Nesting
-//   Day 3    : Data Collection & Move to Core
+//   Day 3    : Transport to Core
 //   Day 4–5  : 48hr Core Acclimation (no testing)
 //   Day 6    : CatWalk Gait Analysis + Rotarod Habituation
 //   Day 7–8  : Rotarod Testing (Acceleration)
@@ -835,7 +835,7 @@ const PROTOCOL_SCHEDULE: { type: string; dayOffset: number; notes?: string }[] =
   { type: "marble",            dayOffset: 0,  notes: "Day 1 PM — Marble Burying" },
   { type: "ldb",               dayOffset: 1,  notes: "Day 2 AM — Light-Dark Box" },
   { type: "nesting",           dayOffset: 1,  notes: "Day 2 PM — Overnight Nesting (Isolation)" },
-  { type: "data_collection",   dayOffset: 2,  notes: "Day 3 — Data Collection & Move to Core" },
+  { type: "data_collection",   dayOffset: 2,  notes: "Day 3 — Transport to Core" },
   { type: "core_acclimation",  dayOffset: 3,  notes: "Day 4–5 — 48hr Mandatory Core Acclimation" },
   { type: "catwalk",           dayOffset: 5,  notes: "Day 6 — CatWalk Gait Analysis" },
   { type: "rotarod_hab",       dayOffset: 5,  notes: "Day 6 — Rotarod Habituation (Day 1 of 4)" },

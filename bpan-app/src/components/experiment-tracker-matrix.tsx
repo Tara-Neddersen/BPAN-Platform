@@ -18,7 +18,7 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   ldb: "LDB",
   marble: "Marble",
   nesting: "Nesting",
-  data_collection: "Data Collect",
+  data_collection: "Transport to Core",
   core_acclimation: "Core Acclim",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Hab",

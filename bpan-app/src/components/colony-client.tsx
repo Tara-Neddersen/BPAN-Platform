@@ -52,7 +52,7 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   ldb: "Light-Dark Box",
   marble: "Marble Burying",
   nesting: "Overnight Nesting",
-  data_collection: "Data Collection → Core",
+  data_collection: "Transport to Core",
   core_acclimation: "Core Acclimation (48hr)",
   catwalk: "CatWalk Gait Analysis",
   rotarod_hab: "Rotarod Habituation",
