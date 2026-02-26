@@ -257,6 +257,7 @@ function MeetingDetail({
   const [aiSummary, setAiSummary] = useState(meeting.ai_summary || "");
   const [summarizing, setSummarizing] = useState(false);
   const [extracting, setExtracting] = useState(false);
+  const [syncingTasksNow, setSyncingTasksNow] = useState(false);
   const [uploadingTranscript, setUploadingTranscript] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -331,6 +332,35 @@ function MeetingDetail({
       toast.error(err instanceof Error ? err.message : "Failed to extract action items");
     }
     setExtracting(false);
+  }
+
+  async function handleSyncActionsToTasksNow() {
+    if (actionItems.length === 0) {
+      toast.info("No action items to sync yet.");
+      return;
+    }
+    setSyncingTasksNow(true);
+    try {
+      const prepared = actionItems.map((item) => ({
+        ...item,
+        due_date: item.due_date || inferActionDueDate(item.text, meeting.meeting_date),
+      }));
+      const syncResult = await syncMeetingActionsToTasks(meeting.id, meeting.title, prepared);
+      if (syncResult?.error) {
+        toast.error(syncResult.error);
+        return;
+      }
+      const synced = syncResult?.synced || 0;
+      const removed = syncResult?.removed || 0;
+      const preserved = syncResult?.preserved || 0;
+      toast.success(
+        `Task sync: ${synced} new, ${removed} removed${preserved ? `, ${preserved} preserved` : ""}`
+      );
+    } catch {
+      toast.error("Failed to sync action items to tasks");
+    } finally {
+      setSyncingTasksNow(false);
+    }
   }
 
   async function handleUploadTranscriptFile(file: File) {
@@ -514,17 +544,30 @@ function MeetingDetail({
       <div>
         <div className="flex items-center justify-between mb-2">
           <Label className="text-xs font-semibold">Action Items</Label>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs gap-1"
-            onClick={handleExtractActions}
-            disabled={extracting}
-            type="button"
-          >
-            {extracting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            {extracting ? "Extracting..." : "Extract from Notes"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1"
+              onClick={handleExtractActions}
+              disabled={extracting}
+              type="button"
+            >
+              {extracting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              {extracting ? "Extracting..." : "Extract from Notes"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1"
+              onClick={handleSyncActionsToTasksNow}
+              disabled={syncingTasksNow || actionItems.length === 0}
+              type="button"
+            >
+              {syncingTasksNow ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              {syncingTasksNow ? "Syncing..." : "Add to Tasks"}
+            </Button>
+          </div>
         </div>
         {actionItems.length > 0 && (
           <div className="space-y-1.5 mb-3">
