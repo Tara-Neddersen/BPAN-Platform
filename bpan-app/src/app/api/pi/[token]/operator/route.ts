@@ -70,22 +70,39 @@ export async function POST(
       const feed = await getWorkspaceCalendarFeedEvents(supabase, userId);
       const items = feed.filter((e) => String(e.startAt).slice(0, 10) === date).slice(0, 25);
       if (items.length === 0) {
-        const { data: colonyRows } = await supabase
+        const { data: colonyRows, error: colonyErr } = await supabase
           .from("animal_experiments")
-          .select("experiment_type,status,timepoint_age_days,animals(identifier),cohorts(name)")
+          .select("animal_id,experiment_type,status,timepoint_age_days")
           .eq("user_id", userId)
           .eq("scheduled_date", date)
           .order("experiment_type");
 
-        if (!colonyRows || colonyRows.length === 0) {
+        if (colonyErr || !colonyRows || colonyRows.length === 0) {
           return NextResponse.json({ response: `No calendar events found on ${date}.` });
         }
 
+        const animalIds = [...new Set(colonyRows.map((r) => String(r.animal_id)).filter(Boolean))];
+        const { data: animalRows } = animalIds.length
+          ? await supabase
+              .from("animals")
+              .select("id,identifier,cohorts(name)")
+              .eq("user_id", userId)
+              .in("id", animalIds)
+          : { data: [] as Array<{ id: string; identifier: string | null; cohorts: { name?: string } | null }> };
+        const animalMap = new Map(
+          (animalRows || []).map((a) => [
+            String(a.id),
+            {
+              identifier: a.identifier ? String(a.identifier) : "?",
+              cohortName: (a.cohorts as { name?: string } | null)?.name ? String((a.cohorts as { name?: string }).name) : "",
+            },
+          ])
+        );
+
         const colonyLines = colonyRows.slice(0, 30).map((r) => {
-          const animalRel = r.animals as { identifier?: string } | null;
-          const cohortRel = r.cohorts as { name?: string } | null;
-          const animal = animalRel?.identifier || "?";
-          const cohort = cohortRel?.name ? ` · ${String(cohortRel.name)}` : "";
+          const animalMeta = animalMap.get(String(r.animal_id));
+          const animal = animalMeta?.identifier || "?";
+          const cohort = animalMeta?.cohortName ? ` · ${animalMeta.cohortName}` : "";
           const tp = r.timepoint_age_days != null ? ` @ ${String(r.timepoint_age_days)}d` : "";
           return `• [Colony] ${String(r.experiment_type).replace(/_/g, " ")} · #${animal}${tp}${cohort} (${String(r.status || "scheduled")})`;
         });
