@@ -127,6 +127,7 @@ interface ColonyClientProps {
       notes?: string;
     }[]
   ) => Promise<{ success?: boolean; error?: string; saved?: number; errors?: string[] }>;
+  reconcileTrackerFromExistingColonyResults: () => Promise<{ success?: boolean; error?: string; completed?: number; ignored?: number }>;
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -208,6 +209,7 @@ export function ColonyClient({
   housingCages: initHousingCages,
   colonyResults: initColonyResults,
   batchUpsertColonyResults,
+  reconcileTrackerFromExistingColonyResults,
   actions,
 }: ColonyClientProps) {
   const router = useRouter();
@@ -1073,7 +1075,7 @@ export function ColonyClient({
                           <span>Grace: {tp.grace_period_days ?? 30}d after</span>
                           {tp.includes_eeg_implant && (
                             <span className="text-purple-600">
-                              + EEG implant → {tp.eeg_recovery_days}d recovery → {tp.eeg_recording_days}d recording
+                              + EEG implant ({tp.eeg_implant_timing || "after"}) → {tp.eeg_recovery_days}d recovery → {tp.eeg_recording_days}d recording → plasma +7d
                             </span>
                           )}
                         </div>
@@ -1209,6 +1211,11 @@ export function ColonyClient({
             colonyResults={colonyResults}
             batchUpsertColonyResults={async (tp, exp, entries) => {
               const result = await batchUpsertColonyResults(tp, exp, entries);
+              if (result.success) await refetchAll();
+              return result;
+            }}
+            reconcileTrackerFromExistingColonyResults={async () => {
+              const result = await reconcileTrackerFromExistingColonyResults();
               if (result.success) await refetchAll();
               return result;
             }}
@@ -1821,12 +1828,23 @@ export function ColonyClient({
                   defaultChecked={editingTP?.includes_eeg_implant}
                   className="h-4 w-4"
                 />
-                Includes EEG implant surgery after experiments
+                Includes EEG implant surgery (one-time)
               </label>
               <div className="grid grid-cols-2 gap-3 mt-2 ml-6">
+                <div className="col-span-2">
+                  <Label className="text-xs">Implant timing (for this timepoint)</Label>
+                  <select
+                    name="eeg_implant_timing"
+                    defaultValue={editingTP?.eeg_implant_timing || "after"}
+                    className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  >
+                    <option value="before">Before behavior battery (recover, then test)</option>
+                    <option value="after">After behavior battery (implant after tests)</option>
+                  </select>
+                </div>
                 <div>
                   <Label className="text-xs">Recovery Days</Label>
-                  <Input name="eeg_recovery_days" type="number" defaultValue={editingTP?.eeg_recovery_days ?? 14} />
+                  <Input name="eeg_recovery_days" type="number" defaultValue={editingTP?.eeg_recovery_days ?? 7} />
                 </div>
                 <div>
                   <Label className="text-xs">Recording Days</Label>

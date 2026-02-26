@@ -356,7 +356,8 @@ export async function createColonyTimepoint(formData: FormData) {
     handling_days_before: parseInt(formData.get("handling_days_before") as string) || 3,
     duration_days: parseInt(formData.get("duration_days") as string) || 21,
     includes_eeg_implant: formData.get("includes_eeg_implant") === "true",
-    eeg_recovery_days: parseInt(formData.get("eeg_recovery_days") as string) || 14,
+    eeg_implant_timing: ((formData.get("eeg_implant_timing") as string) || "after"),
+    eeg_recovery_days: parseInt(formData.get("eeg_recovery_days") as string) || 7,
     eeg_recording_days: parseInt(formData.get("eeg_recording_days") as string) || 3,
     grace_period_days: parseInt(formData.get("grace_period_days") as string) || 30,
     sort_order: parseInt(formData.get("sort_order") as string) || 0,
@@ -395,7 +396,8 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
       handling_days_before: parseInt(formData.get("handling_days_before") as string) || 3,
       duration_days: parseInt(formData.get("duration_days") as string) || 21,
       includes_eeg_implant: formData.get("includes_eeg_implant") === "true",
-      eeg_recovery_days: parseInt(formData.get("eeg_recovery_days") as string) || 14,
+      eeg_implant_timing: ((formData.get("eeg_implant_timing") as string) || "after"),
+      eeg_recovery_days: parseInt(formData.get("eeg_recovery_days") as string) || 7,
       eeg_recording_days: parseInt(formData.get("eeg_recording_days") as string) || 3,
       grace_period_days: parseInt(formData.get("grace_period_days") as string) || 30,
       sort_order: parseInt(formData.get("sort_order") as string) || 0,
@@ -748,8 +750,9 @@ export async function deleteAnimalExperiment(id: string) {
 //   Day 7–8  : Rotarod Testing (Acceleration)
 //   Day 9    : Rotarod Recovery Day (calendar planning only; no tracker completion)
 //   Day 10   : Stamina Test (10 RPM / 60m cap)
-//   Day 11   : Plasma Collection (Blood Draw)
-// Then optionally: EEG implant → recovery → recording
+//   Day 11+  : Plasma Collection is scheduled dynamically (+7d after last behavior,
+//              or +7d after EEG recording window ends when EEG is present)
+// EEG implant / recovery / recording are also scheduled dynamically.
 
 const PROTOCOL_SCHEDULE: { type: string; dayOffset: number; notes?: string }[] = [
   { type: "handling",          dayOffset: -5, notes: "5 days: Transport → 1hr rest → 2 min handling" },
@@ -764,8 +767,64 @@ const PROTOCOL_SCHEDULE: { type: string; dayOffset: number; notes?: string }[] =
   { type: "rotarod_test1",     dayOffset: 6,  notes: "Day 7 — Rotarod Test 1 (Day 2 of 4)" },
   { type: "rotarod_test2",     dayOffset: 7,  notes: "Day 8 — Rotarod Test 2 (Day 3 of 4)" },
   { type: "stamina",           dayOffset: 9,  notes: "Day 10 — Rotarod Stamina (Day 4 of 4, 10 RPM / 60m Cap)" },
-  { type: "blood_draw",        dayOffset: 10, notes: "Day 11 — Plasma Collection (10:00–13:00)" },
 ];
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const LAST_BEHAVIOR_OFFSET = 9; // stamina day
+const EEG_RECORDING_GAP_AFTER_BEHAVIOR_DAYS = 1; // recording starts next day after battery
+const PLASMA_GAP_AFTER_RECORDING_END_DAYS = 7;
+
+function isoDate(d: Date) {
+  return d.toISOString().split("T")[0];
+}
+
+type EegTimingConfig = {
+  includes_eeg_implant?: boolean;
+  eeg_implant_timing?: "before" | "after";
+  eeg_recovery_days?: number;
+  eeg_recording_days?: number;
+};
+
+function computeColonyTimelineAnchors(experimentStart: Date, tp: EegTimingConfig) {
+  const recoveryDays = tp.eeg_recovery_days ?? 7;
+  const recordingDays = tp.eeg_recording_days ?? 3;
+  const implantTiming = tp.eeg_implant_timing || "after";
+
+  const behaviorStart = new Date(experimentStart);
+  let implantDate: Date | null = null;
+
+  if (tp.includes_eeg_implant && implantTiming === "before") {
+    implantDate = new Date(experimentStart);
+    behaviorStart.setDate(behaviorStart.getDate() + recoveryDays);
+  }
+
+  const lastBehaviorDate = new Date(behaviorStart.getTime() + LAST_BEHAVIOR_OFFSET * DAY_MS);
+  if (tp.includes_eeg_implant && implantTiming === "after") {
+    implantDate = new Date(lastBehaviorDate.getTime() + DAY_MS);
+  }
+  const baselineRecordingStart = new Date(lastBehaviorDate.getTime() + EEG_RECORDING_GAP_AFTER_BEHAVIOR_DAYS * DAY_MS);
+  const effectiveRecordingStart =
+    implantDate && implantTiming === "after"
+      ? new Date(implantDate.getTime() + recoveryDays * DAY_MS)
+      : baselineRecordingStart;
+  const effectiveRecordingEnd = new Date(effectiveRecordingStart.getTime() + recordingDays * DAY_MS);
+  const plasmaDate = new Date(effectiveRecordingEnd.getTime() + PLASMA_GAP_AFTER_RECORDING_END_DAYS * DAY_MS);
+  const plasmaWithoutEegDate = new Date(lastBehaviorDate.getTime() + PLASMA_GAP_AFTER_RECORDING_END_DAYS * DAY_MS);
+
+  return {
+    implantTiming,
+    recoveryDays,
+    recordingDays,
+    behaviorStart,
+    lastBehaviorDate,
+    implantDate,
+    baselineRecordingStart,
+    recordingStart: effectiveRecordingStart,
+    recordingEnd: effectiveRecordingEnd,
+    plasmaDate,
+    plasmaWithoutEegDate,
+  };
+}
 
 /**
  * Schedule experiments for an animal.
@@ -842,6 +901,10 @@ export async function scheduleExperimentsForAnimal(
 
   for (const tp of timepoints) {
     const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
+    const timeline = computeColonyTimelineAnchors(experimentStart, tp);
+    const behaviorAnchor = timeline.behaviorStart;
+    const shouldScheduleEegRecording =
+      anyTimepointHasEeg && (eegImplantScheduled || tp.age_days >= (eegTpConfigForAnimal?.age_days ?? tp.age_days));
 
     // Schedule EVERY experiment in the protocol — no filtering by tp.experiments
     for (const step of PROTOCOL_SCHEDULE) {
@@ -852,7 +915,7 @@ export async function scheduleExperimentsForAnimal(
 
       if (step.type === "handling") {
         if (tp.handling_days_before > 0) {
-          const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * DAY);
+          const handlingStart = new Date(behaviorAnchor.getTime() - tp.handling_days_before * DAY);
           if (skippedKeys.has(key)) {
             // Re-schedule the skipped experiment
             skippedIdsToReschedule.push({
@@ -875,7 +938,7 @@ export async function scheduleExperimentsForAnimal(
         continue;
       }
 
-      const expDate = new Date(experimentStart.getTime() + step.dayOffset * DAY);
+      const expDate = new Date(behaviorAnchor.getTime() + step.dayOffset * DAY);
       if (skippedKeys.has(key)) {
         // Re-schedule the skipped experiment
         skippedIdsToReschedule.push({
@@ -896,68 +959,77 @@ export async function scheduleExperimentsForAnimal(
       }
     }
 
-    // EEG: If ANY timepoint includes EEG, schedule across ALL timepoints.
-    // Surgery happens ONCE at the FIRST timepoint only. Recording at all.
-    //
-    // Protocol:
-    //   1st TP (e.g. 30d): experiments (10d) → implant surgery → recovery → recording
-    //   Later TPs (120d, 210d): experiments (10d) → 7d rest → recording (no surgery)
+    // EEG / plasma:
+    // - Implant happens once on the designated timepoint (if configured) with before/after behavior timing.
+    // - Recording happens at the end of the behavior battery on each eligible timepoint.
+    // - Plasma is +7d after recording window ends when EEG is present, otherwise +7d after last behavior.
     if (anyTimepointHasEeg) {
       const eegTpConfig = eegTpConfigForAnimal;
-      const afterExperimentsDate = new Date(experimentStart.getTime() + 11 * DAY);
-
-      if (!eegImplantScheduled) {
-        // First timepoint: schedule surgery + recovery + recording
+      const isImplantTimepoint = tp.includes_eeg_implant && !eegImplantScheduled;
+      if (isImplantTimepoint && timeline.implantDate) {
         eegImplantScheduled = true;
-
         const implantKey = `eeg_implant::${tp.age_days}`;
         if (!activeKeys.has(implantKey)) {
-          const implantDate = afterExperimentsDate.toISOString().split("T")[0];
+          const implantDate = isoDate(timeline.implantDate);
+          const implantTimingLabel = tp.eeg_implant_timing || "after";
           if (skippedKeys.has(implantKey)) {
-            skippedIdsToReschedule.push({ id: skippedIdMap.get(implantKey)!, scheduled_date: implantDate, notes: "EEG implant surgery (one-time, first timepoint only)" });
+            skippedIdsToReschedule.push({
+              id: skippedIdMap.get(implantKey)!,
+              scheduled_date: implantDate,
+              notes: `EEG implant surgery (one-time, ${implantTimingLabel} behavior battery)`,
+            });
           } else {
             records.push({
               user_id: user.id, animal_id: animalId,
               experiment_type: "eeg_implant", timepoint_age_days: tp.age_days,
               scheduled_date: implantDate, status: "scheduled",
-              notes: "EEG implant surgery (one-time, first timepoint only)",
+              notes: `EEG implant surgery (one-time, ${implantTimingLabel} behavior battery)`,
             });
           }
         }
+      }
 
+      if (shouldScheduleEegRecording) {
         const recKey = `eeg_recording::${tp.age_days}`;
         if (!activeKeys.has(recKey)) {
-          const recordingStart = new Date(afterExperimentsDate.getTime() + eegTpConfig.eeg_recovery_days * DAY);
-          const recDate = recordingStart.toISOString().split("T")[0];
+          const recDate = isoDate(timeline.recordingStart);
+          const recNotes = isImplantTimepoint && timeline.implantDate
+            ? `EEG recording (${eegTpConfig.eeg_recording_days}d) after ${timeline.recoveryDays}d ${timeline.implantTiming}-behavior implant recovery`
+            : `EEG recording (${eegTpConfig.eeg_recording_days}d) after behavior battery`;
           if (skippedKeys.has(recKey)) {
-            skippedIdsToReschedule.push({ id: skippedIdMap.get(recKey)!, scheduled_date: recDate, notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) after ${eegTpConfig.eeg_recovery_days}d post-surgery recovery` });
+            skippedIdsToReschedule.push({ id: skippedIdMap.get(recKey)!, scheduled_date: recDate, notes: recNotes });
           } else {
             records.push({
               user_id: user.id, animal_id: animalId,
               experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
-              scheduled_date: recDate, status: "scheduled",
-              notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) after ${eegTpConfig.eeg_recovery_days}d post-surgery recovery`,
+              scheduled_date: recDate,
+              status: "scheduled",
+              notes: recNotes,
             });
           }
         }
+      }
+    }
+
+    // Plasma collection (blood_draw) always scheduled for tracker.
+    const bloodKey = `blood_draw::${tp.age_days}`;
+    if (!activeKeys.has(bloodKey)) {
+      const bloodDate = anyTimepointHasEeg && shouldScheduleEegRecording ? isoDate(timeline.plasmaDate) : isoDate(timeline.plasmaWithoutEegDate);
+      const bloodNotes = anyTimepointHasEeg && shouldScheduleEegRecording
+        ? `Plasma collection (+${PLASMA_GAP_AFTER_RECORDING_END_DAYS}d after ${timeline.recordingDays}d EEG recording)`
+        : `Plasma collection (+${PLASMA_GAP_AFTER_RECORDING_END_DAYS}d after last behavior test)`;
+      if (skippedKeys.has(bloodKey)) {
+        skippedIdsToReschedule.push({ id: skippedIdMap.get(bloodKey)!, scheduled_date: bloodDate, notes: bloodNotes });
       } else {
-        // Subsequent timepoints: recording only (7d rest after experiments, no surgery)
-        const recKey = `eeg_recording::${tp.age_days}`;
-        if (!activeKeys.has(recKey)) {
-          const recordingStart = new Date(afterExperimentsDate.getTime() + 7 * DAY);
-          const recDate = recordingStart.toISOString().split("T")[0];
-          if (skippedKeys.has(recKey)) {
-            skippedIdsToReschedule.push({ id: skippedIdMap.get(recKey)!, scheduled_date: recDate, notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) — 7d rest after experiments (no surgery needed)` });
-          } else {
-            records.push({
-              user_id: user.id, animal_id: animalId,
-              experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
-            scheduled_date: recordingStart.toISOString().split("T")[0],
-            status: "scheduled",
-            notes: `EEG recording (${eegTpConfig.eeg_recording_days}d) — 7d rest after experiments (no surgery needed)`,
-            });
-          }
-        }
+        records.push({
+          user_id: user.id,
+          animal_id: animalId,
+          experiment_type: "blood_draw",
+          timepoint_age_days: tp.age_days,
+          scheduled_date: bloodDate,
+          status: "scheduled",
+          notes: bloodNotes,
+        });
       }
     }
   }
@@ -1063,6 +1135,10 @@ export async function scheduleExperimentsForCohort(
 
     for (const tp of timepoints) {
       const experimentStart = new Date(birth.getTime() + tp.age_days * DAY);
+      const timeline = computeColonyTimelineAnchors(experimentStart, tp);
+      const behaviorAnchor = timeline.behaviorStart;
+      const shouldScheduleEegRecording =
+        anyTimepointHasEeg && (eegImplantScheduled || tp.age_days >= (eegTpConfig?.age_days ?? tp.age_days));
 
       // Schedule EVERY experiment in the protocol
       for (const step of PROTOCOL_SCHEDULE) {
@@ -1073,7 +1149,7 @@ export async function scheduleExperimentsForCohort(
 
         if (step.type === "handling") {
           if (tp.handling_days_before > 0) {
-            const handlingStart = new Date(experimentStart.getTime() - tp.handling_days_before * DAY);
+            const handlingStart = new Date(behaviorAnchor.getTime() - tp.handling_days_before * DAY);
             const date = handlingStart.toISOString().split("T")[0];
             if (skippedMap.has(key)) {
               skippedIdsToReschedule.push({ id: skippedMap.get(key)!, scheduled_date: date, notes: step.notes });
@@ -1091,7 +1167,7 @@ export async function scheduleExperimentsForCohort(
           continue;
         }
 
-        const expDate = new Date(experimentStart.getTime() + step.dayOffset * DAY);
+        const expDate = new Date(behaviorAnchor.getTime() + step.dayOffset * DAY);
         const date = expDate.toISOString().split("T")[0];
         if (skippedMap.has(key)) {
           skippedIdsToReschedule.push({ id: skippedMap.get(key)!, scheduled_date: date, notes: step.notes });
@@ -1107,65 +1183,70 @@ export async function scheduleExperimentsForCohort(
         animalRecords++;
       }
 
-      // EEG: Surgery once at first TP, recording at all TPs.
+      // EEG / plasma scheduling mirrors the single-animal scheduler.
       if (anyTimepointHasEeg) {
-        const afterExperimentsDate = new Date(experimentStart.getTime() + 10 * DAY);
-
-        if (!eegImplantScheduled) {
+        const isImplantTimepoint = tp.includes_eeg_implant && !eegImplantScheduled;
+        if (isImplantTimepoint && timeline.implantDate) {
           eegImplantScheduled = true;
           const implantKey = `${animal.id}::eeg_implant::${tp.age_days}`;
           if (!activeSet.has(implantKey)) {
-            const implantDate = afterExperimentsDate.toISOString().split("T")[0];
+            const implantDate = isoDate(timeline.implantDate);
+            const implantTimingLabel = tp.eeg_implant_timing || "after";
             if (skippedMap.has(implantKey)) {
-              skippedIdsToReschedule.push({ id: skippedMap.get(implantKey)!, scheduled_date: implantDate, notes: "EEG implant surgery (one-time)" });
+              skippedIdsToReschedule.push({ id: skippedMap.get(implantKey)!, scheduled_date: implantDate, notes: `EEG implant surgery (one-time, ${implantTimingLabel} behavior battery)` });
               skippedMap.delete(implantKey);
             } else {
               allRecords.push({
                 user_id: user.id, animal_id: animal.id,
                 experiment_type: "eeg_implant", timepoint_age_days: tp.age_days,
-                scheduled_date: implantDate, status: "scheduled", notes: "EEG implant surgery (one-time)",
+                scheduled_date: implantDate, status: "scheduled", notes: `EEG implant surgery (one-time, ${implantTimingLabel} behavior battery)`,
               });
             }
             activeSet.add(implantKey);
             animalRecords++;
           }
+        }
+        if (shouldScheduleEegRecording) {
           const recKey = `${animal.id}::eeg_recording::${tp.age_days}`;
           if (!activeSet.has(recKey)) {
-            const recordingStart = new Date(afterExperimentsDate.getTime() + eegTpConfig.eeg_recovery_days * DAY);
-            const recDate = recordingStart.toISOString().split("T")[0];
+            const recDate = isoDate(timeline.recordingStart);
+            const recNotes = isImplantTimepoint && timeline.implantDate
+              ? `EEG recording (${timeline.recordingDays}d) after ${timeline.recoveryDays}d ${timeline.implantTiming}-behavior implant recovery`
+              : `EEG recording (${timeline.recordingDays}d) after behavior battery`;
             if (skippedMap.has(recKey)) {
-              skippedIdsToReschedule.push({ id: skippedMap.get(recKey)!, scheduled_date: recDate, notes: `EEG recording after ${eegTpConfig.eeg_recovery_days}d recovery` });
+              skippedIdsToReschedule.push({ id: skippedMap.get(recKey)!, scheduled_date: recDate, notes: recNotes });
               skippedMap.delete(recKey);
             } else {
               allRecords.push({
                 user_id: user.id, animal_id: animal.id,
                 experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
-                scheduled_date: recDate, status: "scheduled", notes: `EEG recording after ${eegTpConfig.eeg_recovery_days}d recovery`,
-              });
-            }
-            activeSet.add(recKey);
-            animalRecords++;
-          }
-        } else {
-          // Subsequent timepoints: recording only (no surgery)
-          const recKey = `${animal.id}::eeg_recording::${tp.age_days}`;
-          if (!activeSet.has(recKey)) {
-            const recordingStart = new Date(afterExperimentsDate.getTime() + 7 * DAY);
-            const recDate = recordingStart.toISOString().split("T")[0];
-            if (skippedMap.has(recKey)) {
-              skippedIdsToReschedule.push({ id: skippedMap.get(recKey)!, scheduled_date: recDate, notes: `EEG recording — 7d rest after experiments` });
-              skippedMap.delete(recKey);
-            } else {
-              allRecords.push({
-                user_id: user.id, animal_id: animal.id,
-                experiment_type: "eeg_recording", timepoint_age_days: tp.age_days,
-                scheduled_date: recDate, status: "scheduled", notes: `EEG recording — 7d rest after experiments`,
+                scheduled_date: recDate, status: "scheduled", notes: recNotes,
               });
             }
             activeSet.add(recKey);
             animalRecords++;
           }
         }
+      }
+
+      const bloodKey = `${animal.id}::blood_draw::${tp.age_days}`;
+      if (!activeSet.has(bloodKey)) {
+        const bloodDate = anyTimepointHasEeg && shouldScheduleEegRecording ? isoDate(timeline.plasmaDate) : isoDate(timeline.plasmaWithoutEegDate);
+        const bloodNotes = anyTimepointHasEeg && shouldScheduleEegRecording
+          ? `Plasma collection (+${PLASMA_GAP_AFTER_RECORDING_END_DAYS}d after ${timeline.recordingDays}d EEG recording)`
+          : `Plasma collection (+${PLASMA_GAP_AFTER_RECORDING_END_DAYS}d after last behavior test)`;
+        if (skippedMap.has(bloodKey)) {
+          skippedIdsToReschedule.push({ id: skippedMap.get(bloodKey)!, scheduled_date: bloodDate, notes: bloodNotes });
+          skippedMap.delete(bloodKey);
+        } else {
+          allRecords.push({
+            user_id: user.id, animal_id: animal.id,
+            experiment_type: "blood_draw", timepoint_age_days: tp.age_days,
+            scheduled_date: bloodDate, status: "scheduled", notes: bloodNotes,
+          });
+        }
+        activeSet.add(bloodKey);
+        animalRecords++;
       }
     }
 
@@ -1362,11 +1443,37 @@ export async function rescheduleTimepointExperiments(
 
   if (!exps || exps.length === 0) return { success: true, message: "No experiments to reschedule" };
 
-  // Build the offset map from PROTOCOL_SCHEDULE
+  // Build the offset map from PROTOCOL_SCHEDULE + dynamic EEG/plasma timing
   const offsetMap = new Map<string, number>();
   for (const step of PROTOCOL_SCHEDULE) {
     offsetMap.set(step.type, step.dayOffset);
   }
+  offsetMap.set("handling", -(tp.handling_days_before ?? 5));
+
+  const expsIncludeEegRecording = exps.some((e) => e.experiment_type === "eeg_recording");
+  const recoveryDays = tp.eeg_recovery_days ?? 7;
+  const recordingDays = tp.eeg_recording_days ?? 3;
+  const implantTiming = tp.eeg_implant_timing || "after";
+  let eegImplantOffset: number | null = null;
+  if (exps.some((e) => e.experiment_type === "eeg_implant")) {
+    eegImplantOffset = implantTiming === "before" ? 0 : LAST_BEHAVIOR_OFFSET + 1;
+    offsetMap.set("eeg_implant", eegImplantOffset);
+  }
+  let eegRecordingOffset = LAST_BEHAVIOR_OFFSET + EEG_RECORDING_GAP_AFTER_BEHAVIOR_DAYS;
+  if (expsIncludeEegRecording) {
+    if (eegImplantOffset !== null && implantTiming === "after") {
+      eegRecordingOffset = eegImplantOffset + recoveryDays;
+    } else if (eegImplantOffset !== null && implantTiming === "before") {
+      eegRecordingOffset = recoveryDays + LAST_BEHAVIOR_OFFSET + EEG_RECORDING_GAP_AFTER_BEHAVIOR_DAYS;
+    }
+    offsetMap.set("eeg_recording", eegRecordingOffset);
+  }
+  offsetMap.set(
+    "blood_draw",
+    expsIncludeEegRecording
+      ? eegRecordingOffset + recordingDays + PLASMA_GAP_AFTER_RECORDING_END_DAYS
+      : LAST_BEHAVIOR_OFFSET + PLASMA_GAP_AFTER_RECORDING_END_DAYS
+  );
 
   // Sort experiments by their protocol order (dayOffset)
   const sorted = [...exps].sort((a, b) => {

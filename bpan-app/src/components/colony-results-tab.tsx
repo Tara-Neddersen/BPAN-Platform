@@ -151,6 +151,7 @@ interface ColonyResultsTabProps {
     }[],
     options?: { emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave" }
   ) => Promise<{ success?: boolean; error?: string; saved?: number; errors?: string[] }>;
+  reconcileTrackerFromExistingColonyResults: () => Promise<{ success?: boolean; error?: string; completed?: number; ignored?: number }>;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -161,6 +162,7 @@ export function ColonyResultsTab({
   timepoints,
   colonyResults,
   batchUpsertColonyResults,
+  reconcileTrackerFromExistingColonyResults,
 }: ColonyResultsTabProps) {
   const hasMeaningfulMeasures = useCallback((measures: Record<string, string | number | null> | null | undefined) => {
     if (!measures) return false;
@@ -169,6 +171,7 @@ export function ColonyResultsTab({
 
   // State
   const [saving, setSaving] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [activeTimepoint, setActiveTimepoint] = useState<string>(
     timepoints.length > 0 ? String(timepoints[0].age_days) : "30"
   );
@@ -471,6 +474,24 @@ export function ColonyResultsTab({
     }
   }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, getExistingResult, hasMeaningfulMeasures, batchUpsertColonyResults]);
 
+  const handleReconcileTracker = useCallback(async () => {
+    setReconciling(true);
+    try {
+      const result = await reconcileTrackerFromExistingColonyResults();
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success(
+        `Reconciled tracker from results (${result.completed ?? 0} completed, ${result.ignored ?? 0} empty ignored)`
+      );
+    } catch {
+      toast.error("Failed to reconcile tracker statuses");
+    } finally {
+      setReconciling(false);
+    }
+  }, [reconcileTrackerFromExistingColonyResults]);
+
   // Export current view as CSV
   const handleExport = useCallback(() => {
     const tp = Number(activeTimepoint);
@@ -746,6 +767,15 @@ export function ColonyResultsTab({
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleReconcileTracker}
+                            disabled={reconciling || saving}
+                          >
+                            {reconciling ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Check className="w-3.5 h-3.5 mr-1" />}
+                            Reconcile Tracker
+                          </Button>
                           <Button
                             size="sm"
                             variant="outline"

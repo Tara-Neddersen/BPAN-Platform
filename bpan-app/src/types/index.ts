@@ -386,6 +386,7 @@ export interface ColonyTimepoint {
   handling_days_before: number;
   duration_days: number;
   includes_eeg_implant: boolean;
+  eeg_implant_timing: "before" | "after";
   eeg_recovery_days: number;
   eeg_recording_days: number;
   grace_period_days: number;

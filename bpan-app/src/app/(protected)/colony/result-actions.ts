@@ -317,3 +317,52 @@ export async function deleteColonyResult(id: string) {
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
+
+/**
+ * Reconcile tracker statuses from existing colony_results rows.
+ * Useful for historical data entered before auto-sync rules existed.
+ *
+ * Rules:
+ * - Rows with meaningful measures => tracker marked/completed (create if missing)
+ * - Rows without meaningful measures => ignored (no destructive updates)
+ */
+export async function reconcileTrackerFromExistingColonyResults() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { data: rows, error } = await supabase
+    .from("colony_results")
+    .select("animal_id, timepoint_age_days, experiment_type, measures")
+    .eq("user_id", user.id);
+
+  if (error) return { error: error.message };
+
+  let completed = 0;
+  let ignored = 0;
+
+  for (const row of rows || []) {
+    const hasData = hasMeaningfulMeasures(
+      (row.measures || {}) as Record<string, string | number | null>
+    );
+    if (!hasData) {
+      ignored++;
+      continue;
+    }
+
+    await markExperimentCompleted(
+      supabase,
+      user.id,
+      row.animal_id,
+      row.timepoint_age_days,
+      row.experiment_type
+    );
+    completed++;
+  }
+
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true, completed, ignored };
+}
