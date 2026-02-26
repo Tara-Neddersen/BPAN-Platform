@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   Loader2,
   GripVertical,
+  Upload,
 } from "lucide-react";
 import {
   createExperiment,
@@ -1834,22 +1835,57 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
   const [editing, setEditing] = useState<Protocol | null>(null);
   const [steps, setSteps] = useState<ProtocolStep[]>([]);
   const [pending, setPending] = useState(false);
+  const [protocolFileLinksText, setProtocolFileLinksText] = useState("");
+  const [protocolUploadBusy, setProtocolUploadBusy] = useState(false);
+  const protocolUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   function startNew() {
     setEditing(null);
     setSteps([{ id: crypto.randomUUID(), text: "", duration: "" }]);
+    setProtocolFileLinksText("");
     setShowForm(true);
   }
 
   function startEdit(p: Protocol) {
     setEditing(p);
     setSteps(p.steps.length > 0 ? p.steps : [{ id: crypto.randomUUID(), text: "", duration: "" }]);
+    setProtocolFileLinksText((p.file_links || []).join("\n"));
     setShowForm(true);
+  }
+
+  async function uploadProtocolFileToDrive(file: File) {
+    setProtocolUploadBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("cohort_name", "Protocols");
+      fd.append("animal_identifier", "Protocol Templates");
+      fd.append("experiment_type", "protocol");
+
+      const res = await fetch("/api/gdrive/upload", {
+        method: "POST",
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        toast.error(data.error || "Upload failed — is Google Drive connected?");
+        return;
+      }
+      const url = String(data.url || "");
+      setProtocolFileLinksText((prev) => (prev.trim() ? `${prev.trim()}\n${url}` : url));
+      toast.success("Uploaded to Google Drive and linked");
+    } catch {
+      toast.error("Upload failed");
+    } finally {
+      setProtocolUploadBusy(false);
+      if (protocolUploadInputRef.current) protocolUploadInputRef.current.value = "";
+    }
   }
 
   async function handleSubmit(formData: FormData) {
     setPending(true);
     formData.set("steps", JSON.stringify(steps.filter((s) => s.text.trim())));
+    formData.set("file_links", protocolFileLinksText);
     try {
       if (editing) {
         formData.set("id", editing.id);
@@ -1859,6 +1895,7 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
       }
       setShowForm(false);
       setEditing(null);
+      setProtocolFileLinksText("");
     } catch (err) {
       console.error(err);
     } finally {
@@ -1900,15 +1937,42 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
               </div>
               <div>
                 <label className="text-xs font-medium mb-1 block">Cloud File Links (Google Drive, etc.)</label>
+                <input
+                  ref={protocolUploadInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files || []);
+                    if (files.length === 0) return;
+                    for (const file of files) {
+                      // eslint-disable-next-line no-await-in-loop
+                      await uploadProtocolFileToDrive(file);
+                    }
+                  }}
+                />
                 <textarea
                   name="file_links"
-                  defaultValue={(editing?.file_links || []).join("\n")}
+                  value={protocolFileLinksText}
+                  onChange={(e) => setProtocolFileLinksText(e.target.value)}
                   placeholder={"Paste one URL per line\nhttps://drive.google.com/file/d/..."}
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none h-20"
                 />
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Files stay in your cloud storage. BPAN only saves the links.
-                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={protocolUploadBusy}
+                    onClick={() => protocolUploadInputRef.current?.click()}
+                  >
+                    {protocolUploadBusy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />}
+                    Upload to Google Drive
+                  </Button>
+                  <span className="text-[11px] text-muted-foreground">
+                    Files stay in your cloud storage. BPAN only saves the links.
+                  </span>
+                </div>
               </div>
               <div>
                 <label className="text-xs font-medium mb-1 block">Steps</label>
