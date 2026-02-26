@@ -78,7 +78,7 @@ export async function GET(
         .eq("user_id", userId)
         .order("identifier");
 
-      animals = (animalsData || []).map((a: Record<string, unknown>) => ({
+      const portalAnimals = (animalsData || []).map((a: Record<string, unknown>) => ({
         id: a.id as string,
         identifier: a.identifier,
         sex: a.sex,
@@ -91,9 +91,15 @@ export async function GET(
         cage_number: a.cage_number,
         eeg_implanted: a.eeg_implanted,
       }));
+      animals = portalAnimals.sort((a, b) => {
+        const cohortCmp = String(a.cohort_name || "").localeCompare(String(b.cohort_name || ""), undefined, { numeric: true });
+        if (cohortCmp !== 0) return cohortCmp;
+        return String(a.identifier || "").localeCompare(String(b.identifier || ""), undefined, { numeric: true });
+      });
+      const cohortNameByAnimalId = new Map(animals.map((a) => [String(a.id), String(a.cohort_name || "")]));
 
       // Full animal objects for analysis panel
-      fullAnimals = (animalsData || []).map((a: Record<string, unknown>) => ({
+      const fullAnimalRows = (animalsData || []).map((a: Record<string, unknown>) => ({
         id: a.id,
         user_id: a.user_id,
         cohort_id: a.cohort_id,
@@ -111,6 +117,13 @@ export async function GET(
         created_at: a.created_at,
         updated_at: a.updated_at,
       }));
+      fullAnimals = fullAnimalRows.sort((a, b) => {
+        const cohortA = cohortNameByAnimalId.get(String(a.id)) || "";
+        const cohortB = cohortNameByAnimalId.get(String(b.id)) || "";
+        const cohortCmp = String(cohortA).localeCompare(String(cohortB), undefined, { numeric: true });
+        if (cohortCmp !== 0) return cohortCmp;
+        return String(a.identifier || "").localeCompare(String(b.identifier || ""), undefined, { numeric: true });
+      });
     }
 
     if (canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("results")) {
