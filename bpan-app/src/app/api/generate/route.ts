@@ -67,6 +67,9 @@ export async function POST(req: NextRequest) {
       { data: experiments },
       { data: analyses },
       { data: ideas },
+      { data: colonyExperiments },
+      { data: colonyResults },
+      { data: figures },
     ] = await Promise.all([
       supabase
         .from("research_context")
@@ -108,6 +111,24 @@ export async function POST(req: NextRequest) {
         .eq("user_id", user.id)
         .eq("status", "promising")
         .limit(5),
+      supabase
+        .from("animal_experiments")
+        .select("experiment_type, timepoint_age_days, status, scheduled_date, completed_date")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(200),
+      supabase
+        .from("colony_results")
+        .select("experiment_type, timepoint_age_days, measures, recorded_at, updated_at")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(200),
+      supabase
+        .from("figures")
+        .select("name, chart_type, updated_at")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(20),
     ]);
 
     // Build context summary
@@ -143,6 +164,74 @@ export async function POST(req: NextRequest) {
         (a) =>
           `- ${a.name}: ${a.ai_interpretation || JSON.stringify(a.results).slice(0, 200)}`
       )
+      .join("\n");
+
+    const colonyExpSummaryStr = (() => {
+      const rows = (colonyExperiments || []) as Array<{
+        experiment_type: string | null;
+        timepoint_age_days: number | null;
+        status: string | null;
+        scheduled_date: string | null;
+        completed_date: string | null;
+      }>;
+      if (!rows.length) return "";
+      const counts = new Map<string, { completed: number; inProgress: number; scheduled: number; skipped: number; pending: number }>();
+      for (const r of rows) {
+        const key = `${String(r.experiment_type || "unknown")}::${r.timepoint_age_days == null ? "na" : String(r.timepoint_age_days)}`;
+        const c = counts.get(key) || { completed: 0, inProgress: 0, scheduled: 0, skipped: 0, pending: 0 };
+        const st = String(r.status || "pending");
+        if (st === "completed") c.completed++;
+        else if (st === "in_progress") c.inProgress++;
+        else if (st === "scheduled") c.scheduled++;
+        else if (st === "skipped") c.skipped++;
+        else c.pending++;
+        counts.set(key, c);
+      }
+      return [...counts.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+        .slice(0, 40)
+        .map(([key, c]) => {
+          const [exp, tp] = key.split("::");
+          const tpLabel = tp === "na" ? "" : ` @ ${tp}d`;
+          return `- ${exp}${tpLabel}: ${c.completed} completed, ${c.inProgress} in progress, ${c.scheduled} scheduled, ${c.skipped} skipped`;
+        })
+        .join("\n");
+    })();
+
+    const colonyResultsSummaryStr = (() => {
+      const rows = (colonyResults || []) as Array<{
+        experiment_type: string | null;
+        timepoint_age_days: number | null;
+        measures: Record<string, unknown> | null;
+      }>;
+      if (!rows.length) return "";
+      const grouped = new Map<string, { n: number; measureKeys: Set<string> }>();
+      for (const r of rows) {
+        const key = `${String(r.experiment_type || "unknown")}::${r.timepoint_age_days == null ? "na" : String(r.timepoint_age_days)}`;
+        const g = grouped.get(key) || { n: 0, measureKeys: new Set<string>() };
+        g.n += 1;
+        if (r.measures && typeof r.measures === "object") {
+          for (const [mk, mv] of Object.entries(r.measures)) {
+            if (mk.startsWith("__")) continue;
+            if (typeof mv === "number") g.measureKeys.add(mk);
+          }
+        }
+        grouped.set(key, g);
+      }
+      return [...grouped.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+        .slice(0, 40)
+        .map(([key, g]) => {
+          const [exp, tp] = key.split("::");
+          const tpLabel = tp === "na" ? "" : ` @ ${tp}d`;
+          const measures = [...g.measureKeys].slice(0, 8).join(", ");
+          return `- ${exp}${tpLabel}: ${g.n} result rows${measures ? ` | numeric measures: ${measures}` : ""}`;
+        })
+        .join("\n");
+    })();
+
+    const figuresStr = ((figures || []) as Array<{ name: string | null; chart_type: string | null; updated_at: string | null }>)
+      .map((f) => `- ${f.name || "Untitled figure"}${f.chart_type ? ` [${f.chart_type}]` : ""}${f.updated_at ? ` (updated ${String(f.updated_at).slice(0, 10)})` : ""}`)
       .join("\n");
 
     const hypothesesStr = (hypotheses || [])
@@ -214,32 +303,55 @@ ${analysesStr || "No results available."}
 
 Write in formal academic style. Be specific — use actual details from the research context above. Do NOT use placeholder text like "[insert here]" — instead use the real data provided.`;
     } else if (type === "lab_meeting") {
-      prompt = `You are helping a biomedical researcher prepare a summary for their lab meeting. Generate a clear, well-organized lab meeting summary that covers:
+      prompt = `You are helping a biomedical researcher prepare a summary for their lab meeting.
+
+PRIORITY RULES (IMPORTANT):
+- Prioritize the user's OWN experimental work, results, analyses, and figures.
+- Use papers/literature only as brief supporting context if needed.
+- If experimental data exists, do NOT make literature review the main focus.
+- Explicitly include a "Plots/Figures to show" section using the available analyses/figures/results context.
+
+Generate a clear, well-organized lab meeting summary that covers:
 
 1. **What I worked on this week** — recent experiments and their status
 2. **Key findings** — any new results or observations
-3. **Problems/challenges** — issues encountered and troubleshooting attempted
-4. **Next steps** — what I plan to do next
-5. **Questions for the group** — things I need input on
+3. **Plots/Figures to show** — specific plots/analyses/figures to present and why
+4. **Problems/challenges** — issues encountered and troubleshooting attempted
+5. **Next steps** — what I plan to do next
+6. **Questions for the group** — things I need input on
 
 Use the following research data:
 
 RESEARCH CONTEXT:
 ${contextStr || "No research context provided."}
 
-RECENT EXPERIMENTS:
+OWN WORK — RECENT EXPERIMENTS (PRIMARY):
 ${experimentsStr || "No experiments logged."}
 
-RECENT RESULTS:
+OWN WORK — COLONY EXPERIMENT TRACKER SUMMARY (PRIMARY):
+${colonyExpSummaryStr || "No colony experiment tracker data."}
+
+OWN WORK — COLONY RESULTS SUMMARY (PRIMARY):
+${colonyResultsSummaryStr || "No colony result entries."}
+
+OWN WORK — RECENT ANALYSES (PRIMARY):
 ${analysesStr || "No results available."}
 
-RECENT NOTES:
+OWN WORK — RECENT FIGURES/PLOTS (PRIMARY):
+${figuresStr || "No saved figures yet."}
+
+RECENT LAB/RESEARCH NOTES (SECONDARY):
 ${notesStr || "No notes available."}
 
-PROMISING IDEAS:
+PROMISING IDEAS (SECONDARY):
 ${(ideas || []).map((i) => `- ${i.title}: ${i.description || ""}`).join("\n") || "None"}
 
-Write in a casual-but-clear style. Use bullet points. Be concise — this should take 5-10 minutes to present. Use actual data from above, not placeholders.`;
+PAPERS/LITERATURE (BACKGROUND ONLY — mention briefly unless directly tied to current results):
+${papersStr || "No papers available."}
+
+Write in a casual-but-clear style. Use bullet points. Be concise — this should take 5-10 minutes to present.
+Use actual data from above, not placeholders.
+If there are no strong results yet, say that directly and propose the next concrete experiments/plots to generate.`;
     } else {
       return NextResponse.json(
         { error: "Unknown generation type" },
@@ -257,4 +369,3 @@ Write in a casual-but-clear style. Use bullet points. Be concise — this should
     );
   }
 }
-
