@@ -190,6 +190,12 @@ interface ColonyClientProps {
     rescheduleTimepointExperiments: (animalId: string, timepointAgeDays: number, newStartDate: string, birthDate: string) => Promise<{ success?: boolean; error?: string; rescheduled?: number; lastDate?: string; message?: string }>;
     batchUpdateExperimentStatus: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string, notes?: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
     batchScheduleSingleExperiment: (animalIds: string[], expType: string, date: string, timepointAgeDays: number | null) => Promise<{ success?: boolean; error?: string }>;
+    rescheduleExperimentsAfterTimepointEdit: (
+      oldTimepointAgeDays: number,
+      newTimepointAgeDays: number,
+      animalIds?: string[],
+      experimentTypes?: string[]
+    ) => Promise<{ success?: boolean; error?: string; updated?: number }>;
   };
 }
 
@@ -340,6 +346,16 @@ export function ColonyClient({
   const [editingCohort, setEditingCohort] = useState<Cohort | null>(null);
   const [editingAnimal, setEditingAnimal] = useState<Animal | null>(null);
   const [editingTP, setEditingTP] = useState<ColonyTimepoint | null>(null);
+  const [tpReschedulePrompt, setTpReschedulePrompt] = useState<null | {
+    tpName: string;
+    oldAgeDays: number;
+    newAgeDays: number;
+    affectedAnimalIds: string[];
+    affectedExperimentTypes: string[];
+  }>(null);
+  const [tpRescheduleSelectedAnimalIds, setTpRescheduleSelectedAnimalIds] = useState<Set<string>>(new Set());
+  const [tpRescheduleSelectedExperimentTypes, setTpRescheduleSelectedExperimentTypes] = useState<Set<string>>(new Set());
+  const [tpRescheduleBusy, setTpRescheduleBusy] = useState(false);
   const [editingHousingCage, setEditingHousingCage] = useState<HousingCage | null>(null);
   const [selectedAnimal, setSelectedAnimal] = useState<Animal | null>(null);
   // Batch Schedule modal state
@@ -625,6 +641,44 @@ export function ColonyClient({
     const result = await actions.updateAnimalExperiment(expId, fd);
     if (result.error) toast.error(result.error);
     else { toast.success("Results link saved!"); refetchAll(); }
+  }
+
+  async function handleTimepointEditSubmit(e: React.FormEvent<HTMLFormElement>) {
+    if (!editingTP) return;
+    e.preventDefault();
+    setBusy(true);
+    const fd = new FormData(e.currentTarget);
+    const newAgeDays = parseInt((fd.get("age_days") as string) || String(editingTP.age_days), 10);
+    const oldAgeDays = editingTP.age_days;
+
+    const affectedRows = experiments.filter((exp) =>
+      exp.timepoint_age_days === oldAgeDays &&
+      (exp.status === "scheduled" || exp.status === "pending" || exp.status === "in_progress")
+    );
+    const affectedAnimalIds = [...new Set(affectedRows.map((exp) => exp.animal_id))];
+    const affectedExperimentTypes = [...new Set(affectedRows.map((exp) => exp.experiment_type))].sort();
+
+    const result = await actions.updateColonyTimepoint(editingTP.id, fd);
+    setBusy(false);
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success("Timepoint saved!");
+    setEditingTP(null);
+    await refetchAll();
+
+    if (affectedRows.length > 0) {
+      setTpReschedulePrompt({
+        tpName: String(fd.get("name") || editingTP.name),
+        oldAgeDays,
+        newAgeDays: Number.isFinite(newAgeDays) ? newAgeDays : oldAgeDays,
+        affectedAnimalIds,
+        affectedExperimentTypes,
+      });
+      setTpRescheduleSelectedAnimalIds(new Set(affectedAnimalIds));
+      setTpRescheduleSelectedExperimentTypes(new Set(affectedExperimentTypes));
+    }
   }
 
   function copyPILink(token: string) {
@@ -1904,7 +1958,7 @@ export function ColonyClient({
           <form
             onSubmit={(e) => {
               if (editingTP) {
-                handleFormAction((fd) => actions.updateColonyTimepoint(editingTP.id, fd), e, () => setEditingTP(null));
+                void handleTimepointEditSubmit(e);
               } else {
                 handleFormAction(actions.createColonyTimepoint, e, () => setShowAddTP(false));
               }
@@ -1993,6 +2047,133 @@ export function ColonyClient({
               <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}{editingTP ? "Save Changes" : "Add Timepoint"}</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Timepoint update -> reschedule prompt */}
+      <Dialog open={!!tpReschedulePrompt} onOpenChange={(open) => { if (!open) setTpReschedulePrompt(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Reschedule pre-scheduled experiments for updated timepoint?</DialogTitle>
+          </DialogHeader>
+          {tpReschedulePrompt && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                You updated <span className="font-medium text-foreground">{tpReschedulePrompt.tpName}</span> ({tpReschedulePrompt.oldAgeDays}d
+                {tpReschedulePrompt.oldAgeDays !== tpReschedulePrompt.newAgeDays ? ` → ${tpReschedulePrompt.newAgeDays}d` : ""}).
+                Select which pre-scheduled experiments and animals should be recalculated from the new timepoint settings.
+              </p>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="rounded-md border p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Experiment Types</p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs"
+                      onClick={() => setTpRescheduleSelectedExperimentTypes(new Set(tpReschedulePrompt.affectedExperimentTypes))}
+                    >
+                      All
+                    </Button>
+                  </div>
+                  <div className="max-h-48 overflow-auto space-y-1">
+                    {tpReschedulePrompt.affectedExperimentTypes.map((expType) => (
+                      <label key={expType} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={tpRescheduleSelectedExperimentTypes.has(expType)}
+                          onChange={(ev) => {
+                            setTpRescheduleSelectedExperimentTypes((prev) => {
+                              const next = new Set(prev);
+                              if (ev.target.checked) next.add(expType);
+                              else next.delete(expType);
+                              return next;
+                            });
+                          }}
+                          className="h-4 w-4"
+                        />
+                        <span>{EXPERIMENT_LABELS[expType] || expType}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-md border p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Animals</p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs"
+                      onClick={() => setTpRescheduleSelectedAnimalIds(new Set(tpReschedulePrompt.affectedAnimalIds))}
+                    >
+                      All
+                    </Button>
+                  </div>
+                  <div className="max-h-48 overflow-auto space-y-1">
+                    {tpReschedulePrompt.affectedAnimalIds.map((animalId) => {
+                      const animal = animals.find((a) => a.id === animalId);
+                      if (!animal) return null;
+                      const cohort = cohorts.find((c) => c.id === animal.cohort_id);
+                      return (
+                        <label key={animalId} className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={tpRescheduleSelectedAnimalIds.has(animalId)}
+                            onChange={(ev) => {
+                              setTpRescheduleSelectedAnimalIds((prev) => {
+                                const next = new Set(prev);
+                                if (ev.target.checked) next.add(animalId);
+                                else next.delete(animalId);
+                                return next;
+                              });
+                            }}
+                            className="h-4 w-4"
+                          />
+                          <span>{animal.identifier}</span>
+                          <span className="text-xs text-muted-foreground">{cohort?.name || "Unknown cohort"}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" type="button" onClick={() => setTpReschedulePrompt(null)} disabled={tpRescheduleBusy}>
+                  Skip for now
+                </Button>
+                <Button
+                  type="button"
+                  disabled={tpRescheduleBusy || tpRescheduleSelectedAnimalIds.size === 0 || tpRescheduleSelectedExperimentTypes.size === 0}
+                  onClick={async () => {
+                    if (!tpReschedulePrompt) return;
+                    setTpRescheduleBusy(true);
+                    const result = await actions.rescheduleExperimentsAfterTimepointEdit(
+                      tpReschedulePrompt.oldAgeDays,
+                      tpReschedulePrompt.newAgeDays,
+                      [...tpRescheduleSelectedAnimalIds],
+                      [...tpRescheduleSelectedExperimentTypes]
+                    );
+                    setTpRescheduleBusy(false);
+                    if (result.error) {
+                      toast.error(result.error);
+                      return;
+                    }
+                    toast.success(`Rescheduled ${result.updated ?? 0} experiment${(result.updated ?? 0) === 1 ? "" : "s"} from updated timepoint`);
+                    setTpReschedulePrompt(null);
+                    await refetchAll();
+                  }}
+                >
+                  {tpRescheduleBusy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                  Reschedule Selected
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

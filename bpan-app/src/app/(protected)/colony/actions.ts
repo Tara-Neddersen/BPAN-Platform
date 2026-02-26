@@ -1593,6 +1593,131 @@ export async function rescheduleTimepointExperiments(
   return { success: true, rescheduled: updates.length, lastDate: lastDate.toISOString().split("T")[0] };
 }
 
+/**
+ * Recalculate scheduled dates for existing (pre-scheduled) experiments after a timepoint config edit.
+ * Lets the UI scope to selected animals and/or experiment types.
+ */
+export async function rescheduleExperimentsAfterTimepointEdit(
+  oldTimepointAgeDays: number,
+  newTimepointAgeDays: number,
+  animalIds?: string[],
+  experimentTypes?: string[]
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { data: tp } = await supabase
+    .from("colony_timepoints")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("age_days", newTimepointAgeDays)
+    .single();
+  if (!tp) return { error: "Updated timepoint not found." };
+
+  let expQuery = supabase
+    .from("animal_experiments")
+    .select("id, animal_id, experiment_type, timepoint_age_days, status")
+    .eq("user_id", user.id)
+    .eq("timepoint_age_days", oldTimepointAgeDays)
+    .in("status", ["scheduled", "pending", "in_progress"]);
+  if (animalIds && animalIds.length > 0) expQuery = expQuery.in("animal_id", animalIds);
+  if (experimentTypes && experimentTypes.length > 0) expQuery = expQuery.in("experiment_type", experimentTypes);
+
+  const { data: exps, error: expErr } = await expQuery;
+  if (expErr) return { error: expErr.message };
+  if (!exps || exps.length === 0) return { success: true, updated: 0 };
+
+  const uniqueAnimalIds = [...new Set(exps.map((e) => String(e.animal_id)))];
+  const { data: animals, error: animalErr } = await supabase
+    .from("animals")
+    .select("id, birth_date")
+    .eq("user_id", user.id)
+    .in("id", uniqueAnimalIds);
+  if (animalErr) return { error: animalErr.message };
+
+  const birthByAnimal = new Map((animals || []).map((a) => [String(a.id), String(a.birth_date)]));
+  const expsByAnimal = new Map<string, typeof exps>();
+  for (const exp of exps) {
+    const key = String(exp.animal_id);
+    if (!expsByAnimal.has(key)) expsByAnimal.set(key, []);
+    expsByAnimal.get(key)!.push(exp);
+  }
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const updates: { id: string; scheduled_date: string; timepoint_age_days: number; notes?: string }[] = [];
+
+  const protocolOffsetMap = new Map<string, { dayOffset: number; notes?: string }>();
+  for (const step of PROTOCOL_SCHEDULE) protocolOffsetMap.set(step.type, { dayOffset: step.dayOffset, notes: step.notes });
+
+  for (const [animalId, animalExps] of expsByAnimal.entries()) {
+    const birthDate = birthByAnimal.get(animalId);
+    if (!birthDate) continue;
+    const experimentStart = new Date(new Date(birthDate).getTime() + newTimepointAgeDays * DAY);
+    const timeline = computeColonyTimelineAnchors(experimentStart, tp);
+    const behaviorAnchor = timeline.behaviorStart;
+    const hasImplantRow = animalExps.some((e) => e.experiment_type === "eeg_implant");
+    const hasRecordingRow = animalExps.some((e) => e.experiment_type === "eeg_recording");
+
+    for (const exp of animalExps) {
+      let scheduledDate: string | null = null;
+      let notes: string | undefined;
+
+      if (exp.experiment_type === "handling") {
+        scheduledDate = isoDate(new Date(behaviorAnchor.getTime() - (tp.handling_days_before ?? 5) * DAY));
+      } else if (exp.experiment_type === "eeg_implant") {
+        if (timeline.implantDate) {
+          scheduledDate = isoDate(timeline.implantDate);
+          notes = `EEG implant surgery (one-time, ${(tp.eeg_implant_timing || "after")} behavior battery)`;
+        }
+      } else if (exp.experiment_type === "eeg_recording") {
+        scheduledDate = isoDate(timeline.recordingStart);
+        notes = hasImplantRow
+          ? `EEG recording (${timeline.recordingDays}d) after ${timeline.recoveryDays}d ${(tp.eeg_implant_timing || "after")}-behavior implant recovery`
+          : `EEG recording (${timeline.recordingDays}d) after behavior battery`;
+      } else if (exp.experiment_type === "blood_draw") {
+        scheduledDate = isoDate(hasRecordingRow ? timeline.plasmaDate : timeline.plasmaWithoutEegDate);
+        notes = hasRecordingRow
+          ? `Plasma collection (+${PLASMA_GAP_AFTER_RECORDING_END_DAYS}d after ${timeline.recordingDays}d EEG recording)`
+          : `Plasma collection (+${PLASMA_GAP_AFTER_RECORDING_END_DAYS}d after last behavior test)`;
+      } else {
+        const step = protocolOffsetMap.get(exp.experiment_type);
+        if (step) {
+          scheduledDate = isoDate(new Date(behaviorAnchor.getTime() + step.dayOffset * DAY));
+          notes = step.notes;
+        }
+      }
+
+      if (!scheduledDate) continue;
+      updates.push({
+        id: String(exp.id),
+        scheduled_date: scheduledDate,
+        timepoint_age_days: newTimepointAgeDays,
+        notes,
+      });
+    }
+  }
+
+  for (let i = 0; i < updates.length; i += 100) {
+    for (const u of updates.slice(i, i + 100)) {
+      await supabase
+        .from("animal_experiments")
+        .update({
+          scheduled_date: u.scheduled_date,
+          timepoint_age_days: u.timepoint_age_days,
+          ...(u.notes ? { notes: u.notes } : {}),
+        })
+        .eq("id", u.id)
+        .eq("user_id", user.id);
+    }
+  }
+
+  revalidatePath("/colony");
+  revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true, updated: updates.length };
+}
+
 // ─── Advisor Portal ─────────────────────────────────────────────────────
 
 export async function createAdvisorAccess(formData: FormData) {

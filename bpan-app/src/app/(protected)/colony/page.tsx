@@ -50,6 +50,7 @@ import {
   rescheduleTimepointExperiments,
   batchUpdateExperimentStatus,
   batchScheduleSingleExperiment,
+  rescheduleExperimentsAfterTimepointEdit,
 } from "./actions";
 import { batchUpsertColonyResults, reconcileTrackerFromExistingColonyResults } from "./result-actions";
 
@@ -183,6 +184,7 @@ export default async function ColonyPage({ searchParams }: { searchParams: Promi
           rescheduleTimepointExperiments,
           batchUpdateExperimentStatus,
           batchScheduleSingleExperiment,
+          rescheduleExperimentsAfterTimepointEdit,
         }}
       />
     </div>
