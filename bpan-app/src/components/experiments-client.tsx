@@ -389,6 +389,8 @@ function CalendarView({
   const [calendarFeed, setCalendarFeed] = useState<{ icsUrl: string } | null>(null);
   const [syncingGoogleCalendar, setSyncingGoogleCalendar] = useState(false);
   const [syncingOutlookCalendar, setSyncingOutlookCalendar] = useState(false);
+  const [importingGoogleCalendar, setImportingGoogleCalendar] = useState(false);
+  const [importingOutlookCalendar, setImportingOutlookCalendar] = useState(false);
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
@@ -733,7 +735,7 @@ function CalendarView({
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                One-way sync for BPAN calendar feed (workspace events + planner + timepoints + colony schedule) into Google Calendar.
+                Sync BPAN calendar into Google, and import external Google-only events back into BPAN.
               </p>
               {googleCalendarStatus?.email && (
                 <p className="text-xs text-muted-foreground">Account: {googleCalendarStatus.email}</p>
@@ -774,6 +776,32 @@ function CalendarView({
                   {syncingGoogleCalendar ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
                   Sync BPAN calendar
                 </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 text-xs"
+                  disabled={importingGoogleCalendar || !googleCalendarStatus?.connected}
+                  onClick={async () => {
+                    setImportingGoogleCalendar(true);
+                    try {
+                      const res = await fetch("/api/calendar/google/import", { method: "POST" });
+                      const data = await res.json();
+                      if (!res.ok) {
+                        toast.error(data.error || "Import failed");
+                      } else {
+                        toast.success(
+                          `Imported ${data.imported || 0}, updated ${data.updated || 0} Google event${((data.imported || 0) + (data.updated || 0)) === 1 ? "" : "s"} into BPAN`
+                        );
+                        router.refresh();
+                      }
+                    } finally {
+                      setImportingGoogleCalendar(false);
+                    }
+                  }}
+                >
+                  {importingGoogleCalendar ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
+                  Import external changes
+                </Button>
                 {googleCalendarStatus?.connected && (
                   <Button
                     size="sm"
@@ -804,7 +832,7 @@ function CalendarView({
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                One-way sync for BPAN calendar feed into Outlook (Microsoft 365).
+                Sync BPAN calendar into Outlook, and import external Outlook events back into BPAN.
               </p>
               {outlookCalendarStatus?.email && (
                 <p className="text-xs text-muted-foreground">Account: {outlookCalendarStatus.email}</p>
@@ -844,6 +872,32 @@ function CalendarView({
                 >
                   {syncingOutlookCalendar ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
                   Sync BPAN calendar
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 text-xs"
+                  disabled={importingOutlookCalendar || !outlookCalendarStatus?.connected}
+                  onClick={async () => {
+                    setImportingOutlookCalendar(true);
+                    try {
+                      const res = await fetch("/api/calendar/outlook/import", { method: "POST" });
+                      const data = await res.json();
+                      if (!res.ok) {
+                        toast.error(data.error || "Import failed");
+                      } else {
+                        toast.success(
+                          `Imported ${data.imported || 0}, updated ${data.updated || 0} Outlook event${((data.imported || 0) + (data.updated || 0)) === 1 ? "" : "s"} into BPAN`
+                        );
+                        router.refresh();
+                      }
+                    } finally {
+                      setImportingOutlookCalendar(false);
+                    }
+                  }}
+                >
+                  {importingOutlookCalendar ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
+                  Import external changes
                 </Button>
                 {outlookCalendarStatus?.connected && (
                   <Button
@@ -889,6 +943,9 @@ function CalendarView({
               </div>
               <p className="text-[11px] text-muted-foreground">
                 Apple/Outlook use this URL for subscription sync. Google also supports subscription, but direct Google sync above gives richer event updates.
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                External-provider imports create BPAN workspace events (category: external) and skip BPAN-managed events to avoid duplicates.
               </p>
             </div>
           </div>
