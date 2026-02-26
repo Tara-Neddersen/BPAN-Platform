@@ -88,7 +88,9 @@ export async function GET(_: Request, context: { params: Promise<Record<string, 
   }
 
   for (const tp of timepointsRes.data || []) {
-    pushEvent(`timepoint-${tp.id}`, `[Timepoint] ${String(tp.label)}${tp.experiments?.title ? ` · ${String(tp.experiments.title)}` : ""}`, String(tp.scheduled_at), {
+    const expRel = tp.experiments as { title?: string } | Array<{ title?: string }> | null;
+    const expTitle = Array.isArray(expRel) ? expRel[0]?.title : expRel?.title;
+    pushEvent(`timepoint-${tp.id}`, `[Timepoint] ${String(tp.label)}${expTitle ? ` · ${String(expTitle)}` : ""}`, String(tp.scheduled_at), {
       allDay: false,
     });
   }
