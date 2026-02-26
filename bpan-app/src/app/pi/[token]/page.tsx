@@ -144,7 +144,7 @@ function PhotoGallery({ photos }: { photos: PortalPhoto[] }) {
         </CardTitle>
       </CardHeader>
       <div className="relative">
-        <div className="h-[260px] sm:h-[320px] md:h-[360px] bg-black flex items-center justify-center overflow-hidden">
+        <div className="h-[260px] sm:h-[320px] md:h-[360px] bg-transparent flex items-center justify-center overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={displayUrl}
