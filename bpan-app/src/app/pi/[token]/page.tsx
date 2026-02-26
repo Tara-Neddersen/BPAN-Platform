@@ -144,12 +144,12 @@ function PhotoGallery({ photos }: { photos: PortalPhoto[] }) {
         </CardTitle>
       </CardHeader>
       <div className="relative">
-        <div className="aspect-[16/7] max-h-[320px] bg-black flex items-center justify-center overflow-hidden">
+        <div className="h-[260px] sm:h-[320px] md:h-[360px] bg-black flex items-center justify-center overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={displayUrl}
             alt={photo.caption || "Lab photo"}
-            className={`max-w-full max-h-full object-contain transition-opacity duration-300 ${fade ? "opacity-100" : "opacity-0"}`}
+            className={`block w-full h-full object-contain object-center transition-opacity duration-300 ${fade ? "opacity-100" : "opacity-0"}`}
             referrerPolicy="no-referrer"
           />
         </div>
