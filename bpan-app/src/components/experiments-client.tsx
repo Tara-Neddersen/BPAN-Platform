@@ -80,6 +80,7 @@ const COLONY_EXP_LABELS: Record<string, string> = {
 const COLONY_STATUS_COLORS: Record<string, string> = {
   scheduled: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300 border-l-2 border-l-indigo-500",
   in_progress: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border-l-2 border-l-amber-500",
+  completed: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 border-l-2 border-l-emerald-500",
 };
 
 const STATUS_STYLES: Record<string, { bg: string; icon: React.ReactNode }> = {
@@ -93,6 +94,11 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: "bg-gray-100 text-gray-600",
   medium: "bg-blue-100 text-blue-700",
   high: "bg-red-100 text-red-700",
+};
+
+const COLONY_MULTI_DAY_SPANS: Record<string, number> = {
+  handling: 5,
+  core_acclimation: 2,
 };
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -486,9 +492,9 @@ function CalendarView({
   const cohortMap = new Map(cohorts.map(c => [c.id, c]));
   const tpMap = new Map(colonyTimepoints.map(tp => [tp.age_days, tp]));
 
-  // Filter colony experiments: only scheduled & in_progress
+  // Filter colony experiments: keep active + completed visible on calendar for history
   const filteredColonyExps = animalExperiments.filter(ae => {
-    if (ae.status !== "scheduled" && ae.status !== "in_progress") return false;
+    if (ae.status !== "scheduled" && ae.status !== "in_progress" && ae.status !== "completed") return false;
     if (!ae.scheduled_date) return false;
     if (filterCohort !== "all") {
       const animal = animalMap.get(ae.animal_id);
@@ -526,10 +532,41 @@ function CalendarView({
     return Math.floor((target.getTime() - birth.getTime()) / (24 * 60 * 60 * 1000));
   }
 
+  function getColonyExperimentSpanDays(experimentType: string | null | undefined) {
+    if (!experimentType) return 1;
+    return COLONY_MULTI_DAY_SPANS[experimentType] ?? 1;
+  }
+
+  function addDays(dateStr: string, daysToAdd: number) {
+    const d = new Date(`${dateStr}T12:00:00`);
+    d.setDate(d.getDate() + daysToAdd);
+    return d.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  }
+
+  function colonyExperimentOccursOnDate(ae: AnimalExperiment, dateStr: string) {
+    if (!ae.scheduled_date) return false;
+    const spanDays = getColonyExperimentSpanDays(ae.experiment_type);
+    if (spanDays <= 1) return ae.scheduled_date === dateStr;
+    const endDate = addDays(ae.scheduled_date, spanDays - 1);
+    return ae.scheduled_date <= dateStr && dateStr <= endDate;
+  }
+
+  function colonyStatusShortLabel(status: string) {
+    if (status === "in_progress") return "IP";
+    if (status === "completed") return "Done";
+    return "Sched";
+  }
+
+  function colonyStatusLongLabel(status: string) {
+    if (status === "in_progress") return "In Progress";
+    if (status === "completed") return "Completed";
+    return "Scheduled";
+  }
+
   // Group colony experiments by date → experiment_type → list of animals
   function getColonyExpsForDay(day: number) {
     const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    const dayExps = filteredColonyExps.filter(ae => ae.scheduled_date === dateStr);
+    const dayExps = filteredColonyExps.filter(ae => colonyExperimentOccursOnDate(ae, dateStr));
 
     // Group by experiment_type + status
     const groups = new Map<string, { type: string; status: string; isVirtual?: boolean; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string; ageAtEventDays: number | null }[] }>();
@@ -605,6 +642,7 @@ function CalendarView({
   );
   const scheduledThisMonth = thisMonthColony.filter(ae => ae.status === "scheduled").length;
   const inProgressThisMonth = thisMonthColony.filter(ae => ae.status === "in_progress").length;
+  const completedThisMonth = thisMonthColony.filter(ae => ae.status === "completed").length;
 
   const handleCreateManualEvent = useCallback(async (dateStr: string) => {
     const title = manualEventTitle.trim();
@@ -953,7 +991,7 @@ function CalendarView({
       )}
 
       {/* This-month colony summary */}
-      {showColonyExps && (scheduledThisMonth + inProgressThisMonth) > 0 && (
+      {showColonyExps && (scheduledThisMonth + inProgressThisMonth + completedThisMonth) > 0 && (
         <div className="flex items-center gap-4 text-xs px-3 py-2 rounded-lg border bg-muted/30">
           <span className="font-medium text-foreground">This month:</span>
           <span className="flex items-center gap-1">
@@ -963,6 +1001,10 @@ function CalendarView({
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded-full bg-amber-500 inline-block" />
             {inProgressThisMonth} in progress
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-emerald-500 inline-block" />
+            {completedThisMonth} completed
           </span>
           {manualEventsThisMonth > 0 && (
             <span className="flex items-center gap-1">
@@ -984,6 +1026,9 @@ function CalendarView({
           </span>
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded bg-amber-200 inline-block border border-amber-400" /> Colony in progress
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded bg-emerald-200 inline-block border border-emerald-400" /> Colony completed
           </span>
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded bg-purple-200 inline-block border border-purple-400" /> Timepoints
@@ -1098,7 +1143,7 @@ function CalendarView({
                         >
                           <span className="inline-flex items-center gap-0.5">
                             <GripVertical className="h-2 w-2 opacity-40 inline-block flex-shrink-0" />
-                            {COLONY_EXP_LABELS[g.type] || g.type} · {g.animals.length}
+                            {COLONY_EXP_LABELS[g.type] || g.type} · {g.animals.length}{g.status === "completed" ? " ✓" : ""}
                           </span>
                         </div>
                       ))}
@@ -1118,7 +1163,7 @@ function CalendarView({
                         >
                           <div className="font-medium flex items-center justify-between">
                             <span>{COLONY_EXP_LABELS[g.type] || g.type}</span>
-                            <Badge variant="outline" className="h-3.5 px-1 text-[8px]">{g.status === "in_progress" ? "IP" : "Sched"}</Badge>
+                            <Badge variant="outline" className="h-3.5 px-1 text-[8px]">{colonyStatusShortLabel(g.status)}</Badge>
                           </div>
                           <div className="flex flex-wrap gap-x-1 mt-0.5 text-[9px] opacity-80">
                             {g.animals.slice(0, 6).map((a) => (
@@ -1309,7 +1354,7 @@ function CalendarView({
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-xs font-semibold">{COLONY_EXP_LABELS[g.type] || g.type}{g.type === "rotarod_recovery" ? " (calendar only)" : ""}</span>
                           <Badge variant="outline" className="text-[10px] h-4 px-1.5">
-                            {g.animals.length} animal{g.animals.length !== 1 ? "s" : ""} · {g.status === "in_progress" ? "In Progress" : "Scheduled"}
+                            {g.animals.length} animal{g.animals.length !== 1 ? "s" : ""} · {colonyStatusLongLabel(g.status)}
                           </Badge>
                         </div>
                         {g.type !== "rotarod_recovery" && (
