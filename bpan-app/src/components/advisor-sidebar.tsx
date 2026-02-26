@@ -34,6 +34,17 @@ type OperatorHistoryItem = {
   createdAt: string;
   meta?: string;
 };
+type OperatorJob = {
+  id: string;
+  name: string;
+  description?: string;
+  command: string;
+  status: "queued" | "paused";
+  runCount?: number;
+  lastRunAt?: string | null;
+  lastResult?: string | null;
+  createdAt: string;
+};
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
@@ -60,6 +71,9 @@ export function AdvisorSidebar() {
     steps: Array<{ step: string; kind: string; action: string; destructive: boolean; supported: boolean; note?: string }>;
   } | null>(null);
   const [operatorHistory, setOperatorHistory] = useState<OperatorHistoryItem[]>([]);
+  const [operatorJobs, setOperatorJobs] = useState<OperatorJob[]>([]);
+  const [operatorJobsLoading, setOperatorJobsLoading] = useState(false);
+  const [operatorJobRunningId, setOperatorJobRunningId] = useState<string | null>(null);
 
   // Conversations list
   const [conversations, setConversations] = useState<AdvisorConversation[]>([]);
@@ -246,6 +260,21 @@ export function AdvisorSidebar() {
     }
   }, []);
 
+  const loadOperatorJobs = useCallback(async () => {
+    setOperatorJobsLoading(true);
+    try {
+      const res = await fetch("/api/operator/jobs");
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.jobs)) {
+        setOperatorJobs(data.jobs as OperatorJob[]);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setOperatorJobsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("bpan_operator_history_v1");
@@ -268,8 +297,9 @@ export function AdvisorSidebar() {
   useEffect(() => {
     if (open && view === "operator") {
       void loadOperatorHistory();
+      void loadOperatorJobs();
     }
-  }, [open, view, loadOperatorHistory]);
+  }, [open, view, loadOperatorHistory, loadOperatorJobs]);
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -647,9 +677,131 @@ export function AdvisorSidebar() {
                         >
                           Run Plan
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="text-xs h-8"
+                          disabled={operatorPlan.supportedSteps === 0}
+                          onClick={async () => {
+                            const name = window.prompt("Save as Operator job (name):", "Operator Job");
+                            if (!name) return;
+                            const res = await fetch("/api/operator/jobs", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                name,
+                                description: `Saved from Operator plan (${operatorPlan.supportedSteps}/${operatorPlan.totalSteps} supported)`,
+                                command: operatorPlan.original,
+                                status: "queued",
+                              }),
+                            });
+                            const data = await res.json();
+                            if (!res.ok) {
+                              setOperatorMessages((prev) => [...prev, { id: `op-job-e-${Date.now()}`, role: "assistant", content: data.error || "Failed to save job." }]);
+                              return;
+                            }
+                            setOperatorMessages((prev) => [...prev, { id: `op-job-ok-${Date.now()}`, role: "assistant", content: `Saved Operator job "${name}".` }]);
+                            await loadOperatorJobs();
+                          }}
+                        >
+                          Save as Job
+                        </Button>
                       </div>
                     </div>
                   )}
+
+                  <div className="rounded-lg border p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium">Operator Jobs</p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[10px]"
+                        onClick={() => void loadOperatorJobs()}
+                        disabled={operatorJobsLoading}
+                      >
+                        {operatorJobsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Refresh"}
+                      </Button>
+                    </div>
+                    {operatorJobs.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        Save a plan as a job to re-run it later.
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {operatorJobs.slice(0, 6).map((job) => (
+                          <div key={job.id} className="rounded-md border bg-background px-2 py-2 space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-medium truncate">{job.name}</p>
+                                <p className="text-[10px] text-muted-foreground truncate">{job.command}</p>
+                              </div>
+                              <Badge variant={job.status === "paused" ? "outline" : "secondary"} className="text-[10px]">
+                                {job.status}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[10px] text-muted-foreground">
+                                Runs: {job.runCount ?? 0}{job.lastRunAt ? ` · ${new Date(job.lastRunAt).toLocaleString()}` : ""}
+                              </p>
+                              <div className="flex gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 px-2 text-[10px]"
+                                  disabled={job.status === "paused" || operatorJobRunningId === job.id}
+                                  onClick={async () => {
+                                    setOperatorJobRunningId(job.id);
+                                    try {
+                                      const res = await fetch(`/api/operator/jobs/${job.id}/run`, { method: "POST" });
+                                      const data = await res.json();
+                                      setOperatorMessages((prev) => [...prev, { id: `op-jobrun-${Date.now()}`, role: "assistant", content: data.response || data.error || "Job run finished." }]);
+                                      await loadOperatorJobs();
+                                      void loadOperatorHistory();
+                                    } finally {
+                                      setOperatorJobRunningId(null);
+                                    }
+                                  }}
+                                >
+                                  {operatorJobRunningId === job.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Run"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-[10px]"
+                                  onClick={async () => {
+                                    await fetch(`/api/operator/jobs/${job.id}`, {
+                                      method: "PATCH",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ status: job.status === "paused" ? "queued" : "paused" }),
+                                    });
+                                    await loadOperatorJobs();
+                                  }}
+                                >
+                                  {job.status === "paused" ? "Resume" : "Pause"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-[10px] text-destructive"
+                                  onClick={async () => {
+                                    if (!window.confirm(`Delete operator job "${job.name}"?`)) return;
+                                    await fetch(`/api/operator/jobs/${job.id}`, { method: "DELETE" });
+                                    await loadOperatorJobs();
+                                  }}
+                                >
+                                  Delete
+                                </Button>
+                              </div>
+                            </div>
+                            {job.lastResult ? (
+                              <p className="text-[10px] text-muted-foreground line-clamp-2">{job.lastResult}</p>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="border-t px-4 py-3">
                   <div className="flex gap-2">
