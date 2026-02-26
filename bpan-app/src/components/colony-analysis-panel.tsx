@@ -1665,11 +1665,11 @@ function VisualizationPanel({
     <div className="space-y-4">
       <Card>
         <CardContent className="pt-4 space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
+            <div className="min-w-0 lg:col-span-2">
               <Label className="text-xs mb-1 block">Chart Type</Label>
               <Select value={chartType} onValueChange={setChartType}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full min-w-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1680,12 +1680,12 @@ function VisualizationPanel({
               </Select>
             </div>
 
-            <div>
+            <div className={`min-w-0 ${chartType === "scatter" ? "lg:col-span-3" : "lg:col-span-4"}`}>
               <Label className="text-xs mb-1 block">
                 {chartType === "scatter" ? "X Measure" : "Measure"}
               </Label>
               <Select value={measureKey} onValueChange={setMeasureKey}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full min-w-0">
                   <SelectValue placeholder="Select" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1697,10 +1697,10 @@ function VisualizationPanel({
             </div>
 
             {chartType === "scatter" && (
-              <div>
+              <div className="min-w-0 lg:col-span-3">
                 <Label className="text-xs mb-1 block">Y Measure</Label>
                 <Select value={measureKey2} onValueChange={setMeasureKey2}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full min-w-0">
                     <SelectValue placeholder="Select" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1712,10 +1712,10 @@ function VisualizationPanel({
               </div>
             )}
 
-            <div>
+            <div className={`min-w-0 ${chartType === "scatter" ? "lg:col-span-2" : "lg:col-span-3"}`}>
               <Label className="text-xs mb-1 block">Group By</Label>
               <Select value={groupBy} onValueChange={(v) => setGroupBy(v as typeof groupBy)}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full min-w-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1727,12 +1727,13 @@ function VisualizationPanel({
               </Select>
             </div>
 
-            <div>
+            <div className={`min-w-0 ${chartType === "scatter" ? "lg:col-span-2" : "lg:col-span-3"}`}>
               <Label className="text-xs mb-1 block">Title (optional)</Label>
               <Input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Auto-generated"
+                className="w-full min-w-0"
               />
             </div>
           </div>
@@ -1915,4 +1916,3 @@ function VisualizationPanel({
     </div>
   );
 }
-
