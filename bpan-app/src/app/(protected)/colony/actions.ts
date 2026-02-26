@@ -720,8 +720,9 @@ export async function deleteAnimalExperiment(id: string) {
 //   Day 4–5  : 48hr Core Acclimation (no testing)
 //   Day 6    : CatWalk Gait Analysis + Rotarod Habituation
 //   Day 7–8  : Rotarod Testing (Acceleration)
-//   Day 9    : Stamina Test (10 RPM / 60m cap)
-//   Day 10   : Plasma Collection (Blood Draw)
+//   Day 9    : Rotarod Recovery Day (calendar planning only; no tracker completion)
+//   Day 10   : Stamina Test (10 RPM / 60m cap)
+//   Day 11   : Plasma Collection (Blood Draw)
 // Then optionally: EEG implant → recovery → recording
 
 const PROTOCOL_SCHEDULE: { type: string; dayOffset: number; notes?: string }[] = [
@@ -736,8 +737,8 @@ const PROTOCOL_SCHEDULE: { type: string; dayOffset: number; notes?: string }[] =
   { type: "rotarod_hab",       dayOffset: 5,  notes: "Day 6 — Rotarod Habituation (Day 1 of 4)" },
   { type: "rotarod_test1",     dayOffset: 6,  notes: "Day 7 — Rotarod Test 1 (Day 2 of 4)" },
   { type: "rotarod_test2",     dayOffset: 7,  notes: "Day 8 — Rotarod Test 2 (Day 3 of 4)" },
-  { type: "stamina",           dayOffset: 8,  notes: "Day 9 — Rotarod Stamina (Day 4 of 4, 10 RPM / 60m Cap)" },
-  { type: "blood_draw",        dayOffset: 9,  notes: "Day 10 — Plasma Collection (10:00–13:00)" },
+  { type: "stamina",           dayOffset: 9,  notes: "Day 10 — Rotarod Stamina (Day 4 of 4, 10 RPM / 60m Cap)" },
+  { type: "blood_draw",        dayOffset: 10, notes: "Day 11 — Plasma Collection (10:00–13:00)" },
 ];
 
 /**
@@ -877,7 +878,7 @@ export async function scheduleExperimentsForAnimal(
     //   Later TPs (120d, 210d): experiments (10d) → 7d rest → recording (no surgery)
     if (anyTimepointHasEeg) {
       const eegTpConfig = eegTpConfigForAnimal;
-      const afterExperimentsDate = new Date(experimentStart.getTime() + 10 * DAY);
+      const afterExperimentsDate = new Date(experimentStart.getTime() + 11 * DAY);
 
       if (!eegImplantScheduled) {
         // First timepoint: schedule surgery + recovery + recording

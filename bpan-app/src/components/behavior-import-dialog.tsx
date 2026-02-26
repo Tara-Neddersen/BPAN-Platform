@@ -160,6 +160,8 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   nesting: "Overnight Nesting",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Habituation",
+  rotarod_test1: "Rotarod Test 1",
+  rotarod_test2: "Rotarod Test 2",
   rotarod: "Rotarod Testing",
   stamina: "Stamina Test",
   blood_draw: "Plasma Collection",
@@ -850,4 +852,3 @@ export function BehaviorImportDialog({
     </Dialog>
   );
 }
-

@@ -59,6 +59,7 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   rotarod: "Rotarod Testing (legacy)",
   rotarod_test1: "Rotarod Test 1",
   rotarod_test2: "Rotarod Test 2",
+  rotarod_recovery: "Rotarod Recovery (calendar only)",
   stamina: "Stamina Test (10 RPM)",
   blood_draw: "Plasma Collection",
   eeg_implant: "EEG Implant Surgery",
@@ -91,8 +92,9 @@ const PROTOCOL_DAY_LABELS: Record<string, string> = {
   rotarod_hab: "Day 6 (Rotarod Day 1)",
   rotarod_test1: "Day 7 (Rotarod Day 2)",
   rotarod_test2: "Day 8 (Rotarod Day 3)",
-  stamina: "Day 9 (Rotarod Day 4)",
-  blood_draw: "Day 10",
+  rotarod_recovery: "Day 9 (Calendar only)",
+  stamina: "Day 10 (Rotarod Day 4)",
+  blood_draw: "Day 11",
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -1032,7 +1034,7 @@ export function ColonyClient({
             <div>
               <p className="text-sm font-medium">Protocol Timepoints</p>
               <p className="text-xs text-muted-foreground mt-0.5 italic">
-                Week 0: Handling → Day 1: Y-Maze + Marble → Day 2: LDB + Nesting → Day 3: Core → Day 4–5: Acclimation → Day 6: CatWalk + RR Hab → Day 7–8: Rotarod → Day 9: Stamina → Day 10: Plasma
+                Week 0: Handling → Day 1: Y-Maze + Marble → Day 2: LDB + Nesting → Day 3: Core → Day 4–5: Acclimation → Day 6: CatWalk + RR Hab → Day 7: RR Test 1 → Day 8: RR Test 2 → Day 9: RR Recovery (calendar only) → Day 10: RR Stamina → Day 11: Plasma
               </p>
             </div>
             <Button onClick={() => setShowAddTP(true)} size="sm" className="flex-shrink-0">
@@ -1060,6 +1062,11 @@ export function ColonyClient({
                               {PROTOCOL_DAY_LABELS[e] ? `${PROTOCOL_DAY_LABELS[e]}: ` : ""}{EXPERIMENT_LABELS[e] || e}
                             </Badge>
                           ))}
+                          {tp.experiments.includes("rotarod_test2") && tp.experiments.includes("stamina") && (
+                            <Badge variant="outline" className="text-xs border-slate-300 text-slate-600">
+                              {PROTOCOL_DAY_LABELS.rotarod_recovery}: {EXPERIMENT_LABELS.rotarod_recovery}
+                            </Badge>
+                          )}
                         </div>
                         <div className="text-xs text-muted-foreground mt-1.5 flex flex-wrap gap-3">
                           <span>Handle {tp.handling_days_before}d before</span>

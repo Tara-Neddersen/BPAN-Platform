@@ -64,6 +64,20 @@ const DEFAULT_MEASURES: Record<string, MeasureField[]> = {
     { key: "trial_1_sec", label: "Habituation Trial 1", unit: "sec", type: "number" },
     { key: "trial_2_sec", label: "Habituation Trial 2", unit: "sec", type: "number" },
   ],
+  rotarod_test1: [
+    { key: "trial_1_sec", label: "Trial 1", unit: "sec", type: "number" },
+    { key: "trial_2_sec", label: "Trial 2", unit: "sec", type: "number" },
+    { key: "trial_3_sec", label: "Trial 3", unit: "sec", type: "number" },
+    { key: "latency_to_fall_sec", label: "Avg Latency to Fall", unit: "sec", type: "number" },
+    { key: "rpm_at_fall", label: "RPM at Fall", type: "number" },
+  ],
+  rotarod_test2: [
+    { key: "trial_1_sec", label: "Trial 1", unit: "sec", type: "number" },
+    { key: "trial_2_sec", label: "Trial 2", unit: "sec", type: "number" },
+    { key: "trial_3_sec", label: "Trial 3", unit: "sec", type: "number" },
+    { key: "latency_to_fall_sec", label: "Avg Latency to Fall", unit: "sec", type: "number" },
+    { key: "rpm_at_fall", label: "RPM at Fall", type: "number" },
+  ],
   stamina: [
     { key: "duration_sec", label: "Duration at 10 RPM", unit: "sec", type: "number" },
     { key: "distance_m", label: "Distance", unit: "m", type: "number" },
@@ -89,6 +103,8 @@ const RESULT_EXPERIMENT_TYPES = [
   "nesting",
   "catwalk",
   "rotarod_hab",
+  "rotarod_test1",
+  "rotarod_test2",
   "rotarod",
   "stamina",
   "blood_draw",
@@ -102,6 +118,8 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   nesting: "Overnight Nesting",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Habituation",
+  rotarod_test1: "Rotarod Test 1",
+  rotarod_test2: "Rotarod Test 2",
   rotarod: "Rotarod Testing",
   stamina: "Stamina Test",
   blood_draw: "Plasma Collection",
@@ -1333,4 +1351,3 @@ function RawDataLinkCell({
     </div>
   );
 }
-

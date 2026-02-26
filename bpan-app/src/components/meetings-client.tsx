@@ -464,6 +464,9 @@ function MeetingDetail({
             </div>
           </div>
         </div>
+        <p className="mb-2 text-[10px] text-muted-foreground">
+          `Dictate` works in-browser. `Upload recording (free/local)` only works on your local app (it uses your Mac&apos;s local Whisper install, not Vercel).
+        </p>
         <Textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}

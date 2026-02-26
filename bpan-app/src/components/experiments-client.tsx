@@ -58,6 +58,9 @@ const COLONY_EXP_LABELS: Record<string, string> = {
   core_acclimation: "Core Acclim.",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Hab.",
+  rotarod_test1: "RR Test 1",
+  rotarod_test2: "RR Test 2",
+  rotarod_recovery: "RR Recovery",
   rotarod: "Rotarod",
   stamina: "Stamina",
   blood_draw: "Blood Draw",
@@ -360,13 +363,16 @@ function CalendarView({
   const [expandedDay, setExpandedDay] = useState<string | null>(null);
   const [dragOverDay, setDragOverDay] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [dragPayload, setDragPayload] = useState<{ expId: string; expIds: string[]; fromDate: string } | null>(null);
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
   // ─── Drag & Drop Handlers ───────────────────────────────────────────
   const handleDragStart = useCallback((e: React.DragEvent, expId: string, expType: string, fromDate: string, expIds?: string[]) => {
-    e.dataTransfer.setData("text/plain", JSON.stringify({ expId, expIds: expIds || [expId], expType, fromDate }));
+    const payload = { expId, expIds: expIds || [expId], expType, fromDate };
+    e.dataTransfer.setData("text/plain", JSON.stringify(payload));
     e.dataTransfer.effectAllowed = "move";
+    setDragPayload({ expId, expIds: expIds || [expId], fromDate });
     setIsDragging(true);
   }, []);
 
@@ -380,37 +386,60 @@ function CalendarView({
     setDragOverDay(null);
   }, []);
 
+  const moveColonyExperiments = useCallback(async (ids: string[], expId: string, fromDate: string, targetDate: string) => {
+    if (fromDate === targetDate) return;
+    const result = ids.length > 1
+      ? await rescheduleExperimentDates(ids, targetDate)
+      : await rescheduleExperimentDate(expId, targetDate);
+
+    if (result.error) {
+      toast.error(`Failed to reschedule: ${result.error}`);
+    } else {
+      const label = ids.length > 1 ? `${ids.length} animals` : "1 animal";
+      toast.success(`Moved ${label} to ${targetDate}`);
+      router.refresh();
+    }
+  }, [router]);
+
   const handleDrop = useCallback(async (e: React.DragEvent, targetDate: string) => {
     e.preventDefault();
     setDragOverDay(null);
     setIsDragging(false);
+    setDragPayload(null);
     try {
       const data = JSON.parse(e.dataTransfer.getData("text/plain"));
       const { expId, expIds, fromDate } = data;
-      if (fromDate === targetDate) return; // Dropped on same day
-
-      // If multiple IDs (group drag), move them all at once
       const ids: string[] = expIds && expIds.length > 1 ? expIds : [expId];
-      const result = ids.length > 1
-        ? await rescheduleExperimentDates(ids, targetDate)
-        : await rescheduleExperimentDate(expId, targetDate);
-
-      if (result.error) {
-        toast.error(`Failed to reschedule: ${result.error}`);
-      } else {
-        const label = ids.length > 1 ? `${ids.length} animals` : "1 animal";
-        toast.success(`Moved ${label} to ${targetDate}`);
-        router.refresh();
-      }
+      await moveColonyExperiments(ids, expId, fromDate, targetDate);
     } catch {
       toast.error("Failed to move experiment");
     }
-  }, [router]);
+  }, [moveColonyExperiments]);
 
   const handleDragEnd = useCallback(() => {
     setIsDragging(false);
     setDragOverDay(null);
+    setDragPayload(null);
   }, []);
+
+  const handleMonthDrop = useCallback(async (e: React.DragEvent, monthShift: -1 | 1) => {
+    e.preventDefault();
+    if (!dragPayload) return;
+    setIsDragging(false);
+    setDragOverDay(null);
+    const src = new Date(`${dragPayload.fromDate}T12:00:00`);
+    if (Number.isNaN(src.getTime())) return;
+    const target = new Date(src);
+    const originalDay = src.getDate();
+    target.setDate(1);
+    target.setMonth(target.getMonth() + monthShift);
+    const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+    target.setDate(Math.min(originalDay, lastDay));
+    const targetDate = target.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    await moveColonyExperiments(dragPayload.expIds, dragPayload.expId, dragPayload.fromDate, targetDate);
+    setCurrentDate(new Date(target.getFullYear(), target.getMonth(), 1));
+    setDragPayload(null);
+  }, [dragPayload, moveColonyExperiments]);
 
   const firstDay = new Date(year, month, 1);
   const lastDay = new Date(year, month + 1, 0);
@@ -463,7 +492,7 @@ function CalendarView({
     const dayExps = filteredColonyExps.filter(ae => ae.scheduled_date === dateStr);
 
     // Group by experiment_type + status
-    const groups = new Map<string, { type: string; status: string; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string }[] }>();
+    const groups = new Map<string, { type: string; status: string; isVirtual?: boolean; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string }[] }>();
     for (const ae of dayExps) {
       const key = `${ae.experiment_type}::${ae.status}`;
       if (!groups.has(key)) {
@@ -482,6 +511,34 @@ function CalendarView({
         identifier: animal?.identifier || "?",
         cohortName: cohort?.name || "",
         tpName: tp?.name || `${ae.timepoint_age_days}d`,
+      });
+    }
+
+    // Calendar-only planning event: rotarod recovery day (the day before stamina)
+    const nextDate = new Date(`${dateStr}T12:00:00`);
+    nextDate.setDate(nextDate.getDate() + 1);
+    const nextDateStr = nextDate.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    const nextDayStamina = filteredColonyExps.filter(
+      (ae) => ae.experiment_type === "stamina" && ae.scheduled_date === nextDateStr
+    );
+    if (nextDayStamina.length > 0) {
+      const key = "rotarod_recovery::scheduled";
+      groups.set(key, {
+        type: "rotarod_recovery",
+        status: "scheduled",
+        isVirtual: true,
+        animals: nextDayStamina.map((ae) => {
+          const animal = animalMap.get(ae.animal_id);
+          const cohort = animal ? cohortMap.get(animal.cohort_id) : null;
+          const tp = ae.timepoint_age_days != null ? tpMap.get(ae.timepoint_age_days) : null;
+          return {
+            id: ae.animal_id,
+            expId: ae.id,
+            identifier: animal?.identifier || "?",
+            cohortName: cohort?.name || "",
+            tpName: tp?.name || `${ae.timepoint_age_days}d`,
+          };
+        }),
       });
     }
 
@@ -513,6 +570,9 @@ function CalendarView({
             variant="outline"
             size="sm"
             onClick={() => setCurrentDate(new Date(year, month - 1, 1))}
+            onDragOver={(e) => { if (isDragging) e.preventDefault(); }}
+            onDrop={(e) => { void handleMonthDrop(e, -1); }}
+            title={isDragging ? "Drop here to move to previous month (same day)" : undefined}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
@@ -521,6 +581,9 @@ function CalendarView({
             variant="outline"
             size="sm"
             onClick={() => setCurrentDate(new Date(year, month + 1, 1))}
+            onDragOver={(e) => { if (isDragging) e.preventDefault(); }}
+            onDrop={(e) => { void handleMonthDrop(e, 1); }}
+            title={isDragging ? "Drop here to move to next month (same day)" : undefined}
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
@@ -667,8 +730,9 @@ function CalendarView({
                         <div
                           key={g.type + g.status}
                           className={`text-[10px] leading-tight px-1 py-0.5 rounded truncate cursor-grab active:cursor-grabbing ${COLONY_STATUS_COLORS[g.status] || "bg-gray-100 text-gray-700"}`}
-                          draggable
+                          draggable={g.type !== "rotarod_recovery"}
                           onDragStart={(e) => {
+                            if (g.type === "rotarod_recovery") return;
                             e.stopPropagation();
                             // Drag all experiments in this group together
                             const allIds = g.animals.map(a => a.expId);
@@ -705,9 +769,10 @@ function CalendarView({
                               <span
                                 key={a.id}
                                 title={`Drag to reschedule · ${a.cohortName} #${a.identifier} (${a.tpName})`}
-                                className="cursor-grab active:cursor-grabbing hover:underline"
-                                draggable
+                                className={g.type === "rotarod_recovery" ? "opacity-80" : "cursor-grab active:cursor-grabbing hover:underline"}
+                                draggable={g.type !== "rotarod_recovery"}
                                 onDragStart={(e) => {
+                                  if (g.type === "rotarod_recovery") return;
                                   e.stopPropagation();
                                   handleDragStart(e, a.expId, g.type, dayStr);
                                 }}
@@ -779,7 +844,7 @@ function CalendarView({
                         className={`rounded-lg p-2.5 ${COLONY_STATUS_COLORS[g.status] || "bg-gray-100"}`}
                       >
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-semibold">{COLONY_EXP_LABELS[g.type] || g.type}</span>
+                            <span className="text-xs font-semibold">{COLONY_EXP_LABELS[g.type] || g.type}{g.type === "rotarod_recovery" ? " (calendar only)" : ""}</span>
                           <Badge variant="outline" className="text-[10px] h-4 px-1.5">
                             {g.animals.length} animal{g.animals.length !== 1 ? "s" : ""} · {g.status === "in_progress" ? "In Progress" : "Scheduled"}
                           </Badge>
@@ -1563,4 +1628,3 @@ function ReagentsView({ reagents }: { reagents: Reagent[] }) {
     </div>
   );
 }
-

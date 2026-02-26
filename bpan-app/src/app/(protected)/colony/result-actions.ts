@@ -52,6 +52,39 @@ async function markExperimentCompleted(
   }
 }
 
+async function markExperimentSkipped(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  animalId: string,
+  timepointAgeDays: number,
+  experimentType: string
+) {
+  const { data: exp } = await supabase
+    .from("animal_experiments")
+    .select("id, status")
+    .eq("user_id", userId)
+    .eq("animal_id", animalId)
+    .eq("experiment_type", experimentType)
+    .eq("timepoint_age_days", timepointAgeDays)
+    .maybeSingle();
+
+  if (!exp) return;
+  if (exp.status === "skipped") return;
+
+  await supabase
+    .from("animal_experiments")
+    .update({
+      status: "skipped",
+      completed_date: null,
+    })
+    .eq("id", exp.id);
+}
+
+function hasMeaningfulMeasures(measures: Record<string, string | number | null> | null | undefined) {
+  if (!measures) return false;
+  return Object.values(measures).some((v) => v !== null && v !== "" && v !== undefined);
+}
+
 /**
  * Upsert a colony result for a specific animal / timepoint / experiment.
  * Uses the unique index to insert or update.
@@ -103,11 +136,11 @@ export async function upsertColonyResult(
   }
 
   // Auto-mark the matching experiment as completed — only if there's real data
-  const hasRealData = measures && Object.values(measures).some(
-    v => v !== null && v !== "" && v !== undefined
-  );
+  const hasRealData = hasMeaningfulMeasures(measures);
   if (hasRealData) {
     await markExperimentCompleted(supabase, user.id, animalId, timepointAgeDays, experimentType);
+  } else {
+    await markExperimentSkipped(supabase, user.id, animalId, timepointAgeDays, experimentType);
   }
 
   revalidatePath("/colony");
@@ -173,11 +206,11 @@ export async function batchUpsertColonyResults(
     }
 
     // Auto-mark the matching experiment as completed — only if there's real data
-    const hasRealData = entry.measures && Object.values(entry.measures).some(
-      v => v !== null && v !== "" && v !== undefined
-    );
+    const hasRealData = hasMeaningfulMeasures(entry.measures);
     if (hasRealData) {
       await markExperimentCompleted(supabase, user.id, entry.animalId, timepointAgeDays, experimentType);
+    } else {
+      await markExperimentSkipped(supabase, user.id, entry.animalId, timepointAgeDays, experimentType);
     }
   }
 

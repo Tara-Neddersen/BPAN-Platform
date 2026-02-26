@@ -116,10 +116,12 @@ export async function POST(request: Request) {
 
     const transcriber = await detectLocalTranscriber();
     if (!transcriber) {
+      const onVercel = Boolean(process.env.VERCEL);
       return NextResponse.json(
         {
-          error:
-            "Free local transcription is not configured yet. Install whisper.cpp (or python whisper) and try again. ffmpeg is already installed.",
+          error: onVercel
+            ? "Upload transcription (free/local) only works on your local app, not on Vercel. The deployed app cannot access your Mac's whisper/ffmpeg installation."
+            : "Free local transcription is not configured yet. Install whisper.cpp (or python whisper) and try again. ffmpeg is already installed.",
         },
         { status: 503 }
       );
@@ -161,4 +163,3 @@ export async function POST(request: Request) {
     }
   }
 }
-
