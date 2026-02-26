@@ -124,3 +124,33 @@ export async function upsertOutlookCalendarEvent(accessToken: string, input: Out
   const data = await res.json();
   return data as { id: string; webLink?: string };
 }
+
+export async function listOutlookCalendarEvents(
+  accessToken: string,
+  input?: { startDateTime?: string; endDateTime?: string; top?: number }
+) {
+  const url = new URL(`${MS_GRAPH_BASE}/me/calendarView`);
+  if (input?.startDateTime) url.searchParams.set("startDateTime", input.startDateTime);
+  if (input?.endDateTime) url.searchParams.set("endDateTime", input.endDateTime);
+  url.searchParams.set("$top", String(input?.top ?? 200));
+
+  const res = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Prefer: 'outlook.timezone="UTC"',
+    },
+  });
+  if (!res.ok) throw new Error(`Outlook Calendar list failed: ${await res.text()}`);
+  const data = await res.json();
+  return (data.value || []) as Array<{
+    id: string;
+    subject?: string;
+    bodyPreview?: string;
+    isAllDay?: boolean;
+    start?: { dateTime?: string; timeZone?: string };
+    end?: { dateTime?: string; timeZone?: string };
+    location?: { displayName?: string };
+    webLink?: string;
+    lastModifiedDateTime?: string;
+  }>;
+}

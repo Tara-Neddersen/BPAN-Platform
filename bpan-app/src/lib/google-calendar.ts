@@ -129,3 +129,34 @@ export async function upsertGoogleCalendarEvent(
   return data as { id: string; htmlLink?: string };
 }
 
+export async function listGoogleCalendarEvents(
+  accessToken: string,
+  calendarId: string,
+  input?: { timeMin?: string; timeMax?: string; maxResults?: number }
+) {
+  const url = new URL(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`
+  );
+  url.searchParams.set("singleEvents", "true");
+  url.searchParams.set("orderBy", "startTime");
+  url.searchParams.set("maxResults", String(input?.maxResults ?? 250));
+  if (input?.timeMin) url.searchParams.set("timeMin", input.timeMin);
+  if (input?.timeMax) url.searchParams.set("timeMax", input.timeMax);
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Google Calendar list failed: ${await res.text()}`);
+  const data = await res.json();
+  return (data.items || []) as Array<{
+    id: string;
+    status?: string;
+    summary?: string;
+    description?: string;
+    location?: string;
+    start?: { date?: string; dateTime?: string };
+    end?: { date?: string; dateTime?: string };
+    htmlLink?: string;
+    updated?: string;
+  }>;
+}
