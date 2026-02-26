@@ -385,8 +385,10 @@ function CalendarView({
   const [manualEventSaving, setManualEventSaving] = useState(false);
   const [calendarIntegrationsOpen, setCalendarIntegrationsOpen] = useState(false);
   const [googleCalendarStatus, setGoogleCalendarStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null } | null>(null);
+  const [outlookCalendarStatus, setOutlookCalendarStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null } | null>(null);
   const [calendarFeed, setCalendarFeed] = useState<{ icsUrl: string } | null>(null);
   const [syncingGoogleCalendar, setSyncingGoogleCalendar] = useState(false);
+  const [syncingOutlookCalendar, setSyncingOutlookCalendar] = useState(false);
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
@@ -636,13 +638,16 @@ function CalendarView({
 
   const loadCalendarIntegrations = useCallback(async () => {
     try {
-      const [gRes, feedRes] = await Promise.all([
+      const [gRes, oRes, feedRes] = await Promise.all([
         fetch("/api/calendar/google/status"),
+        fetch("/api/calendar/outlook/status"),
         fetch("/api/calendar/feed/status"),
       ]);
       const g = await gRes.json();
+      const o = await oRes.json();
       const feed = await feedRes.json();
       setGoogleCalendarStatus(g);
+      setOutlookCalendarStatus(o);
       if (feed?.icsUrl) setCalendarFeed({ icsUrl: feed.icsUrl });
     } catch {
       toast.error("Failed to load calendar integrations");
@@ -719,7 +724,7 @@ function CalendarView({
 
       {calendarIntegrationsOpen && (
         <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-3">
             <div className="rounded-md border bg-background p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium">Google Calendar</p>
@@ -778,6 +783,77 @@ function CalendarView({
                       const res = await fetch("/api/calendar/google/disconnect", { method: "POST" });
                       if (res.ok) {
                         toast.success("Google Calendar disconnected");
+                        await loadCalendarIntegrations();
+                      } else {
+                        const data = await res.json();
+                        toast.error(data.error || "Disconnect failed");
+                      }
+                    }}
+                  >
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-md border bg-background p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium">Outlook Calendar</p>
+                <Badge variant={outlookCalendarStatus?.connected ? "default" : "secondary"} className="text-[10px]">
+                  {outlookCalendarStatus?.connected ? "Connected" : "Not connected"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                One-way sync for BPAN calendar feed into Outlook (Microsoft 365).
+              </p>
+              {outlookCalendarStatus?.email && (
+                <p className="text-xs text-muted-foreground">Account: {outlookCalendarStatus.email}</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                  onClick={async () => {
+                    const res = await fetch("/api/calendar/outlook/auth");
+                    const data = await res.json();
+                    if (!res.ok || !data.url) {
+                      toast.error(data.error || "Outlook Calendar auth not available");
+                      return;
+                    }
+                    window.location.href = data.url;
+                  }}
+                >
+                  {outlookCalendarStatus?.connected ? "Reconnect Outlook" : "Connect Outlook"}
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-8 text-xs"
+                  disabled={syncingOutlookCalendar || !outlookCalendarStatus?.connected}
+                  onClick={async () => {
+                    setSyncingOutlookCalendar(true);
+                    try {
+                      const res = await fetch("/api/calendar/outlook/sync", { method: "POST" });
+                      const data = await res.json();
+                      if (!res.ok) toast.error(data.error || "Sync failed");
+                      else toast.success(`Synced ${data.synced || 0} BPAN event${(data.synced || 0) === 1 ? "" : "s"} to Outlook`);
+                    } finally {
+                      setSyncingOutlookCalendar(false);
+                    }
+                  }}
+                >
+                  {syncingOutlookCalendar ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
+                  Sync BPAN calendar
+                </Button>
+                {outlookCalendarStatus?.connected && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 text-xs text-destructive"
+                    onClick={async () => {
+                      const res = await fetch("/api/calendar/outlook/disconnect", { method: "POST" });
+                      if (res.ok) {
+                        toast.success("Outlook Calendar disconnected");
                         await loadCalendarIntegrations();
                       } else {
                         const data = await res.json();
