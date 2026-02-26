@@ -729,8 +729,8 @@ function PIAnalysisPanel({
             <div className="xl:col-span-5 min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Measure</label>
               <Select value={selectedMeasure} onValueChange={setSelectedMeasure}>
-                <SelectTrigger className="h-8 text-xs w-full min-w-0">
-                  <SelectValue className="truncate" />
+                <SelectTrigger className="h-8 text-xs w-full min-w-0 overflow-hidden [&>span]:block [&>span]:min-w-0 [&>span]:truncate">
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {availableMeasures.map((m) => (
@@ -742,7 +742,9 @@ function PIAnalysisPanel({
             <div className="xl:col-span-2 min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Chart Type</label>
               <Select value={chartType} onValueChange={setChartType}>
-                <SelectTrigger className="h-8 text-xs w-full min-w-0"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-8 text-xs w-full min-w-0 overflow-hidden [&>span]:block [&>span]:min-w-0 [&>span]:truncate">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="scatter">Dot Plot</SelectItem>
                   <SelectItem value="bar">Bar + SEM</SelectItem>
