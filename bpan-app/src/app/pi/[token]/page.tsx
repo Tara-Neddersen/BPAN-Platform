@@ -1264,6 +1264,12 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
   const [piOperatorInput, setPiOperatorInput] = useState("");
   const [piOperatorSending, setPiOperatorSending] = useState(false);
   const [piOperatorMessages, setPiOperatorMessages] = useState<Array<{ id: string; role: "user" | "assistant"; content: string }>>([]);
+  const [piTaskTitle, setPiTaskTitle] = useState("");
+  const [piTaskDueDate, setPiTaskDueDate] = useState("");
+  const [piTaskPriority, setPiTaskPriority] = useState<"low" | "medium" | "high">("medium");
+  const [piTaskNotes, setPiTaskNotes] = useState("");
+  const [piTaskSubmitting, setPiTaskSubmitting] = useState(false);
+  const [piTaskFeedback, setPiTaskFeedback] = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`/api/pi/${token}`)
@@ -1609,6 +1615,92 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                 <p className="text-xs text-muted-foreground">
                   Ask read-only questions about this portal’s connected data (calendar, cohorts, animals). This view cannot change data.
                 </p>
+                <div className="rounded-lg border p-3 space-y-2 bg-muted/20">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium">Assign Task to Tara</p>
+                    <Badge variant="outline" className="text-[10px]">PI can create tasks</Badge>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <input
+                      value={piTaskTitle}
+                      onChange={(e) => setPiTaskTitle(e.target.value)}
+                      placeholder="Task title (e.g. Review rotarod outliers)"
+                      className="sm:col-span-2 h-9 rounded-md border bg-background px-3 text-sm"
+                    />
+                    <select
+                      value={piTaskPriority}
+                      onChange={(e) => setPiTaskPriority(e.target.value as "low" | "medium" | "high")}
+                      className="h-9 rounded-md border bg-background px-3 text-sm"
+                    >
+                      <option value="low">Low priority</option>
+                      <option value="medium">Medium priority</option>
+                      <option value="high">High priority</option>
+                    </select>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <input
+                      type="date"
+                      value={piTaskDueDate}
+                      onChange={(e) => setPiTaskDueDate(e.target.value)}
+                      className="h-9 rounded-md border bg-background px-3 text-sm"
+                    />
+                    <textarea
+                      value={piTaskNotes}
+                      onChange={(e) => setPiTaskNotes(e.target.value)}
+                      placeholder="Optional notes / context"
+                      className="sm:col-span-2 min-h-[38px] max-h-[100px] resize-y rounded-md border bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-muted-foreground">
+                      Creates a real task in the main BPAN workspace (source: PI Portal).
+                    </p>
+                    <Button
+                      size="sm"
+                      disabled={piTaskSubmitting || !piTaskTitle.trim()}
+                      onClick={async () => {
+                        const title = piTaskTitle.trim();
+                        if (!title) return;
+                        setPiTaskSubmitting(true);
+                        setPiTaskFeedback(null);
+                        try {
+                          const res = await fetch(`/api/pi/${token}/tasks`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              title,
+                              due_date: piTaskDueDate || null,
+                              priority: piTaskPriority,
+                              description: piTaskNotes.trim() || null,
+                            }),
+                          });
+                          const json = await res.json();
+                          if (!res.ok) {
+                            setPiTaskFeedback(json.error || "Failed to create task");
+                          } else {
+                            setPiTaskFeedback(`Task created: ${json.task?.title || title}`);
+                            setPiTaskTitle("");
+                            setPiTaskDueDate("");
+                            setPiTaskPriority("medium");
+                            setPiTaskNotes("");
+                          }
+                        } catch {
+                          setPiTaskFeedback("Failed to create task");
+                        } finally {
+                          setPiTaskSubmitting(false);
+                        }
+                      }}
+                    >
+                      {piTaskSubmitting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                      Add Task
+                    </Button>
+                  </div>
+                  {piTaskFeedback && (
+                    <div className="text-xs rounded-md border bg-background px-2.5 py-2">
+                      {piTaskFeedback}
+                    </div>
+                  )}
+                </div>
                 {piOperatorMessages.length === 0 && (
                   <div className="rounded-lg border p-3 space-y-1.5">
                     {["summary", "show upcoming", "what's on 2026-03-20", "cohort BPAN 5"].map((q) => (
