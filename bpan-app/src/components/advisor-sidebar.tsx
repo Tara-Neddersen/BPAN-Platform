@@ -43,6 +43,15 @@ export function AdvisorSidebar() {
   const [operatorMessages, setOperatorMessages] = useState<Array<{ id: string; role: "user" | "assistant"; content: string }>>([]);
   const [operatorInput, setOperatorInput] = useState("");
   const [operatorSending, setOperatorSending] = useState(false);
+  const [operatorPlanning, setOperatorPlanning] = useState(false);
+  const [operatorPlan, setOperatorPlan] = useState<{
+    original: string;
+    totalSteps: number;
+    supportedSteps: number;
+    unsupportedSteps: number;
+    hasDestructive: boolean;
+    steps: Array<{ step: string; kind: string; action: string; destructive: boolean; supported: boolean; note?: string }>;
+  } | null>(null);
 
   // Conversations list
   const [conversations, setConversations] = useState<AdvisorConversation[]>([]);
@@ -205,6 +214,25 @@ export function AdvisorSidebar() {
   }, [open, view, loadConversations]);
 
   // ─── Render ─────────────────────────────────────────────────────────────────
+
+  const runOperatorMessage = useCallback(async (msg: string) => {
+    if (!msg.trim()) return;
+    setOperatorSending(true);
+    setOperatorMessages((prev) => [...prev, { id: `op-u-${Date.now()}`, role: "user", content: msg }]);
+    try {
+      const res = await fetch("/api/operator/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg }),
+      });
+      const data = await res.json();
+      setOperatorMessages((prev) => [...prev, { id: `op-a-${Date.now()}`, role: "assistant", content: data.response || data.error || "Operator request failed." }]);
+    } catch {
+      setOperatorMessages((prev) => [...prev, { id: `op-e-${Date.now()}`, role: "assistant", content: "Operator request failed." }]);
+    } finally {
+      setOperatorSending(false);
+    }
+  }, []);
 
   const SUGGESTION_ICONS: Record<string, React.ReactNode> = {
     read: <BookOpen className="h-4 w-4 text-blue-500" />,
@@ -431,7 +459,7 @@ export function AdvisorSidebar() {
                     <div className="rounded-lg border p-3 space-y-2">
                       <p className="text-sm font-medium">Workspace Operator</p>
                       <p className="text-xs text-muted-foreground">
-                        I can create/move/update/delete workspace calendar events, tasks, and meetings. You can chain multiple commands with “then” or semicolons.
+                        I can create/move/update/delete workspace calendar events, tasks, and meetings. Use Plan first to preview multi-step commands before execution.
                       </p>
                       <div className="space-y-1">
                         {[
@@ -461,6 +489,53 @@ export function AdvisorSidebar() {
                       </div>
                     </div>
                   ))}
+
+                  {operatorPlan && (
+                    <div className="rounded-lg border p-3 space-y-2 bg-muted/30">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium">Execution Plan</p>
+                        <div className="flex items-center gap-1">
+                          <Badge variant="outline" className="text-[10px]">{operatorPlan.supportedSteps}/{operatorPlan.totalSteps} supported</Badge>
+                          {operatorPlan.hasDestructive && <Badge variant="destructive" className="text-[10px]">Destructive step</Badge>}
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        {operatorPlan.steps.map((step, idx) => (
+                          <div key={`${idx}-${step.step}`} className="rounded-md border bg-background px-2 py-1.5">
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <span className="font-medium truncate">{idx + 1}. {step.step}</span>
+                              <Badge variant={step.supported ? "secondary" : "outline"} className="text-[10px]">
+                                {step.supported ? step.action : "unsupported"}
+                              </Badge>
+                            </div>
+                            {step.note && <p className="text-[10px] text-muted-foreground mt-1">{step.note}</p>}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-xs h-8"
+                          onClick={() => setOperatorPlan(null)}
+                        >
+                          Dismiss
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="text-xs h-8"
+                          disabled={operatorSending || operatorPlan.supportedSteps === 0}
+                          onClick={async () => {
+                            const msg = operatorPlan.original;
+                            setOperatorPlan(null);
+                            await runOperatorMessage(msg);
+                          }}
+                        >
+                          Run Plan
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="border-t px-4 py-3">
                   <div className="flex gap-2">
@@ -474,25 +549,7 @@ export function AdvisorSidebar() {
                           (async () => {
                             const msg = operatorInput.trim();
                             setOperatorInput("");
-                            setOperatorSending(true);
-                            const userMsg = { id: `op-u-${Date.now()}`, role: "user" as const, content: msg };
-                            setOperatorMessages((prev) => [...prev, userMsg]);
-                            try {
-                              const res = await fetch("/api/operator/chat", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ message: msg }),
-                              });
-                              const data = await res.json();
-                              setOperatorMessages((prev) => [
-                                ...prev,
-                                { id: `op-a-${Date.now()}`, role: "assistant", content: data.response || data.error || "Operator request failed." },
-                              ]);
-                            } catch {
-                              setOperatorMessages((prev) => [...prev, { id: `op-e-${Date.now()}`, role: "assistant", content: "Operator request failed." }]);
-                            } finally {
-                              setOperatorSending(false);
-                            }
+                            await runOperatorMessage(msg);
                           })();
                         }
                       }}
@@ -502,27 +559,44 @@ export function AdvisorSidebar() {
                     />
                     <Button
                       size="sm"
+                      variant="outline"
+                      className="self-end"
+                      disabled={operatorPlanning || operatorSending || !operatorInput.trim()}
+                      onClick={async () => {
+                        const msg = operatorInput.trim();
+                        if (!msg) return;
+                        setOperatorPlanning(true);
+                        try {
+                          const res = await fetch("/api/operator/plan", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ message: msg }),
+                          });
+                          const data = await res.json();
+                          if (!res.ok || !data.plan) {
+                            setOperatorMessages((prev) => [...prev, { id: `op-plan-e-${Date.now()}`, role: "assistant", content: data.error || "Failed to generate plan." }]);
+                            return;
+                          }
+                          setOperatorPlan(data.plan);
+                        } catch {
+                          setOperatorMessages((prev) => [...prev, { id: `op-plan-e-${Date.now()}`, role: "assistant", content: "Failed to generate plan." }]);
+                        } finally {
+                          setOperatorPlanning(false);
+                        }
+                      }}
+                    >
+                      {operatorPlanning ? <Loader2 className="h-4 w-4 animate-spin" /> : "Plan"}
+                    </Button>
+                    <Button
+                      size="sm"
                       className="self-end"
                       disabled={operatorSending || !operatorInput.trim()}
                       onClick={async () => {
                         const msg = operatorInput.trim();
                         if (!msg) return;
                         setOperatorInput("");
-                        setOperatorSending(true);
-                        setOperatorMessages((prev) => [...prev, { id: `op-u-${Date.now()}`, role: "user", content: msg }]);
-                        try {
-                          const res = await fetch("/api/operator/chat", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ message: msg }),
-                          });
-                          const data = await res.json();
-                          setOperatorMessages((prev) => [...prev, { id: `op-a-${Date.now()}`, role: "assistant", content: data.response || data.error || "Operator request failed." }]);
-                        } catch {
-                          setOperatorMessages((prev) => [...prev, { id: `op-e-${Date.now()}`, role: "assistant", content: "Operator request failed." }]);
-                        } finally {
-                          setOperatorSending(false);
-                        }
+                        setOperatorPlan(null);
+                        await runOperatorMessage(msg);
                       }}
                     >
                       {operatorSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
