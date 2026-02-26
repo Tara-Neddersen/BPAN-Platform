@@ -52,7 +52,11 @@ import {
   batchScheduleSingleExperiment,
   rescheduleExperimentsAfterTimepointEdit,
 } from "./actions";
-import { batchUpsertColonyResults, reconcileTrackerFromExistingColonyResults } from "./result-actions";
+import {
+  batchUpsertColonyResults,
+  reconcileTrackerFromExistingColonyResults,
+  deleteColonyResultMeasureColumn,
+} from "./result-actions";
 
 /**
  * Fetch ALL rows from a table using cursor-based pagination.
@@ -147,6 +151,7 @@ export default async function ColonyPage({ searchParams }: { searchParams: Promi
         colonyResults={(colonyResults || []) as ColonyResult[]}
         batchUpsertColonyResults={batchUpsertColonyResults}
         reconcileTrackerFromExistingColonyResults={reconcileTrackerFromExistingColonyResults}
+        deleteColonyResultMeasureColumn={deleteColonyResultMeasureColumn}
         actions={{
           createBreederCage,
           updateBreederCage,

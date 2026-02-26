@@ -1293,6 +1293,16 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
     acc.get(dateKey)!.push(exp);
     return acc;
   }, new Map<string, typeof upcoming>());
+  const upcomingCalendarEvents = data.calendar_events
+    .filter((e) => e.start_at)
+    .sort((a, b) => String(a.start_at || "").localeCompare(String(b.start_at || "")))
+    .slice(0, 20);
+  const upcomingCalendarByDate = upcomingCalendarEvents.reduce((acc, ev) => {
+    const dateKey = String(ev.start_at).slice(0, 10);
+    if (!acc.has(dateKey)) acc.set(dateKey, []);
+    acc.get(dateKey)!.push(ev);
+    return acc;
+  }, new Map<string, typeof upcomingCalendarEvents>());
 
   const hasColonyResults = data.can_see.includes("colony_results") && data.colony_results.length > 0;
 
@@ -1454,6 +1464,41 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                             <span className="text-muted-foreground">{EXPERIMENT_LABELS[exp.experiment_type] || exp.experiment_type}</span>
                             {exp.timepoint_age_days && <Badge variant="outline" className="text-xs">{exp.timepoint_age_days}d</Badge>}
                           </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+
+            {data.can_see.includes("calendar") && upcomingCalendarEvents.length > 0 && (
+              <Card>
+                <CardHeader className="py-3 px-4">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <Calendar className="h-4 w-4" /> Upcoming Calendar
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 pb-3">
+                  {Array.from(upcomingCalendarByDate.entries()).map(([date, items]) => (
+                    <div key={`cal-${date}`} className="space-y-1.5">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        {date}
+                      </div>
+                      {items.map((ev, i) => (
+                        <div key={`${date}-${i}-${ev.id}`} className="flex items-center justify-between text-sm gap-2">
+                          <div className="flex items-center gap-2 flex-wrap min-w-0">
+                            <span className="font-medium truncate">{ev.title}</span>
+                            {ev.category && (
+                              <Badge variant="outline" className="text-xs capitalize">{String(ev.category).replace(/_/g, " ")}</Badge>
+                            )}
+                            {ev.status && (
+                              <Badge variant="secondary" className="text-xs capitalize">{String(ev.status).replace(/_/g, " ")}</Badge>
+                            )}
+                          </div>
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {ev.all_day ? "All day" : String(ev.start_at).slice(11, 16)}
+                          </span>
                         </div>
                       ))}
                     </div>

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
+import { getWorkspaceCalendarFeedEvents } from "@/lib/workspace-calendar-feed";
 
 function esc(text: string) {
   return text
@@ -32,12 +33,7 @@ export async function GET(_: Request, context: { params: Promise<Record<string, 
   if (!feed?.user_id) return new NextResponse("Not found", { status: 404 });
 
   const userId = feed.user_id as string;
-  const [workspaceEventsRes, plannerExpsRes, timepointsRes, colonyRes] = await Promise.all([
-    supabase.from("workspace_calendar_events").select("id,title,description,start_at,end_at,all_day,status,location").eq("user_id", userId).order("start_at"),
-    supabase.from("experiments").select("id,title,description,start_date,end_date,status").eq("user_id", userId),
-    supabase.from("experiment_timepoints").select("id,label,scheduled_at,completed_at,experiment_id,experiments(title)").eq("user_id", userId),
-    supabase.from("animal_experiments").select("id,experiment_type,scheduled_date,status,timepoint_age_days,animal_id,animals(identifier),cohorts(name)").eq("user_id", userId).not("scheduled_date", "is", null),
-  ]);
+  const feedEvents = await getWorkspaceCalendarFeedEvents(supabase, userId);
 
   const lines = [
     "BEGIN:VCALENDAR",
@@ -69,40 +65,12 @@ export async function GET(_: Request, context: { params: Promise<Record<string, 
     lines.push("END:VEVENT");
   };
 
-  for (const ev of workspaceEventsRes.data || []) {
-    pushEvent(`workspace-${ev.id}`, String(ev.title), String(ev.start_at), {
-      end: (ev.end_at as string | null) || null,
-      allDay: Boolean(ev.all_day),
-      description: (ev.description as string | null) || null,
-      location: (ev.location as string | null) || null,
-    });
-  }
-
-  for (const e of plannerExpsRes.data || []) {
-    if (!e.start_date && !e.end_date) continue;
-    pushEvent(`planner-${e.id}`, `[Planner] ${String(e.title)}`, String(e.start_date || e.end_date), {
-      end: (e.end_date as string | null) || (e.start_date as string | null) || null,
-      allDay: true,
-      description: (e.description as string | null) || null,
-    });
-  }
-
-  for (const tp of timepointsRes.data || []) {
-    const expRel = tp.experiments as { title?: string } | Array<{ title?: string }> | null;
-    const expTitle = Array.isArray(expRel) ? expRel[0]?.title : expRel?.title;
-    pushEvent(`timepoint-${tp.id}`, `[Timepoint] ${String(tp.label)}${expTitle ? ` · ${String(expTitle)}` : ""}`, String(tp.scheduled_at), {
-      allDay: false,
-    });
-  }
-
-  for (const ae of colonyRes.data || []) {
-    if (!ae.scheduled_date) continue;
-    const label = String(ae.experiment_type).replace(/_/g, " ");
-    const animal = (ae.animals as { identifier?: string } | null)?.identifier || "?";
-    const tp = ae.timepoint_age_days != null ? ` @ ${ae.timepoint_age_days}d` : "";
-    pushEvent(`colony-${ae.id}`, `[Colony] ${label} · #${animal}${tp}`, String(ae.scheduled_date), {
-      allDay: true,
-      description: `Status: ${ae.status}`,
+  for (const ev of feedEvents) {
+    pushEvent(ev.uid, ev.summary, ev.startAt, {
+      end: ev.endAt || null,
+      allDay: ev.allDay,
+      description: ev.description || null,
+      location: ev.location || null,
     });
   }
 

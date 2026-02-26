@@ -153,6 +153,11 @@ interface ColonyClientProps {
     }[]
   ) => Promise<{ success?: boolean; error?: string; saved?: number; errors?: string[] }>;
   reconcileTrackerFromExistingColonyResults: () => Promise<{ success?: boolean; error?: string; completed?: number; ignored?: number }>;
+  deleteColonyResultMeasureColumn: (
+    timepointAgeDays: number,
+    experimentType: string,
+    fieldKey: string
+  ) => Promise<{ success?: boolean; error?: string; updated?: number }>;
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -241,6 +246,7 @@ export function ColonyClient({
   colonyResults: initColonyResults,
   batchUpsertColonyResults,
   reconcileTrackerFromExistingColonyResults,
+  deleteColonyResultMeasureColumn,
   actions,
 }: ColonyClientProps) {
   const router = useRouter();
@@ -1339,6 +1345,11 @@ export function ColonyClient({
             }}
             reconcileTrackerFromExistingColonyResults={async () => {
               const result = await reconcileTrackerFromExistingColonyResults();
+              if (result.success) await refetchAll();
+              return result;
+            }}
+            deleteColonyResultMeasureColumn={async (tp, exp, fieldKey) => {
+              const result = await deleteColonyResultMeasureColumn(tp, exp, fieldKey);
               if (result.success) await refetchAll();
               return result;
             }}

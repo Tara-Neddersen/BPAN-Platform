@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Loader2, Save, ChevronDown, ChevronRight, Plus, Check, Upload, Eye, EyeOff, X, Camera, ExternalLink, Image as ImageIcon, Download } from "lucide-react";
+import { Loader2, Save, ChevronDown, ChevronRight, Plus, Check, Upload, Eye, EyeOff, Camera, ExternalLink, Image as ImageIcon, Download, MoreHorizontal, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 import { MiniEarTag } from "@/components/ear-tag-selector";
@@ -154,6 +155,11 @@ interface ColonyResultsTabProps {
     options?: { emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave" }
   ) => Promise<{ success?: boolean; error?: string; saved?: number; errors?: string[] }>;
   reconcileTrackerFromExistingColonyResults: () => Promise<{ success?: boolean; error?: string; completed?: number; ignored?: number }>;
+  deleteColonyResultMeasureColumn: (
+    timepointAgeDays: number,
+    experimentType: string,
+    fieldKey: string
+  ) => Promise<{ success?: boolean; error?: string; updated?: number }>;
 }
 
 // ─── Component ───────────────────────────────────────────────────────
@@ -165,6 +171,7 @@ export function ColonyResultsTab({
   colonyResults,
   batchUpsertColonyResults,
   reconcileTrackerFromExistingColonyResults,
+  deleteColonyResultMeasureColumn,
 }: ColonyResultsTabProps) {
   type SaveEntry = {
     animalId: string;
@@ -207,6 +214,8 @@ export function ColonyResultsTab({
   const [showHiddenFields, setShowHiddenFields] = useState(false);
   const [showAddField, setShowAddField] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [pendingDeleteField, setPendingDeleteField] = useState<MeasureField | null>(null);
+  const [deletingField, setDeletingField] = useState(false);
   const [newFieldKey, setNewFieldKey] = useState("");
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [newFieldUnit, setNewFieldUnit] = useState("");
@@ -592,6 +601,41 @@ export function ColonyResultsTab({
     [activeExperiment]
   );
 
+  const handleDeleteFieldValues = useCallback(async (field: MeasureField) => {
+    const tp = Number(activeTimepoint);
+    if (!Number.isFinite(tp)) return;
+    setDeletingField(true);
+    try {
+      const result = await deleteColonyResultMeasureColumn(tp, activeExperiment, field.key);
+      if (!result.success) {
+        toast.error(result.error || "Failed to delete column values");
+        return;
+      }
+      if ((customFields[activeExperiment] || []).some((f) => f.key === field.key)) {
+        setCustomFields((prev) => ({
+          ...prev,
+          [activeExperiment]: (prev[activeExperiment] || []).filter((f) => f.key !== field.key),
+        }));
+      } else {
+        setHiddenFields((prev) => {
+          const current = prev[activeExperiment] || new Set<string>();
+          const next = new Set(current);
+          next.add(field.key);
+          return { ...prev, [activeExperiment]: next };
+        });
+      }
+      const count = result.updated ?? 0;
+      toast.success(
+        count > 0
+          ? `Deleted stored values in "${field.label}" for ${count} row${count === 1 ? "" : "s"}`
+          : `No saved values found in "${field.label}" for this view`
+      );
+    } finally {
+      setDeletingField(false);
+      setPendingDeleteField(null);
+    }
+  }, [activeExperiment, activeTimepoint, customFields, deleteColonyResultMeasureColumn]);
+
   // Handle import completion: add imported measures as custom fields
   const handleImportComplete = useCallback(
     (experimentType: string, importedMeasures: { key: string; name: string; unit?: string }[]) => {
@@ -762,6 +806,38 @@ export function ColonyResultsTab({
             >
               {saving && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
               Save Results
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!pendingDeleteField} onOpenChange={(open) => !open && !deletingField && setPendingDeleteField(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete column values?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p>
+              This will remove all saved values in <span className="font-medium">{pendingDeleteField?.label}</span> for
+              <span className="font-medium"> {EXPERIMENT_LABELS[activeExperiment] || activeExperiment}</span> at
+              <span className="font-medium"> {activeTimepoint} days</span>.
+            </p>
+            <p className="text-muted-foreground">
+              Use <span className="font-medium">Hide</span> if you only want to hide the column visually.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" type="button" disabled={deletingField} onClick={() => setPendingDeleteField(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!pendingDeleteField || deletingField}
+              onClick={() => pendingDeleteField && handleDeleteFieldValues(pendingDeleteField)}
+            >
+              {deletingField ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Trash2 className="w-3.5 h-3.5 mr-1" />}
+              Delete Values
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -986,13 +1062,30 @@ export function ColonyResultsTab({
                                         ({field.unit})
                                       </span>
                                     )}
-                                    <button
-                                      onClick={() => handleHideField(field.key)}
-                                      className="text-muted-foreground/30 hover:text-red-500 ml-auto opacity-0 group-hover/col:opacity-100 transition-opacity shrink-0"
-                                      title="Hide this column"
-                                    >
-                                      <X className="w-3 h-3" />
-                                    </button>
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <button
+                                          className="text-muted-foreground/30 hover:text-foreground ml-auto opacity-0 group-hover/col:opacity-100 transition-opacity shrink-0"
+                                          title="Column options"
+                                          type="button"
+                                        >
+                                          <MoreHorizontal className="w-3.5 h-3.5" />
+                                        </button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end" className="w-44">
+                                        <DropdownMenuItem onClick={() => handleHideField(field.key)}>
+                                          <EyeOff className="w-3.5 h-3.5 mr-2" />
+                                          Hide column
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem
+                                          onClick={() => setPendingDeleteField(field)}
+                                          className="text-red-600 focus:text-red-600"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5 mr-2" />
+                                          Delete values
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
                                   </div>
                                 </th>
                               ))}

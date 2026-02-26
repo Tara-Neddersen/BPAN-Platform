@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { refreshGoogleCalendarToken, upsertGoogleCalendarEvent } from "@/lib/google-calendar";
+import { getGoogleCalendarEventIdForFeedEvent, getWorkspaceCalendarFeedEvents } from "@/lib/workspace-calendar-feed";
 
 export async function POST() {
   const supabase = await createClient();
@@ -27,31 +28,34 @@ export async function POST() {
       .eq("user_id", user.id);
   }
 
-  const { data: events, error: eventsErr } = await supabase
-    .from("workspace_calendar_events")
-    .select("id,title,description,start_at,end_at,all_day,location,metadata")
-    .eq("user_id", user.id)
-    .order("start_at", { ascending: true })
-    .limit(500);
-  if (eventsErr) return NextResponse.json({ error: eventsErr.message }, { status: 500 });
+  const events = await getWorkspaceCalendarFeedEvents(supabase, user.id);
 
   let synced = 0;
   const errors: string[] = [];
   for (const ev of events || []) {
     try {
-      const meta = (ev.metadata as Record<string, unknown> | null) || {};
-      const googleEventId = typeof meta.google_calendar_event_id === "string" ? meta.google_calendar_event_id : null;
+      const meta = ev.workspaceMetadata || {};
+      const googleEventId =
+        ev.sourceKind === "workspace"
+          ? (typeof meta.google_calendar_event_id === "string" ? meta.google_calendar_event_id : null)
+          : getGoogleCalendarEventIdForFeedEvent(ev);
       const googleResult = await upsertGoogleCalendarEvent(accessToken, String(tokenRow.calendar_id || "primary"), {
         eventId: googleEventId,
-        summary: String(ev.title),
-        description: (ev.description as string | null) || undefined,
-        location: (ev.location as string | null) || undefined,
-        startAt: String(ev.start_at),
-        endAt: (ev.end_at as string | null) || undefined,
-        allDay: Boolean(ev.all_day),
+        summary: String(ev.summary),
+        description: ev.description || undefined,
+        location: ev.location || undefined,
+        startAt: String(ev.startAt),
+        endAt: ev.endAt || undefined,
+        allDay: Boolean(ev.allDay),
       });
-      const nextMeta = { ...meta, google_calendar_event_id: googleResult.id };
-      await supabase.from("workspace_calendar_events").update({ metadata: nextMeta }).eq("id", ev.id).eq("user_id", user.id);
+      if (ev.sourceKind === "workspace" && ev.workspaceEventId) {
+        const nextMeta = { ...meta, google_calendar_event_id: googleResult.id };
+        await supabase
+          .from("workspace_calendar_events")
+          .update({ metadata: nextMeta })
+          .eq("id", ev.workspaceEventId)
+          .eq("user_id", user.id);
+      }
       synced++;
     } catch (e) {
       errors.push(e instanceof Error ? e.message : "sync_failed");
@@ -60,4 +64,3 @@ export async function POST() {
 
   return NextResponse.json({ success: true, synced, errors: errors.slice(0, 10) });
 }
-

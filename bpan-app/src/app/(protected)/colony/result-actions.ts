@@ -366,3 +366,54 @@ export async function reconcileTrackerFromExistingColonyResults() {
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, completed, ignored };
 }
+
+/**
+ * Delete a measure key (column) from colony result rows for the current experiment/timepoint.
+ * This removes stored values from `measures` JSON across matching rows.
+ */
+export async function deleteColonyResultMeasureColumn(
+  timepointAgeDays: number,
+  experimentType: string,
+  fieldKey: string
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const safeFieldKey = String(fieldKey || "").trim();
+  if (!safeFieldKey) return { error: "Field key is required" };
+
+  const { data: rows, error } = await supabase
+    .from("colony_results")
+    .select("id, measures")
+    .eq("user_id", user.id)
+    .eq("timepoint_age_days", timepointAgeDays)
+    .eq("experiment_type", experimentType);
+
+  if (error) return { error: error.message };
+
+  let updated = 0;
+  for (const row of rows || []) {
+    const measures = ((row.measures || {}) as Record<string, unknown>);
+    if (!(safeFieldKey in measures)) continue;
+    const nextMeasures = { ...measures };
+    delete nextMeasures[safeFieldKey];
+
+    const { error: updateErr } = await supabase
+      .from("colony_results")
+      .update({
+        measures: nextMeasures,
+        recorded_at: new Date().toISOString(),
+      })
+      .eq("id", row.id)
+      .eq("user_id", user.id);
+    if (updateErr) return { error: updateErr.message };
+    updated++;
+  }
+
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true, updated };
+}

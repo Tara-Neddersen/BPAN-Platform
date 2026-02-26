@@ -42,6 +42,7 @@ type OperatorActionRequest =
       action: "task.create";
       input: { title: string; dueDate?: string | null; sourceType?: string | null; sourceId?: string | null; sourceLabel?: string | null };
     }
+  | { action: "task.update"; input: { id: string; status?: "pending" | "in_progress" | "completed" | "skipped"; title?: string; dueDate?: string | null } }
   | { action: "task.delete"; input: { id: string } }
   | {
       action: "meeting.create";
@@ -103,6 +104,17 @@ export async function POST(req: Request) {
       }
       case "task.delete": {
         const { error } = await supabase.from("tasks").delete().eq("id", body.input.id).eq("user_id", user.id);
+        if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+        await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+        return NextResponse.json({ success: true });
+      }
+      case "task.update": {
+        const patch: Record<string, unknown> = {};
+        if (body.input.title !== undefined) patch.title = body.input.title.trim();
+        if (body.input.status !== undefined) patch.status = body.input.status;
+        if (body.input.dueDate !== undefined) patch.due_date = body.input.dueDate || null;
+        if (Object.keys(patch).length === 0) return NextResponse.json({ error: "No task updates provided" }, { status: 400 });
+        const { error } = await supabase.from("tasks").update(patch).eq("id", body.input.id).eq("user_id", user.id);
         if (error) return NextResponse.json({ error: error.message }, { status: 400 });
         await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
         return NextResponse.json({ success: true });
