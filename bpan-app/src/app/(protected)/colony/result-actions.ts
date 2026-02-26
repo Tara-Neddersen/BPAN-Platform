@@ -106,7 +106,7 @@ async function markExperimentWithStatus(
     .from("animal_experiments")
     .update({
       status,
-      completed_date: status === "completed" ? new Date().toISOString().split("T")[0] : null,
+      completed_date: null,
     })
     .eq("id", exp.id);
 }
