@@ -1,6 +1,6 @@
 export type ActivityFeedItem = {
   id: string;
-  kind: "task" | "meeting" | "note" | "experiment" | "dataset" | "analysis" | "figure" | "paper";
+  kind: "task" | "meeting" | "note" | "experiment" | "dataset" | "analysis" | "figure" | "paper" | "calendar";
   title: string;
   detail: string;
   timestamp: string;
@@ -196,6 +196,7 @@ export async function getWorkspaceBackstageIndexStats(
 }
 
 function mapEventEntityTypeToActivityKind(entityType: string): ActivityFeedItem["kind"] {
+  if (entityType === "calendar_event") return "calendar";
   if (entityType === "animal_experiment" || entityType === "colony_result") return "experiment";
   if (entityType === "meeting") return "meeting";
   if (entityType === "task") return "task";

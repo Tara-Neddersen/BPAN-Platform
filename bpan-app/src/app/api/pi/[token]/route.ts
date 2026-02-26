@@ -67,6 +67,7 @@ export async function GET(
     let colonyResults: unknown[] = [];
     let cohorts: unknown[] = [];
     let timepoints: unknown[] = [];
+    let calendarEvents: unknown[] = [];
 
     // Always fetch full animals if any animal-related permission is set
     const needsAnimals = canSee.includes("animals") || canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("colony_results");
@@ -151,6 +152,16 @@ export async function GET(
       timepoints = timepointsRes.data || [];
     }
 
+    if (canSee.includes("calendar") || canSee.includes("timeline") || canSee.includes("experiments")) {
+      const { data: calendarData } = await supabase
+        .from("workspace_calendar_events")
+        .select("*")
+        .eq("user_id", userId)
+        .order("start_at", { ascending: true })
+        .limit(500);
+      calendarEvents = calendarData || [];
+    }
+
     // Fetch photos for gallery (always included if they exist)
     const { data: photosData } = await supabase
       .from("colony_photos")
@@ -183,6 +194,7 @@ export async function GET(
       colony_results: colonyResults,
       cohorts,
       timepoints,
+      calendar_events: calendarEvents,
       photos,
       stats: {
         total_animals: totalAnimals,
@@ -198,4 +210,3 @@ export async function GET(
     return NextResponse.json({ error: "Failed to load" }, { status: 500 });
   }
 }
-

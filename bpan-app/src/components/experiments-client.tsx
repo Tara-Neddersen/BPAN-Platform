@@ -42,7 +42,7 @@ import {
 } from "@/app/(protected)/experiments/actions";
 import { rescheduleExperimentDate, rescheduleExperimentDates } from "@/app/(protected)/colony/actions";
 import { toast } from "sonner";
-import type { Experiment, ExperimentTimepoint, Protocol, Reagent, ProtocolStep, AnimalExperiment, Animal, Cohort, ColonyTimepoint } from "@/types";
+import type { Experiment, ExperimentTimepoint, Protocol, Reagent, ProtocolStep, AnimalExperiment, Animal, Cohort, ColonyTimepoint, WorkspaceCalendarEvent } from "@/types";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -97,6 +97,7 @@ interface Props {
   animals?: Animal[];
   cohorts?: Cohort[];
   colonyTimepoints?: ColonyTimepoint[];
+  workspaceCalendarEvents?: WorkspaceCalendarEvent[];
 }
 
 export function ExperimentsClient({
@@ -108,6 +109,7 @@ export function ExperimentsClient({
   animals = [],
   cohorts = [],
   colonyTimepoints = [],
+  workspaceCalendarEvents = [],
 }: Props) {
   const [tab, setTab] = useState<TabKey>("calendar");
   const [showNewExperiment, setShowNewExperiment] = useState(false);
@@ -191,6 +193,7 @@ export function ExperimentsClient({
           animals={animals}
           cohorts={cohorts}
           colonyTimepoints={colonyTimepoints}
+          workspaceCalendarEvents={workspaceCalendarEvents}
         />
       )}
       {tab === "gantt" && (
@@ -347,6 +350,7 @@ function CalendarView({
   animals = [],
   cohorts = [],
   colonyTimepoints = [],
+  workspaceCalendarEvents = [],
 }: {
   experiments: Experiment[];
   timepoints: ExperimentTimepoint[];
@@ -355,6 +359,7 @@ function CalendarView({
   animals?: Animal[];
   cohorts?: Cohort[];
   colonyTimepoints?: ColonyTimepoint[];
+  workspaceCalendarEvents?: WorkspaceCalendarEvent[];
 }) {
   const router = useRouter();
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -555,6 +560,9 @@ function CalendarView({
   // This month colony experiment summary
   const monthStart = `${year}-${String(month + 1).padStart(2, "0")}-01`;
   const monthEnd = `${year}-${String(month + 1).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+  const manualEventsThisMonth = workspaceCalendarEvents.filter(
+    (ev) => String(ev.start_at).slice(0, 10) >= monthStart && String(ev.start_at).slice(0, 10) <= monthEnd
+  ).length;
   const thisMonthColony = filteredColonyExps.filter(ae =>
     ae.scheduled_date! >= monthStart && ae.scheduled_date! <= monthEnd
   );
@@ -629,6 +637,12 @@ function CalendarView({
             <span className="h-2 w-2 rounded-full bg-amber-500 inline-block" />
             {inProgressThisMonth} in progress
           </span>
+          {manualEventsThisMonth > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 inline-block" />
+              {manualEventsThisMonth} workspace event{manualEventsThisMonth === 1 ? "" : "s"}
+            </span>
+          )}
         </div>
       )}
 

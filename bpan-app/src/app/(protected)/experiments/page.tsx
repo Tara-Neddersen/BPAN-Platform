@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { ExperimentsClient } from "@/components/experiments-client";
-import type { Experiment, ExperimentTimepoint, Protocol, Reagent, AnimalExperiment, Animal, Cohort, ColonyTimepoint } from "@/types";
+import type { Experiment, ExperimentTimepoint, Protocol, Reagent, AnimalExperiment, Animal, Cohort, ColonyTimepoint, WorkspaceCalendarEvent } from "@/types";
 import Link from "next/link";
 import { ArrowRight, FlaskConical, GitBranch, TestTube2 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -45,6 +45,7 @@ export default async function ExperimentsPage() {
     { data: analyses },
     { data: figures },
     { data: tasks },
+    { data: workspaceCalendarEvents },
   ] = await Promise.all([
     supabase
       .from("experiments")
@@ -95,6 +96,11 @@ export default async function ExperimentsPage() {
       .select("id,title,source_id,source_type,status,due_date,updated_at")
       .eq("user_id", user!.id)
       .eq("source_type", "experiment"),
+    supabase
+      .from("workspace_calendar_events")
+      .select("*")
+      .eq("user_id", user!.id)
+      .order("start_at", { ascending: true }),
   ]);
 
   const traceCards = buildExperimentTraceabilityCards({
@@ -179,6 +185,7 @@ export default async function ExperimentsPage() {
         animals={(animals as Animal[]) || []}
         cohorts={(cohorts as Cohort[]) || []}
         colonyTimepoints={(colonyTimepoints as ColonyTimepoint[]) || []}
+        workspaceCalendarEvents={(workspaceCalendarEvents as WorkspaceCalendarEvent[]) || []}
       />
     </div>
   );

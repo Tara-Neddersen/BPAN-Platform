@@ -78,6 +78,7 @@ export async function rebuildWorkspaceBackstageIndex(supabase: SupabaseClient, u
     { data: memory, error: memErr },
     { data: animalExperiments, error: animalExpErr },
     { data: colonyResults, error: colonyResultsErr },
+    { data: calendarEvents, error: calendarEventsErr },
   ] = await Promise.all([
     supabase.from("meeting_notes").select("id,title,meeting_date,action_items,updated_at,created_at").eq("user_id", userId),
     supabase.from("tasks").select("id,title,status,source_type,source_id,source_label,due_date,updated_at,created_at").eq("user_id", userId),
@@ -99,6 +100,10 @@ export async function rebuildWorkspaceBackstageIndex(supabase: SupabaseClient, u
       .from("colony_results")
       .select("id,animal_id,experiment_type,timepoint_age_days,recorded_at,updated_at,created_at")
       .eq("user_id", userId),
+    supabase
+      .from("workspace_calendar_events")
+      .select("id,title,category,status,start_at,end_at,source_type,source_id,source_label,updated_at,created_at")
+      .eq("user_id", userId),
   ]);
 
   const err =
@@ -115,7 +120,8 @@ export async function rebuildWorkspaceBackstageIndex(supabase: SupabaseClient, u
     hypErr ||
     memErr ||
     animalExpErr ||
-    colonyResultsErr;
+    colonyResultsErr ||
+    calendarEventsErr;
   if (err) throw new Error(err.message);
 
   const links: LinkRow[] = [];
@@ -507,6 +513,36 @@ export async function rebuildWorkspaceBackstageIndex(supabase: SupabaseClient, u
       href: "/memory",
       event_at: String(m.updated_at || m.created_at),
     });
+  }
+
+  for (const ev of calendarEvents || []) {
+    addEvent(events, {
+      user_id: userId,
+      entity_type: "calendar_event",
+      entity_id: String(ev.id),
+      event_type: "updated",
+      title: String(ev.title || "Calendar event"),
+      detail: `${String(ev.category || "general")} • ${String(ev.status || "scheduled")}`,
+      href: "/experiments",
+      event_at: String(ev.updated_at || ev.start_at || ev.created_at),
+      payload: {
+        start_at: ev.start_at ?? null,
+        end_at: ev.end_at ?? null,
+        source_type: ev.source_type ?? null,
+        source_id: ev.source_id ?? null,
+      },
+    });
+    if (ev.source_type && ev.source_id) {
+      addLink(links, {
+        user_id: userId,
+        source_type: "calendar_event",
+        source_id: String(ev.id),
+        target_type: String(ev.source_type),
+        target_id: String(ev.source_id),
+        link_type: "schedules",
+        metadata: { source_label: ev.source_label ?? null },
+      });
+    }
   }
 
   const finalLinks = uniqLinks(links);

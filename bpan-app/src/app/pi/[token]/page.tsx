@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
+import type { WorkspaceCalendarEvent } from "@/types";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -83,6 +84,7 @@ interface PortalData {
   colony_results: ColonyResult[];
   cohorts: Cohort[];
   timepoints: ColonyTimepoint[];
+  calendar_events: WorkspaceCalendarEvent[];
   photos: PortalPhoto[];
   stats: {
     total_animals: number; active_animals: number;

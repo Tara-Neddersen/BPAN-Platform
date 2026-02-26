@@ -184,6 +184,25 @@ export interface Reagent {
   updated_at: string;
 }
 
+export interface WorkspaceCalendarEvent {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  start_at: string;
+  end_at: string | null;
+  all_day: boolean;
+  status: "scheduled" | "in_progress" | "completed" | "cancelled";
+  category: string;
+  location: string | null;
+  source_type: string | null;
+  source_id: string | null;
+  source_label: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 // ─── Research Ideas Board ────────────────────────────────────────────────────
 
 export interface ResearchIdea {
