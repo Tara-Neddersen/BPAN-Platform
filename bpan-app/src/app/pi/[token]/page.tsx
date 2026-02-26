@@ -1000,10 +1000,10 @@ function PITrackerTab({
       case "skipped":
         return (
           <span
-            className="inline-flex h-5 min-w-5 items-center justify-center rounded bg-red-50 px-1 text-red-500 cursor-help"
+            className="inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-gray-400 cursor-help"
             title={skipNote ? `Skipped: ${skipNote}` : "Skipped"}
           >
-            ✕
+            —
           </span>
         );
       default: return <span className="text-gray-200">·</span>;
@@ -1225,7 +1225,7 @@ function PITrackerTab({
                           return (
                             <td
                               key={`${tp}-${type}`}
-                              className={`text-center py-1 px-0.5 ${tpIdx > 0 && typeIdx === 0 ? "border-l-[3px] border-l-foreground/30" : ""} ${status === "skipped" ? "bg-red-50/40" : ""}`}
+                              className={`text-center py-1 px-0.5 ${tpIdx > 0 && typeIdx === 0 ? "border-l-[3px] border-l-foreground/30" : ""} ${status === "skipped" ? "bg-muted/20" : ""}`}
                               title={status === "skipped" ? (skipNote ? `Skipped: ${skipNote}` : "Skipped") : undefined}
                             >
                               {getStatusIcon(status, skipNote)}
@@ -1247,7 +1247,7 @@ function PITrackerTab({
         <span className="flex items-center gap-1">✅ Completed</span>
         <span className="flex items-center gap-1">🔵 In Progress</span>
         <span className="flex items-center gap-1">⏳ Scheduled</span>
-        <span className="flex items-center gap-1 text-red-500">✕ Skipped (hover for reason)</span>
+        <span className="flex items-center gap-1 text-muted-foreground">— Skipped (hover for reason)</span>
         <span className="flex items-center gap-1">· Not scheduled</span>
       </div>
     </div>
