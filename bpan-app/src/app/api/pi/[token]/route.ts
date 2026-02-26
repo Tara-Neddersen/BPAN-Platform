@@ -96,7 +96,7 @@ export async function GET(
         if (cohortCmp !== 0) return cohortCmp;
         return String(a.identifier || "").localeCompare(String(b.identifier || ""), undefined, { numeric: true });
       });
-      const cohortNameByAnimalId = new Map(animals.map((a) => [String(a.id), String(a.cohort_name || "")]));
+      const cohortNameByAnimalId = new Map(portalAnimals.map((a) => [String(a.id), String(a.cohort_name || "")]));
 
       // Full animal objects for analysis panel
       const fullAnimalRows = (animalsData || []).map((a: Record<string, unknown>) => ({
