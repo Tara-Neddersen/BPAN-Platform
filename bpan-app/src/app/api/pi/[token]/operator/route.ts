@@ -2,6 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getWorkspaceCalendarFeedEvents } from "@/lib/workspace-calendar-feed";
 
+const PI_EXPERIMENT_LABELS: Record<string, string> = {
+  handling: "Handling",
+  y_maze: "Y-Maze",
+  ldb: "Light-Dark Box",
+  marble: "Marble Burying",
+  nesting: "Nesting",
+  data_collection: "Transport to Core",
+  core_acclimation: "Core Acclimation",
+  catwalk: "CatWalk",
+  rotarod_hab: "Rotarod Habituation",
+  rotarod_test1: "Rotarod Test 1",
+  rotarod_test2: "Rotarod Test 2",
+  rotarod_recovery: "RR Recovery",
+  stamina: "Rotarod Stamina",
+  blood_draw: "Plasma Collection",
+  eeg_implant: "EEG Implant",
+  eeg_recording: "EEG Recording",
+  rotarod: "Rotarod (Legacy)",
+};
+
 function fmtDateLabel(date: string) {
   return date;
 }
@@ -87,6 +107,97 @@ export async function POST(
         response: upcoming.length
           ? "Upcoming calendar events:\n" + upcoming.map((e) => `• ${String(e.startAt).slice(0, 10)} — ${e.summary}`).join("\n")
           : "No upcoming events found.",
+      });
+    }
+
+    const cohortDoneMatch =
+      message.match(
+        /(?:what\s+(?:experiments?|experimetns?|exp(?:eriments?)?)\s+have\s+been\s+done\s+for|what(?:'s| is)\s+done\s+for|progress\s+for)\s+(.+)$/i
+      ) ||
+      message.match(/(?:done|completed)\s+(?:for|in)\s+(.+)$/i);
+    if (cohortDoneMatch && (canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("results") || canSee.includes("animals"))) {
+      const q = cohortDoneMatch[1].trim().replace(/[?.!]+$/, "");
+      const { data: cohorts } = await supabase
+        .from("cohorts")
+        .select("id,name")
+        .eq("user_id", userId)
+        .order("name");
+
+      const cohort = (cohorts || []).find((c) => String(c.name || "").toLowerCase().includes(q.toLowerCase()));
+      if (!cohort) {
+        return NextResponse.json({ response: `I couldn't find a cohort matching "${q}".` });
+      }
+
+      const { data: animalsInCohort } = await supabase
+        .from("animals")
+        .select("id,identifier")
+        .eq("user_id", userId)
+        .eq("cohort_id", cohort.id);
+      const animalIds = (animalsInCohort || []).map((a) => String(a.id));
+      if (animalIds.length === 0) {
+        return NextResponse.json({ response: `No animals found in cohort ${cohort.name}.` });
+      }
+
+      const { data: exps } = await supabase
+        .from("animal_experiments")
+        .select("experiment_type,status,timepoint_age_days,scheduled_date,completed_date,notes")
+        .eq("user_id", userId)
+        .in("animal_id", animalIds);
+
+      if (!exps || exps.length === 0) {
+        return NextResponse.json({ response: `No experiment records found for cohort ${cohort.name}.` });
+      }
+
+      const byType = new Map<string, { completed: number; in_progress: number; scheduled: number; skipped: number; pending: number; latest?: string | null }>();
+      const byTpAndType = new Map<string, { completed: number; total: number }>();
+      for (const e of exps) {
+        const type = String(e.experiment_type || "unknown");
+        const status = String(e.status || "pending");
+        const cur = byType.get(type) || { completed: 0, in_progress: 0, scheduled: 0, skipped: 0, pending: 0, latest: null };
+        if (status === "completed") cur.completed++;
+        else if (status === "in_progress") cur.in_progress++;
+        else if (status === "scheduled") cur.scheduled++;
+        else if (status === "skipped") cur.skipped++;
+        else cur.pending++;
+        const date = String(e.completed_date || e.scheduled_date || "");
+        if (date && (!cur.latest || date > cur.latest)) cur.latest = date;
+        byType.set(type, cur);
+
+        if (e.timepoint_age_days != null) {
+          const key = `${String(e.timepoint_age_days)}::${type}`;
+          const tpCur = byTpAndType.get(key) || { completed: 0, total: 0 };
+          tpCur.total++;
+          if (status === "completed") tpCur.completed++;
+          byTpAndType.set(key, tpCur);
+        }
+      }
+
+      const completedFirst = [...byType.entries()].sort((a, b) => {
+        const ca = a[1].completed;
+        const cb = b[1].completed;
+        if (ca !== cb) return cb - ca;
+        return a[0].localeCompare(b[0]);
+      });
+
+      const topLines = completedFirst.slice(0, 10).map(([type, counts]) => {
+        const label = PI_EXPERIMENT_LABELS[type] || type.replace(/_/g, " ");
+        return `• ${label}: ${counts.completed} done, ${counts.in_progress} in progress, ${counts.scheduled} scheduled, ${counts.skipped} skipped`;
+      });
+
+      const tpCompletion = [...byTpAndType.entries()]
+        .map(([key, v]) => {
+          const [tp, type] = key.split("::");
+          return { tp: Number(tp), type, completed: v.completed, total: v.total };
+        })
+        .sort((a, b) => a.tp - b.tp || a.type.localeCompare(b.type))
+        .slice(0, 12)
+        .map((r) => `• ${r.tp}d — ${(PI_EXPERIMENT_LABELS[r.type] || r.type.replace(/_/g, " "))}: ${r.completed}/${r.total} done`);
+
+      return NextResponse.json({
+        response:
+          `Cohort progress for ${cohort.name} (${animalIds.length} animals):\n` +
+          `Top experiment status summary:\n${topLines.join("\n") || "• No experiments yet"}\n\n` +
+          `Timepoint completion snapshot:\n${tpCompletion.join("\n") || "• No timepoint-linked experiments yet"}`,
       });
     }
 

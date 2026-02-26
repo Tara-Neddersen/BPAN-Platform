@@ -1621,7 +1621,11 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                 <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
                   {piOperatorMessages.map((msg) => (
                     <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                      <div className={`max-w-[90%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                      <div
+                        className={`max-w-[90%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words overflow-hidden leading-relaxed ${
+                          msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
+                        }`}
+                      >
                         {msg.content}
                       </div>
                     </div>
@@ -1657,7 +1661,7 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                       }
                     }}
                     placeholder="Ask PI Operator..."
-                    className="flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 min-h-[38px] max-h-[120px]"
+                    className="flex-1 min-w-0 resize-none rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 min-h-[38px] max-h-[120px]"
                     rows={1}
                   />
                   <Button
