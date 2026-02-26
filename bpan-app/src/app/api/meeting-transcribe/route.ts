@@ -14,6 +14,33 @@ type LocalTranscriber =
   | { kind: "whisper-cli"; bin: string; modelPath: string }
   | { kind: "whisper-python"; bin: string };
 
+function getCompanionConfig() {
+  const url = process.env.LOCAL_COMPANION_TRANSCRIBE_URL || process.env.MEETING_TRANSCRIBE_COMPANION_URL;
+  const token = process.env.LOCAL_COMPANION_TOKEN || process.env.MEETING_TRANSCRIBE_COMPANION_TOKEN || null;
+  return { url: url?.trim() || null, token };
+}
+
+async function transcribeViaCompanion(file: File) {
+  const { url, token } = getCompanionConfig();
+  if (!url) return null;
+
+  const formData = new FormData();
+  formData.set("file", file);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: formData,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    throw new Error(data.error || `Companion transcription failed (${res.status})`);
+  }
+  return {
+    transcript: String(data.transcript || "").trim(),
+    engine: String(data.engine || "companion"),
+  };
+}
+
 async function commandExists(cmd: string) {
   try {
     const { stdout } = await execFileAsync("/bin/zsh", ["-lc", `command -v ${cmd}`]);
@@ -116,11 +143,19 @@ export async function POST(request: Request) {
 
     const transcriber = await detectLocalTranscriber();
     if (!transcriber) {
+      const viaCompanion = await transcribeViaCompanion(file);
+      if (viaCompanion) {
+        if (!viaCompanion.transcript) {
+          return NextResponse.json({ error: "No speech detected in recording." }, { status: 422 });
+        }
+        return NextResponse.json(viaCompanion);
+      }
+
       const onVercel = Boolean(process.env.VERCEL);
       return NextResponse.json(
         {
           error: onVercel
-            ? "Upload transcription (free/local) only works on your local app, not on Vercel. The deployed app cannot access your Mac's whisper/ffmpeg installation."
+            ? "Upload transcription needs either your local app (Whisper on this Mac) or a configured local companion bridge. The deployed app cannot directly access your Mac's whisper/ffmpeg installation."
             : "Free local transcription is not configured yet. Install whisper.cpp (or python whisper) and try again. ffmpeg is already installed.",
         },
         { status: 503 }

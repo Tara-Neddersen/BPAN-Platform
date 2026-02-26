@@ -465,7 +465,7 @@ function MeetingDetail({
           </div>
         </div>
         <p className="mb-2 text-[10px] text-muted-foreground">
-          `Dictate` works in-browser. `Upload recording (free/local)` only works on your local app (it uses your Mac&apos;s local Whisper install, not Vercel).
+          `Dictate` works in-browser. `Upload recording (free/local)` works in your local app, or via a configured local companion bridge (your Mac Whisper server) if you want the deployed app to reach your local transcription setup.
         </p>
         <Textarea
           value={content}
