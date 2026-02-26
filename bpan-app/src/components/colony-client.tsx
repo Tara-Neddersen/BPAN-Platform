@@ -105,6 +105,31 @@ const STATUS_COLORS: Record<string, string> = {
   skipped: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
 };
 
+const LAST_BEHAVIOR_OFFSET = 9;
+
+function timepointProtocolPreview(tp: ColonyTimepoint) {
+  const handling = tp.handling_days_before ?? 5;
+  const recovery = tp.eeg_recovery_days ?? 7;
+  const recording = tp.eeg_recording_days ?? 3;
+  const implantTiming = tp.eeg_implant_timing || "after";
+  const behaviorStartShift = tp.includes_eeg_implant && implantTiming === "before" ? recovery : 0;
+  const lastBehaviorDay = behaviorStartShift + LAST_BEHAVIOR_OFFSET;
+  const recordingStartDay = tp.includes_eeg_implant
+    ? (implantTiming === "after" ? lastBehaviorDay + 1 + recovery : lastBehaviorDay + 1)
+    : null;
+  const plasmaDay = tp.includes_eeg_implant && recordingStartDay !== null
+    ? recordingStartDay + recording + 7
+    : lastBehaviorDay + 7;
+
+  return {
+    handlingStartDay: 1 - handling + behaviorStartShift,
+    behaviorStartDay: 1 + behaviorStartShift,
+    lastBehaviorDay: lastBehaviorDay + 1,
+    recordingStartDay: recordingStartDay !== null ? recordingStartDay + 1 : null,
+    plasmaDay: plasmaDay + 1,
+  };
+}
+
 interface ColonyClientProps {
   defaultTab?: string;
   breederCages: BreederCage[];
@@ -1036,7 +1061,7 @@ export function ColonyClient({
             <div>
               <p className="text-sm font-medium">Protocol Timepoints</p>
               <p className="text-xs text-muted-foreground mt-0.5 italic">
-                Week 0: Handling → Day 1: Y-Maze + Marble → Day 2: LDB + Nesting → Day 3: Core → Day 4–5: Acclimation → Day 6: CatWalk + RR Hab → Day 7: RR Test 1 → Day 8: RR Test 2 → Day 9: RR Recovery (calendar only) → Day 10: RR Stamina → Day 11: Plasma
+                Week 0: Handling → Day 1: Y-Maze + Marble → Day 2: LDB + Nesting → Day 3: Core → Day 4–5: Acclimation → Day 6: CatWalk + RR Hab → Day 7: RR Test 1 → Day 8: RR Test 2 → Day 9: RR Recovery (calendar only) → Day 10: RR Stamina → Plasma is scheduled dynamically (+7d after last behavior, or +7d after EEG recording window)
               </p>
             </div>
             <Button onClick={() => setShowAddTP(true)} size="sm" className="flex-shrink-0">
@@ -1052,6 +1077,9 @@ export function ColonyClient({
               {timepoints.map((tp) => (
                 <Card key={tp.id}>
                   <CardContent className="py-3">
+                    {(() => {
+                      const preview = timepointProtocolPreview(tp);
+                      return (
                     <div className="flex items-start justify-between">
                       <div>
                         <div className="font-semibold text-sm flex items-center gap-2">
@@ -1073,9 +1101,13 @@ export function ColonyClient({
                         <div className="text-xs text-muted-foreground mt-1.5 flex flex-wrap gap-3">
                           <span>Handle {tp.handling_days_before}d before</span>
                           <span>Grace: {tp.grace_period_days ?? 30}d after</span>
+                          <span>
+                            Preview: behavior starts Day {preview.behaviorStartDay}, last behavior Day {preview.lastBehaviorDay}, plasma Day {preview.plasmaDay}
+                          </span>
                           {tp.includes_eeg_implant && (
                             <span className="text-purple-600">
-                              + EEG implant ({tp.eeg_implant_timing || "after"}) → {tp.eeg_recovery_days}d recovery → {tp.eeg_recording_days}d recording → plasma +7d
+                              + EEG implant ({tp.eeg_implant_timing || "after"}) → {tp.eeg_recovery_days}d recovery → {tp.eeg_recording_days}d recording
+                              {preview.recordingStartDay ? ` (recording starts Day ${preview.recordingStartDay})` : ""}
                             </span>
                           )}
                         </div>
@@ -1089,6 +1121,8 @@ export function ColonyClient({
                         </Button>
                       </div>
                     </div>
+                      );
+                    })()}
                   </CardContent>
                 </Card>
               ))}

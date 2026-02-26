@@ -8,6 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 import { MiniEarTag } from "@/components/ear-tag-selector";
@@ -164,6 +166,12 @@ export function ColonyResultsTab({
   batchUpsertColonyResults,
   reconcileTrackerFromExistingColonyResults,
 }: ColonyResultsTabProps) {
+  type SaveEntry = {
+    animalId: string;
+    measures: Record<string, string | number | null>;
+    notes?: string;
+  };
+
   const hasMeaningfulMeasures = useCallback((measures: Record<string, string | number | null> | null | undefined) => {
     if (!measures) return false;
     return Object.values(measures).some((v) => v !== null && v !== "" && v !== undefined);
@@ -172,6 +180,10 @@ export function ColonyResultsTab({
   // State
   const [saving, setSaving] = useState(false);
   const [reconciling, setReconciling] = useState(false);
+  const [showEmptyStatusDialog, setShowEmptyStatusDialog] = useState(false);
+  const [pendingSaveEntries, setPendingSaveEntries] = useState<SaveEntry[] | null>(null);
+  const [pendingClearedRowsCount, setPendingClearedRowsCount] = useState(0);
+  const [emptyStatusChoice, setEmptyStatusChoice] = useState<"skipped" | "pending" | "scheduled" | "leave">("skipped");
   const [activeTimepoint, setActiveTimepoint] = useState<string>(
     timepoints.length > 0 ? String(timepoints[0].age_days) : "30"
   );
@@ -392,15 +404,35 @@ export function ColonyResultsTab({
   );
 
   // Save all dirty rows for the current timepoint + experiment
+  const executeSave = useCallback(async (
+    tp: number,
+    exp: string,
+    entries: SaveEntry[],
+    emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave"
+  ) => {
+    setSaving(true);
+    try {
+      const result = await batchUpsertColonyResults(tp, exp, entries, emptyResultStatus ? { emptyResultStatus } : undefined);
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        toast.success(`Saved results for ${result.saved} animal${(result.saved || 0) > 1 ? "s" : ""}`);
+        setDirtyKeys(new Set());
+        setPendingSaveEntries(null);
+        setPendingClearedRowsCount(0);
+      }
+    } catch {
+      toast.error("Failed to save results");
+    } finally {
+      setSaving(false);
+    }
+  }, [batchUpsertColonyResults]);
+
   const handleSave = useCallback(async () => {
     const tp = Number(activeTimepoint);
     const exp = activeExperiment;
 
-    const entries: {
-      animalId: string;
-      measures: Record<string, string | number | null>;
-      notes?: string;
-    }[] = [];
+    const entries: SaveEntry[] = [];
 
     for (const animal of activeAnimals) {
       const key = `${animal.id}-${tp}-${exp}`;
@@ -438,41 +470,16 @@ export function ColonyResultsTab({
       return existingHasData && !nextHasData;
     });
 
-    let emptyResultStatus: "skipped" | "pending" | "scheduled" | "leave" | undefined;
-    if (clearedRows.length > 0 && typeof window !== "undefined") {
-      const response = window.prompt(
-        `You cleared result values for ${clearedRows.length} row${clearedRows.length === 1 ? "" : "s"}.\n` +
-          "How should tracker status be updated for those rows?\n" +
-          "Type: skipped, pending, scheduled, or leave",
-        "skipped"
-      );
-      if (response === null) {
-        toast.info("Save cancelled");
-        return;
-      }
-      const normalized = response.trim().toLowerCase();
-      if (!["skipped", "pending", "scheduled", "leave"].includes(normalized)) {
-        toast.error("Invalid choice. Use skipped, pending, scheduled, or leave.");
-        return;
-      }
-      emptyResultStatus = normalized as typeof emptyResultStatus;
+    if (clearedRows.length > 0) {
+      setPendingSaveEntries(entries);
+      setPendingClearedRowsCount(clearedRows.length);
+      setEmptyStatusChoice("skipped");
+      setShowEmptyStatusDialog(true);
+      return;
     }
 
-    setSaving(true);
-    try {
-      const result = await batchUpsertColonyResults(tp, exp, entries, emptyResultStatus ? { emptyResultStatus } : undefined);
-      if (result.error) {
-        toast.error(result.error);
-      } else {
-        toast.success(`Saved results for ${result.saved} animal${(result.saved || 0) > 1 ? "s" : ""}`);
-        setDirtyKeys(new Set());
-      }
-    } catch {
-      toast.error("Failed to save results");
-    } finally {
-      setSaving(false);
-    }
-  }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, getExistingResult, hasMeaningfulMeasures, batchUpsertColonyResults]);
+    await executeSave(tp, exp, entries);
+  }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, getExistingResult, hasMeaningfulMeasures, executeSave]);
 
   const handleReconcileTracker = useCallback(async () => {
     setReconciling(true);
@@ -696,6 +703,70 @@ export function ColonyResultsTab({
 
   return (
     <div className="space-y-4">
+      <Dialog
+        open={showEmptyStatusDialog}
+        onOpenChange={(open) => {
+          setShowEmptyStatusDialog(open);
+          if (!open && !saving) {
+            setPendingSaveEntries(null);
+            setPendingClearedRowsCount(0);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Apply tracker status for cleared results</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              You cleared values for {pendingClearedRowsCount} row{pendingClearedRowsCount === 1 ? "" : "s"}.
+              Choose what tracker status should be set for those rows when saving.
+            </p>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Status for cleared rows</Label>
+              <Select value={emptyStatusChoice} onValueChange={(v) => setEmptyStatusChoice(v as typeof emptyStatusChoice)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skipped">Skipped</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="scheduled">Scheduled</SelectItem>
+                  <SelectItem value="leave">Leave unchanged</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              type="button"
+              onClick={() => {
+                setShowEmptyStatusDialog(false);
+                setPendingSaveEntries(null);
+                setPendingClearedRowsCount(0);
+                toast.info("Save cancelled");
+              }}
+              disabled={saving}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={saving || !pendingSaveEntries}
+              onClick={async () => {
+                if (!pendingSaveEntries) return;
+                setShowEmptyStatusDialog(false);
+                await executeSave(Number(activeTimepoint), activeExperiment, pendingSaveEntries, emptyStatusChoice);
+              }}
+            >
+              {saving && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+              Save Results
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ─── Timepoint Master Tabs ─────────────────────────────── */}
       <Tabs value={activeTimepoint} onValueChange={handleTimepointChange}>
         <div className="flex items-center justify-between gap-3 flex-wrap">
