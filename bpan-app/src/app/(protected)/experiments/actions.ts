@@ -4,6 +4,15 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
+function parseFileLinks(formData: FormData) {
+  const raw = (formData.get("file_links") as string) || "";
+  return raw
+    .split(/\r?\n|,/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s, i, arr) => arr.indexOf(s) === i);
+}
+
 // ─── Experiments ─────────────────────────────────────────────────────────────
 
 export async function createExperiment(formData: FormData) {
@@ -214,6 +223,7 @@ export async function createProtocol(formData: FormData) {
   const description = (formData.get("description") as string) || null;
   const category = (formData.get("category") as string) || null;
   const stepsJson = (formData.get("steps") as string) || "[]";
+  const fileLinks = parseFileLinks(formData);
 
   let steps;
   try {
@@ -228,6 +238,7 @@ export async function createProtocol(formData: FormData) {
     description,
     category,
     steps,
+    file_links: fileLinks,
   });
 
   if (error) throw new Error(error.message);
@@ -247,6 +258,7 @@ export async function updateProtocol(formData: FormData) {
   const description = (formData.get("description") as string) || null;
   const category = (formData.get("category") as string) || null;
   const stepsJson = (formData.get("steps") as string) || "[]";
+  const fileLinks = parseFileLinks(formData);
 
   let steps;
   try {
@@ -257,7 +269,7 @@ export async function updateProtocol(formData: FormData) {
 
   const { error } = await supabase
     .from("protocols")
-    .update({ title, description, category, steps })
+    .update({ title, description, category, steps, file_links: fileLinks })
     .eq("id", id)
     .eq("user_id", user.id);
 

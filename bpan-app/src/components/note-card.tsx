@@ -42,6 +42,22 @@ export function NoteCard({ note }: NoteCardProps) {
           ))}
         </div>
 
+        {(note.file_links || []).length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {(note.file_links || []).slice(0, 3).map((url, idx) => (
+              <a
+                key={`${note.id}-file-${idx}`}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs text-primary hover:bg-primary/5"
+              >
+                File {idx + 1}
+              </a>
+            ))}
+          </div>
+        )}
+
         <Link
           href={`/papers/${note.paper_id}`}
           className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"

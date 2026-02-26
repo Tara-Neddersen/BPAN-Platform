@@ -5,6 +5,15 @@ import { createClient } from "@/lib/supabase/server";
 import { generateEmbedding } from "@/lib/ai";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
+function parseFileLinks(formData: FormData) {
+  const raw = (formData.get("file_links") as string) || "";
+  return raw
+    .split(/\r?\n|,/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s, i, arr) => arr.indexOf(s) === i);
+}
+
 export async function createNote(formData: FormData) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -17,6 +26,7 @@ export async function createNote(formData: FormData) {
   const pageNumber = formData.get("page_number") ? parseInt(formData.get("page_number") as string) : null;
   const tagsRaw = formData.get("tags") as string || "";
   const tags = tagsRaw.split(",").map((t) => t.trim()).filter(Boolean);
+  const fileLinks = parseFileLinks(formData);
 
   // Generate embedding for semantic search
   let embedding: number[] | null = null;
@@ -36,6 +46,7 @@ export async function createNote(formData: FormData) {
     highlight_text: highlightText,
     page_number: pageNumber,
     tags,
+    file_links: fileLinks,
     ...(embedding ? { embedding: JSON.stringify(embedding) } : {}),
   });
 
@@ -55,10 +66,11 @@ export async function updateNote(formData: FormData) {
   const noteType = formData.get("note_type") as string || "general";
   const tagsRaw = formData.get("tags") as string || "";
   const tags = tagsRaw.split(",").map((t) => t.trim()).filter(Boolean);
+  const fileLinks = parseFileLinks(formData);
 
   const { error } = await supabase
     .from("notes")
-    .update({ content, note_type: noteType, tags })
+    .update({ content, note_type: noteType, tags, file_links: fileLinks })
     .eq("id", noteId)
     .eq("user_id", user.id);
 

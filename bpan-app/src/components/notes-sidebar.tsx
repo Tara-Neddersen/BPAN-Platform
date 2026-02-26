@@ -92,8 +92,10 @@ export function NotesSidebar({
   );
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
+  const [editFileLinksText, setEditFileLinksText] = useState("");
   const [showManual, setShowManual] = useState(false);
   const [manualContent, setManualContent] = useState("");
+  const [manualFileLinksText, setManualFileLinksText] = useState("");
   const [manualSaving, setManualSaving] = useState(false);
   const pasteRef = useRef<HTMLTextAreaElement>(null);
 
@@ -292,8 +294,10 @@ export function NotesSidebar({
       formData.set("content", manualContent.trim());
       formData.set("note_type", "general");
       formData.set("tags", "");
+      formData.set("file_links", manualFileLinksText);
       await createAction(formData);
       setManualContent("");
+      setManualFileLinksText("");
       setShowManual(false);
     } catch (err) {
       console.error(err);
@@ -310,8 +314,10 @@ export function NotesSidebar({
     formData.set("content", editContent.trim());
     formData.set("note_type", "general");
     formData.set("tags", "");
+    formData.set("file_links", editFileLinksText);
     await updateAction(formData);
     setEditingNoteId(null);
+    setEditFileLinksText("");
   }
 
   return (
@@ -671,6 +677,13 @@ export function NotesSidebar({
                   Cancel
                 </Button>
               </div>
+              <textarea
+                value={manualFileLinksText}
+                onChange={(e) => setManualFileLinksText(e.target.value)}
+                placeholder={"Cloud file links (optional, one per line)\nhttps://drive.google.com/file/d/..."}
+                rows={2}
+                className="w-full rounded-md border bg-background px-3 py-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+              />
             </div>
             <Separator />
           </>
@@ -697,11 +710,21 @@ export function NotesSidebar({
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => setEditingNoteId(null)}
+                  onClick={() => {
+                    setEditingNoteId(null);
+                    setEditFileLinksText("");
+                  }}
                 >
                   Cancel
                 </Button>
               </div>
+              <textarea
+                value={editFileLinksText}
+                onChange={(e) => setEditFileLinksText(e.target.value)}
+                rows={2}
+                placeholder="Cloud file links (optional, one per line)"
+                className="w-full rounded-md border bg-background px-3 py-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+              />
             </div>
           ) : (
             <div key={note.id} className="rounded-lg border p-3 space-y-2">
@@ -738,6 +761,23 @@ export function NotesSidebar({
                 ))}
               </div>
 
+              {(note.file_links || []).length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {(note.file_links || []).map((url, idx) => (
+                    <a
+                      key={`${note.id}-file-${idx}`}
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] text-primary hover:bg-primary/5"
+                    >
+                      File {idx + 1}
+                      <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  ))}
+                </div>
+              )}
+
               {/* Actions */}
               <div className="flex gap-1">
                 <Button
@@ -747,6 +787,7 @@ export function NotesSidebar({
                   onClick={() => {
                     setEditingNoteId(note.id);
                     setEditContent(note.content);
+                    setEditFileLinksText((note.file_links || []).join("\n"));
                   }}
                 >
                   <Pencil className="h-3 w-3" />

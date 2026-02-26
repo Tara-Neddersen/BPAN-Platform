@@ -549,6 +549,32 @@ export async function updateAnimalExperiment(id: string, formData: FormData) {
   return { success: true };
 }
 
+export async function batchUpdateAnimalExperimentStatusByIds(
+  ids: string[],
+  newStatus: "scheduled" | "pending" | "in_progress" | "completed" | "skipped"
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+  if (!ids.length) return { error: "No experiments selected" };
+
+  const update: Record<string, unknown> = { status: newStatus };
+  if (newStatus === "completed") update.completed_date = new Date().toISOString().split("T")[0];
+  if (newStatus !== "completed") update.completed_date = null;
+
+  const { error } = await supabase
+    .from("animal_experiments")
+    .update(update)
+    .in("id", ids)
+    .eq("user_id", user.id);
+  if (error) return { error: error.message };
+
+  revalidatePath("/colony");
+  revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true, updated: ids.length };
+}
+
 /**
  * Simple reschedule: move a single experiment to a new date.
  * Used by the calendar drag-and-drop feature.

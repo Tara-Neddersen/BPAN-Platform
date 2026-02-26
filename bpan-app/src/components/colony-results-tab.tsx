@@ -1,14 +1,13 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Loader2, Save, ChevronDown, ChevronRight, Plus, Trash2, Check, Upload, Eye, EyeOff, X, Camera, ExternalLink, Image as ImageIcon, Download } from "lucide-react";
+import { Loader2, Save, ChevronDown, ChevronRight, Plus, Check, Upload, Eye, EyeOff, X, Camera, ExternalLink, Image as ImageIcon, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 import { MiniEarTag } from "@/components/ear-tag-selector";
@@ -149,7 +148,8 @@ interface ColonyResultsTabProps {
       animalId: string;
       measures: Record<string, string | number | null>;
       notes?: string;
-    }[]
+    }[],
+    options?: { emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave" }
   ) => Promise<{ success?: boolean; error?: string; saved?: number; errors?: string[] }>;
 }
 
@@ -162,6 +162,11 @@ export function ColonyResultsTab({
   colonyResults,
   batchUpsertColonyResults,
 }: ColonyResultsTabProps) {
+  const hasMeaningfulMeasures = useCallback((measures: Record<string, string | number | null> | null | undefined) => {
+    if (!measures) return false;
+    return Object.values(measures).some((v) => v !== null && v !== "" && v !== undefined);
+  }, []);
+
   // State
   const [saving, setSaving] = useState(false);
   const [activeTimepoint, setActiveTimepoint] = useState<string>(
@@ -422,9 +427,37 @@ export function ColonyResultsTab({
       return;
     }
 
+    const clearedRows = entries.filter((entry) => {
+      const existing = getExistingResult(entry.animalId, tp, exp);
+      if (!existing) return false;
+      const existingHasData = hasMeaningfulMeasures(existing.measures as Record<string, string | number | null>);
+      const nextHasData = hasMeaningfulMeasures(entry.measures);
+      return existingHasData && !nextHasData;
+    });
+
+    let emptyResultStatus: "skipped" | "pending" | "scheduled" | "leave" | undefined;
+    if (clearedRows.length > 0 && typeof window !== "undefined") {
+      const response = window.prompt(
+        `You cleared result values for ${clearedRows.length} row${clearedRows.length === 1 ? "" : "s"}.\n` +
+          "How should tracker status be updated for those rows?\n" +
+          "Type: skipped, pending, scheduled, or leave",
+        "skipped"
+      );
+      if (response === null) {
+        toast.info("Save cancelled");
+        return;
+      }
+      const normalized = response.trim().toLowerCase();
+      if (!["skipped", "pending", "scheduled", "leave"].includes(normalized)) {
+        toast.error("Invalid choice. Use skipped, pending, scheduled, or leave.");
+        return;
+      }
+      emptyResultStatus = normalized as typeof emptyResultStatus;
+    }
+
     setSaving(true);
     try {
-      const result = await batchUpsertColonyResults(tp, exp, entries);
+      const result = await batchUpsertColonyResults(tp, exp, entries, emptyResultStatus ? { emptyResultStatus } : undefined);
       if (result.error) {
         toast.error(result.error);
       } else {
@@ -436,7 +469,7 @@ export function ColonyResultsTab({
     } finally {
       setSaving(false);
     }
-  }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, batchUpsertColonyResults]);
+  }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, getExistingResult, hasMeaningfulMeasures, batchUpsertColonyResults]);
 
   // Export current view as CSV
   const handleExport = useCallback(() => {

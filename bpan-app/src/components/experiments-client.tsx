@@ -19,7 +19,6 @@ import {
   CheckCircle2,
   Clock,
   XCircle,
-  Pause,
   ArrowRight,
   AlertTriangle,
   Loader2,
@@ -40,7 +39,17 @@ import {
   updateReagent,
   deleteReagent,
 } from "@/app/(protected)/experiments/actions";
-import { rescheduleExperimentDate, rescheduleExperimentDates } from "@/app/(protected)/colony/actions";
+import {
+  createWorkspaceCalendarEvent,
+  deleteWorkspaceCalendarEvent,
+  updateWorkspaceCalendarEvent,
+} from "@/app/(protected)/experiments/calendar-actions";
+import {
+  rescheduleExperimentDate,
+  rescheduleExperimentDates,
+  updateAnimalExperiment,
+  batchUpdateAnimalExperimentStatusByIds,
+} from "@/app/(protected)/colony/actions";
 import { toast } from "sonner";
 import type { Experiment, ExperimentTimepoint, Protocol, Reagent, ProtocolStep, AnimalExperiment, Animal, Cohort, ColonyTimepoint, WorkspaceCalendarEvent } from "@/types";
 
@@ -369,6 +378,11 @@ function CalendarView({
   const [dragOverDay, setDragOverDay] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragPayload, setDragPayload] = useState<{ expId: string; expIds: string[]; fromDate: string } | null>(null);
+  const [showEventFormForDate, setShowEventFormForDate] = useState<string | null>(null);
+  const [manualEventTitle, setManualEventTitle] = useState("");
+  const [manualEventCategory, setManualEventCategory] = useState("general");
+  const [manualEventDescription, setManualEventDescription] = useState("");
+  const [manualEventSaving, setManualEventSaving] = useState(false);
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
@@ -491,6 +505,11 @@ function CalendarView({
     return timepoints.filter((t) => t.scheduled_at.startsWith(dateStr));
   }
 
+  function getManualEventsForDay(day: number) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    return workspaceCalendarEvents.filter((ev) => String(ev.start_at).slice(0, 10) === dateStr);
+  }
+
   // Group colony experiments by date → experiment_type → list of animals
   function getColonyExpsForDay(day: number) {
     const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -568,6 +587,38 @@ function CalendarView({
   );
   const scheduledThisMonth = thisMonthColony.filter(ae => ae.status === "scheduled").length;
   const inProgressThisMonth = thisMonthColony.filter(ae => ae.status === "in_progress").length;
+
+  const handleCreateManualEvent = useCallback(async (dateStr: string) => {
+    const title = manualEventTitle.trim();
+    if (!title) {
+      toast.error("Event title is required");
+      return;
+    }
+    setManualEventSaving(true);
+    try {
+      const result = await createWorkspaceCalendarEvent({
+        title,
+        startAt: `${dateStr}T12:00:00.000Z`,
+        allDay: true,
+        category: manualEventCategory || "general",
+        description: manualEventDescription.trim() || null,
+      });
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success("Calendar event added");
+      setManualEventTitle("");
+      setManualEventDescription("");
+      setManualEventCategory("general");
+      setShowEventFormForDate(null);
+      router.refresh();
+    } catch {
+      toast.error("Failed to create calendar event");
+    } finally {
+      setManualEventSaving(false);
+    }
+  }, [manualEventTitle, manualEventCategory, manualEventDescription, router]);
 
   return (
     <div className="space-y-4">
@@ -685,8 +736,9 @@ function CalendarView({
             const dayExperiments = getExperimentsForDay(day);
             const dayTimepoints = getTimepointsForDay(day);
             const colonyGroups = showColonyExps ? getColonyExpsForDay(day) : [];
+            const manualDayEvents = getManualEventsForDay(day);
             const isToday = dayStr === todayStr;
-            const hasContent = dayExperiments.length > 0 || dayTimepoints.length > 0 || colonyGroups.length > 0;
+            const hasContent = dayExperiments.length > 0 || dayTimepoints.length > 0 || colonyGroups.length > 0 || manualDayEvents.length > 0;
             const isExpanded = expandedDay === dayStr;
             // Count unique animals (an animal doing 2 experiments counts as 1)
             const uniqueAnimalIds = new Set(colonyGroups.flatMap(g => g.animals.map(a => a.id)));
@@ -730,6 +782,20 @@ function CalendarView({
                     <span className="text-[10px] text-muted-foreground">+{dayExperiments.length - 2} more</span>
                   )}
 
+                  {/* Manual workspace events */}
+                  {manualDayEvents.slice(0, 2).map((ev) => (
+                    <div
+                      key={ev.id}
+                      className="text-[10px] leading-tight px-1 py-0.5 rounded truncate bg-emerald-100 text-emerald-800 border border-emerald-300"
+                      title={ev.description || ev.title}
+                    >
+                      {ev.title}
+                    </div>
+                  ))}
+                  {manualDayEvents.length > 2 && (
+                    <span className="text-[10px] text-muted-foreground">+{manualDayEvents.length - 2} events</span>
+                  )}
+
                   {/* Planner timepoints */}
                   {dayTimepoints.map((t) => (
                     <div key={t.id} className="text-[10px] text-purple-600 truncate flex items-center gap-0.5">
@@ -766,7 +832,7 @@ function CalendarView({
                     </div>
                   )}
 
-                  {/* Colony experiments — expanded view */}
+              {/* Colony experiments — expanded view */}
                   {isExpanded && colonyGroups.length > 0 && (
                     <div className="space-y-1 mt-1">
                       {colonyGroups.map((g) => (
@@ -804,6 +870,18 @@ function CalendarView({
                     </div>
                   )}
                 </div>
+                <button
+                  type="button"
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    setExpandedDay(dayStr);
+                    setShowEventFormForDate(showEventFormForDate === dayStr ? null : dayStr);
+                  }}
+                  className="absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity h-5 w-5 rounded bg-background/90 border text-muted-foreground hover:text-foreground text-[10px]"
+                  title="Add workspace event"
+                >
+                  +
+                </button>
               </div>
             );
           })}
@@ -815,8 +893,9 @@ function CalendarView({
         const day = parseInt(expandedDay.split("-")[2]);
         const colonyGroups = showColonyExps ? getColonyExpsForDay(day) : [];
         const dayExperiments = getExperimentsForDay(day);
+        const manualDayEvents = getManualEventsForDay(day);
         const totalAnimals = colonyGroups.reduce((s, g) => s + g.animals.length, 0);
-        if (colonyGroups.length === 0 && dayExperiments.length === 0) return null;
+        if (colonyGroups.length === 0 && dayExperiments.length === 0 && manualDayEvents.length === 0) return null;
 
         return (
           <Card>
@@ -829,6 +908,100 @@ function CalendarView({
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* Workspace calendar events */}
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="text-xs font-medium text-muted-foreground">Workspace Events</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs"
+                    onClick={() => setShowEventFormForDate(showEventFormForDate === expandedDay ? null : expandedDay)}
+                  >
+                    <Plus className="h-3 w-3 mr-1" /> Add
+                  </Button>
+                </div>
+                {showEventFormForDate === expandedDay && (
+                  <div className="rounded-md border p-2 space-y-2 mb-2">
+                    <Input
+                      value={manualEventTitle}
+                      onChange={(e) => setManualEventTitle(e.target.value)}
+                      placeholder="Event title"
+                      className="h-8 text-xs"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input
+                        value={manualEventCategory}
+                        onChange={(e) => setManualEventCategory(e.target.value)}
+                        placeholder="Category"
+                        className="h-8 text-xs"
+                      />
+                      <Button
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={manualEventSaving}
+                        onClick={() => void handleCreateManualEvent(expandedDay)}
+                      >
+                        {manualEventSaving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                        Save Event
+                      </Button>
+                    </div>
+                    <textarea
+                      value={manualEventDescription}
+                      onChange={(e) => setManualEventDescription(e.target.value)}
+                      placeholder="Optional description"
+                      className="w-full rounded-md border bg-background px-2 py-1.5 text-xs resize-none h-16"
+                    />
+                  </div>
+                )}
+                {manualDayEvents.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No workspace events</p>
+                ) : (
+                  <div className="space-y-1">
+                    {manualDayEvents.map((ev) => (
+                      <div key={ev.id} className="flex items-center justify-between rounded-md border p-2 text-xs">
+                        <div>
+                          <p className="font-medium">{ev.title}</p>
+                          <p className="text-muted-foreground">{ev.category}{ev.status ? ` · ${ev.status}` : ""}</p>
+                          {ev.description && <p className="text-muted-foreground mt-0.5">{ev.description}</p>}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <select
+                            className="h-7 rounded border bg-background px-1 text-[11px]"
+                            value={ev.status}
+                            onChange={async (e) => {
+                              const result = await updateWorkspaceCalendarEvent(ev.id, { status: e.target.value as "scheduled" | "in_progress" | "completed" | "cancelled" });
+                              if (result.error) toast.error(result.error);
+                              else router.refresh();
+                            }}
+                          >
+                            <option value="scheduled">scheduled</option>
+                            <option value="in_progress">in progress</option>
+                            <option value="completed">completed</option>
+                            <option value="cancelled">cancelled</option>
+                          </select>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-destructive"
+                            onClick={async () => {
+                              const result = await deleteWorkspaceCalendarEvent(ev.id);
+                              if (result.error) toast.error(result.error);
+                              else {
+                                toast.success("Deleted event");
+                                router.refresh();
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Regular planner experiments */}
               {dayExperiments.length > 0 && (
                 <div>
@@ -858,28 +1031,73 @@ function CalendarView({
                         className={`rounded-lg p-2.5 ${COLONY_STATUS_COLORS[g.status] || "bg-gray-100"}`}
                       >
                         <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-semibold">{COLONY_EXP_LABELS[g.type] || g.type}{g.type === "rotarod_recovery" ? " (calendar only)" : ""}</span>
+                          <span className="text-xs font-semibold">{COLONY_EXP_LABELS[g.type] || g.type}{g.type === "rotarod_recovery" ? " (calendar only)" : ""}</span>
                           <Badge variant="outline" className="text-[10px] h-4 px-1.5">
                             {g.animals.length} animal{g.animals.length !== 1 ? "s" : ""} · {g.status === "in_progress" ? "In Progress" : "Scheduled"}
                           </Badge>
                         </div>
+                        {g.type !== "rotarod_recovery" && (
+                          <div className="mb-2 flex items-center gap-2">
+                            <span className="text-[10px] text-muted-foreground">Batch status</span>
+                            <select
+                              className="h-6 rounded border bg-background px-1 text-[10px]"
+                              value={g.status}
+                              onChange={async (e) => {
+                                const next = e.target.value as "scheduled" | "pending" | "in_progress" | "completed" | "skipped";
+                                const result = await batchUpdateAnimalExperimentStatusByIds(g.animals.map((a) => a.expId), next);
+                                if (result.error) toast.error(result.error);
+                                else {
+                                  toast.success(`Updated ${g.animals.length} experiment${g.animals.length === 1 ? "" : "s"}`);
+                                  router.refresh();
+                                }
+                              }}
+                            >
+                              <option value="scheduled">scheduled</option>
+                              <option value="pending">pending</option>
+                              <option value="in_progress">in progress</option>
+                              <option value="completed">completed</option>
+                              <option value="skipped">skipped</option>
+                            </select>
+                          </div>
+                        )}
                         <div className="flex flex-wrap gap-1">
                           {g.animals.map((a) => (
                             <span
                               key={a.id}
-                              className="inline-flex items-center text-[10px] bg-white/60 dark:bg-black/20 rounded px-1.5 py-0.5 cursor-grab active:cursor-grabbing hover:ring-1 hover:ring-primary/50"
+                              className="inline-flex items-center gap-1 text-[10px] bg-white/60 dark:bg-black/20 rounded px-1.5 py-0.5 hover:ring-1 hover:ring-primary/50"
                               title={`Drag to reschedule · ${a.cohortName} #${a.identifier} (${a.tpName})`}
-                              draggable
+                              draggable={g.type !== "rotarod_recovery"}
                               onDragStart={(e) => {
+                                if (g.type === "rotarod_recovery") return;
                                 e.stopPropagation();
                                 handleDragStart(e, a.expId, g.type, expandedDay!);
                               }}
                               onDragEnd={handleDragEnd}
                             >
-                              <GripVertical className="h-2.5 w-2.5 opacity-40 mr-0.5 flex-shrink-0" />
+                              {g.type !== "rotarod_recovery" && <GripVertical className="h-2.5 w-2.5 opacity-40 mr-0.5 flex-shrink-0" />}
                               {a.cohortName && <span className="font-medium mr-0.5">{a.cohortName.replace("BPAN ", "B")}</span>}
                               #{a.identifier}
                               <span className="ml-1 opacity-60">{a.tpName}</span>
+                              {g.type !== "rotarod_recovery" && (
+                                <select
+                                  className="ml-1 h-5 rounded border bg-background px-1 text-[9px]"
+                                  defaultValue={g.status}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={async (e) => {
+                                    const fd = new FormData();
+                                    fd.set("status", e.target.value);
+                                    const result = await updateAnimalExperiment(a.expId, fd);
+                                    if (result.error) toast.error(result.error);
+                                    else router.refresh();
+                                  }}
+                                >
+                                  <option value="scheduled">sched</option>
+                                  <option value="pending">pend</option>
+                                  <option value="in_progress">IP</option>
+                                  <option value="completed">done</option>
+                                  <option value="skipped">skip</option>
+                                </select>
+                              )}
                             </span>
                           ))}
                         </div>
@@ -1359,6 +1577,18 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                 />
               </div>
               <div>
+                <label className="text-xs font-medium mb-1 block">Cloud File Links (Google Drive, etc.)</label>
+                <textarea
+                  name="file_links"
+                  defaultValue={(editing?.file_links || []).join("\n")}
+                  placeholder={"Paste one URL per line\nhttps://drive.google.com/file/d/..."}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none h-20"
+                />
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Files stay in your cloud storage. BPAN only saves the links.
+                </p>
+              </div>
+              <div>
                 <label className="text-xs font-medium mb-1 block">Steps</label>
                 {steps.map((step, i) => (
                   <div key={step.id} className="flex gap-1 mb-1">
@@ -1443,6 +1673,27 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                   </div>
                 </div>
                 {p.description && <p className="text-xs text-muted-foreground">{p.description}</p>}
+                {(p.file_links || []).length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Files</p>
+                    <div className="flex flex-wrap gap-1">
+                      {(p.file_links || []).slice(0, 3).map((url, i) => (
+                        <a
+                          key={`${p.id}-file-${i}`}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] text-primary hover:bg-primary/5"
+                        >
+                          File {i + 1}
+                        </a>
+                      ))}
+                      {(p.file_links || []).length > 3 && (
+                        <span className="text-[11px] text-muted-foreground">+{(p.file_links || []).length - 3} more</span>
+                      )}
+                    </div>
+                  </div>
+                )}
                 {p.steps.length > 0 && (
                   <div className="space-y-0.5">
                     {p.steps.slice(0, 3).map((s, i) => (

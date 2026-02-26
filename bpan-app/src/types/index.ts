@@ -58,6 +58,7 @@ export interface Note {
   content: string;
   note_type: string;
   tags: string[];
+  file_links?: string[];
   page_number: number | null;
   created_at: string;
   updated_at: string;
@@ -133,6 +134,7 @@ export interface Protocol {
   description: string | null;
   category: string | null;
   steps: ProtocolStep[];
+  file_links?: string[];
   version: number;
   parent_id: string | null;
   created_at: string;

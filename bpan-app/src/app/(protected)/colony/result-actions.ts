@@ -80,6 +80,37 @@ async function markExperimentSkipped(
     .eq("id", exp.id);
 }
 
+async function markExperimentWithStatus(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  animalId: string,
+  timepointAgeDays: number,
+  experimentType: string,
+  status: "skipped" | "pending" | "scheduled" | "leave"
+) {
+  if (status === "leave") return;
+
+  const { data: exp } = await supabase
+    .from("animal_experiments")
+    .select("id, status")
+    .eq("user_id", userId)
+    .eq("animal_id", animalId)
+    .eq("experiment_type", experimentType)
+    .eq("timepoint_age_days", timepointAgeDays)
+    .maybeSingle();
+
+  if (!exp) return;
+  if (exp.status === status) return;
+
+  await supabase
+    .from("animal_experiments")
+    .update({
+      status,
+      completed_date: status === "completed" ? new Date().toISOString().split("T")[0] : null,
+    })
+    .eq("id", exp.id);
+}
+
 function hasMeaningfulMeasures(measures: Record<string, string | number | null> | null | undefined) {
   if (!measures) return false;
   return Object.values(measures).some((v) => v !== null && v !== "" && v !== undefined);
@@ -159,7 +190,10 @@ export async function batchUpsertColonyResults(
     animalId: string;
     measures: Record<string, string | number | null>;
     notes?: string;
-  }[]
+  }[],
+  options?: {
+    emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave";
+  }
 ) {
   const supabase = await createClient();
   const {
@@ -210,7 +244,19 @@ export async function batchUpsertColonyResults(
     if (hasRealData) {
       await markExperimentCompleted(supabase, user.id, entry.animalId, timepointAgeDays, experimentType);
     } else {
-      await markExperimentSkipped(supabase, user.id, entry.animalId, timepointAgeDays, experimentType);
+      const emptyStatus = options?.emptyResultStatus ?? "skipped";
+      if (emptyStatus === "skipped") {
+        await markExperimentSkipped(supabase, user.id, entry.animalId, timepointAgeDays, experimentType);
+      } else {
+        await markExperimentWithStatus(
+          supabase,
+          user.id,
+          entry.animalId,
+          timepointAgeDays,
+          experimentType,
+          emptyStatus
+        );
+      }
     }
   }
 
