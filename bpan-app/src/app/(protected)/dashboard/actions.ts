@@ -120,7 +120,6 @@ export async function resyncMeetingActionTasks() {
   revalidatePath("/dashboard");
   revalidatePath("/meetings");
   revalidatePath("/tasks");
-  return { success: true, synced, removed, preserved };
 }
 
 export async function backfillStarterExperimentTimepoints() {
@@ -157,7 +156,6 @@ export async function backfillStarterExperimentTimepoints() {
   if (inserts.length > 0) {
     await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   }
-  return { success: true, created: inserts.length };
 }
 
 export async function rebuildWorkspaceBackstageGraph() {
