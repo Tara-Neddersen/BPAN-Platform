@@ -247,7 +247,7 @@ function MeetingDetail({
   busy,
 }: {
   meeting: MeetingNote;
-  onSave: (fd: FormData) => void;
+  onSave: (fd: FormData) => Promise<void>;
   onClose: () => void;
   busy: boolean;
 }) {
@@ -255,11 +255,20 @@ function MeetingDetail({
   const [actionItems, setActionItems] = useState<ActionItem[]>(meeting.action_items || []);
   const [newAction, setNewAction] = useState("");
   const [aiSummary, setAiSummary] = useState(meeting.ai_summary || "");
+  const [hasRecoverableDraft, setHasRecoverableDraft] = useState(false);
+  const [draftUpdatedAt, setDraftUpdatedAt] = useState<string | null>(null);
+  const [recoveringDraft, setRecoveringDraft] = useState<{
+    content: string;
+    action_items: ActionItem[];
+    ai_summary: string;
+    saved_at: string;
+  } | null>(null);
   const [summarizing, setSummarizing] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [syncingTasksNow, setSyncingTasksNow] = useState(false);
   const [uploadingTranscript, setUploadingTranscript] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const draftKey = `meeting_draft:${meeting.id}`;
 
   const insertedDictationPrefixRef = useRef(false);
   const { isListening, isSupported, toggle: toggleMic, stop: stopMic, debugInfo } = useSpeechToText((chunk) => {
@@ -427,7 +436,85 @@ function MeetingDetail({
       )
     );
     if (aiSummary) fd.set("ai_summary", aiSummary);
-    onSave(fd);
+    void onSave(fd).then(() => {
+      try {
+        localStorage.removeItem(draftKey);
+      } catch {
+        // ignore localStorage errors
+      }
+    });
+  }
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        content?: string;
+        action_items?: ActionItem[];
+        ai_summary?: string;
+        saved_at?: string;
+      };
+      if (!parsed || typeof parsed !== "object") return;
+
+      const draftContent = String(parsed.content || "");
+      const draftAi = String(parsed.ai_summary || "");
+      const draftActions = Array.isArray(parsed.action_items) ? parsed.action_items : [];
+      const currentActions = meeting.action_items || [];
+
+      const differs =
+        draftContent !== String(meeting.content || "") ||
+        draftAi !== String(meeting.ai_summary || "") ||
+        JSON.stringify(draftActions) !== JSON.stringify(currentActions);
+
+      if (differs) {
+        setHasRecoverableDraft(true);
+        setDraftUpdatedAt(parsed.saved_at ? String(parsed.saved_at) : null);
+        setRecoveringDraft({
+          content: draftContent,
+          action_items: draftActions,
+          ai_summary: draftAi,
+          saved_at: String(parsed.saved_at || ""),
+        });
+      }
+    } catch {
+      // ignore localStorage parse errors
+    }
+  }, [draftKey, meeting.content, meeting.ai_summary, meeting.action_items]);
+
+  useEffect(() => {
+    try {
+      const payload = {
+        content,
+        action_items: actionItems,
+        ai_summary: aiSummary,
+        saved_at: new Date().toISOString(),
+      };
+      localStorage.setItem(draftKey, JSON.stringify(payload));
+    } catch {
+      // ignore localStorage quota/errors
+    }
+  }, [draftKey, content, actionItems, aiSummary]);
+
+  function restoreDraft() {
+    if (!recoveringDraft) return;
+    setContent(recoveringDraft.content);
+    setActionItems(recoveringDraft.action_items);
+    setAiSummary(recoveringDraft.ai_summary);
+    setHasRecoverableDraft(false);
+    toast.success("Draft restored");
+  }
+
+  function discardDraft() {
+    stopMic();
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {
+      // ignore localStorage errors
+    }
+    setHasRecoverableDraft(false);
+    setRecoveringDraft(null);
+    toast.success("Unsaved draft discarded");
   }
 
   return (
@@ -442,6 +529,24 @@ function MeetingDetail({
 
       {meeting.attendees.length > 0 && (
         <div className="text-sm text-muted-foreground">Attendees: {meeting.attendees.join(", ")}</div>
+      )}
+
+      {hasRecoverableDraft && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>
+              Unsaved draft found{draftUpdatedAt ? ` (${new Date(draftUpdatedAt).toLocaleString()})` : ""}.
+            </span>
+            <div className="flex items-center gap-2">
+              <Button type="button" size="sm" className="h-7 text-xs" onClick={restoreDraft}>
+                Restore draft
+              </Button>
+              <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={discardDraft}>
+                Discard draft
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ─── Meeting Notes / Transcript ─────────────────────── */}
