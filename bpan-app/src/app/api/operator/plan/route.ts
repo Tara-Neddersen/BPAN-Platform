@@ -62,6 +62,23 @@ export async function POST(req: Request) {
   const supported = steps.filter((s) => s.supported).length;
   const destructive = steps.some((s) => s.destructive);
 
+  const detail = `${supported}/${steps.length} supported${destructive ? " · destructive step" : ""}`;
+  await supabase.from("workspace_events").insert({
+    user_id: user.id,
+    entity_type: "operator",
+    entity_id: "plan",
+    event_type: "operator.plan",
+    title: message.slice(0, 500),
+    detail,
+    payload: {
+      totalSteps: steps.length,
+      supportedSteps: supported,
+      unsupportedSteps: steps.length - supported,
+      hasDestructive: destructive,
+      steps,
+    },
+  });
+
   return NextResponse.json({
     success: true,
     plan: {

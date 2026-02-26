@@ -221,6 +221,31 @@ export function AdvisorSidebar() {
     }
   }, [open, view, loadConversations]);
 
+  const loadOperatorHistory = useCallback(async () => {
+    try {
+      const res = await fetch("/api/operator/history");
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.items)) {
+        setOperatorHistory((prev) => {
+          const local = prev || [];
+          const merged = [...(data.items as OperatorHistoryItem[]), ...local];
+          const seen = new Set<string>();
+          const out: OperatorHistoryItem[] = [];
+          for (const item of merged) {
+            const key = `${item.kind}:${item.text}:${item.createdAt}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(item);
+            if (out.length >= 20) break;
+          }
+          return out;
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("bpan_operator_history_v1");
@@ -240,6 +265,12 @@ export function AdvisorSidebar() {
     }
   }, [operatorHistory]);
 
+  useEffect(() => {
+    if (open && view === "operator") {
+      void loadOperatorHistory();
+    }
+  }, [open, view, loadOperatorHistory]);
+
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   const runOperatorMessage = useCallback(async (msg: string) => {
@@ -254,16 +285,24 @@ export function AdvisorSidebar() {
       });
       const data = await res.json();
       setOperatorMessages((prev) => [...prev, { id: `op-a-${Date.now()}`, role: "assistant", content: data.response || data.error || "Operator request failed." }]);
-      setOperatorHistory((prev) => [
-        {
+      const historyItem: OperatorHistoryItem = {
           id: `opr-${Date.now()}`,
           kind: "run" as const,
           text: msg,
           createdAt: new Date().toISOString(),
           meta: data.executed ? "Executed" : "Response only",
-        },
-        ...prev,
-      ].slice(0, 20));
+        };
+      setOperatorHistory((prev) => [historyItem, ...prev].slice(0, 20));
+      void fetch("/api/operator/history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "run",
+          text: msg,
+          meta: historyItem.meta,
+          payload: { executed: Boolean(data.executed), action: data.action || null },
+        }),
+      }).catch(() => {});
     } catch {
       setOperatorMessages((prev) => [...prev, { id: `op-e-${Date.now()}`, role: "assistant", content: "Operator request failed." }]);
     } finally {
@@ -653,16 +692,24 @@ export function AdvisorSidebar() {
                             return;
                           }
                           setOperatorPlan(data.plan);
-                          setOperatorHistory((prev) => [
-                            {
+                          const historyItem: OperatorHistoryItem = {
                               id: `opp-${Date.now()}`,
                               kind: "plan" as const,
                               text: msg,
                               createdAt: new Date().toISOString(),
                               meta: `${data.plan.supportedSteps}/${data.plan.totalSteps} supported`,
-                            },
-                            ...prev,
-                          ].slice(0, 20));
+                            };
+                          setOperatorHistory((prev) => [historyItem, ...prev].slice(0, 20));
+                          void fetch("/api/operator/history", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              kind: "plan",
+                              text: msg,
+                              meta: historyItem.meta,
+                              payload: data.plan,
+                            }),
+                          }).catch(() => {});
                         } catch {
                           setOperatorMessages((prev) => [...prev, { id: `op-plan-e-${Date.now()}`, role: "assistant", content: "Failed to generate plan." }]);
                         } finally {
