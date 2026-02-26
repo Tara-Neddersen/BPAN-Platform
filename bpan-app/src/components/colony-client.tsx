@@ -363,6 +363,9 @@ export function ColonyClient({
   const [busy, setBusy] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [showAddPhoto, setShowAddPhoto] = useState(false);
+  const [photoUrlInput, setPhotoUrlInput] = useState("");
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const photoUploadInputRef = useRef<HTMLInputElement>(null);
   const [filterCohort, setFilterCohort] = useState("all");
   const [filterGenotype, setFilterGenotype] = useState("all");
   const [animalFormCohortId, setAnimalFormCohortId] = useState("");
@@ -443,6 +446,38 @@ export function ColonyClient({
       toast.error("Failed to disconnect");
     }
     setDriveLoading(false);
+  }
+
+  async function uploadLabPhotoToDrive(file: File) {
+    if (!driveStatus.connected) {
+      toast.error("Connect Google Drive first");
+      return;
+    }
+    setPhotoUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("cohort_name", "Lab Gallery");
+      fd.append("animal_identifier", "Colony Photos");
+      fd.append("experiment_type", "lab_photo");
+
+      const res = await fetch("/api/gdrive/upload", {
+        method: "POST",
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        toast.error(data.error || "Failed to upload image");
+        return;
+      }
+      setPhotoUrlInput(String(data.url || ""));
+      toast.success("Uploaded to Google Drive and linked");
+    } catch {
+      toast.error("Upload failed");
+    } finally {
+      setPhotoUploading(false);
+      if (photoUploadInputRef.current) photoUploadInputRef.current.value = "";
+    }
   }
 
   // Sort animals: cohort → sex → genotype
@@ -1554,14 +1589,57 @@ export function ColonyClient({
       {/* ─── Dialogs ────────────────────────────────────────────── */}
 
       {/* Add Photo */}
-      <Dialog open={showAddPhoto} onOpenChange={setShowAddPhoto}>
+      <Dialog
+        open={showAddPhoto}
+        onOpenChange={(open) => {
+          setShowAddPhoto(open);
+          if (!open) {
+            setPhotoUrlInput("");
+            setPhotoUploading(false);
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader><DialogTitle>Add Lab Photo</DialogTitle></DialogHeader>
-          <form onSubmit={(e) => handleFormAction(actions.addColonyPhoto, e, () => setShowAddPhoto(false))} className="space-y-3">
+          <form
+            onSubmit={(e) => handleFormAction(actions.addColonyPhoto, e, () => { setShowAddPhoto(false); setPhotoUrlInput(""); })}
+            className="space-y-3"
+          >
             <div>
               <Label className="text-xs">Image URL *</Label>
-              <Input name="image_url" required placeholder="https://drive.google.com/... or direct image URL" />
-              <p className="text-xs text-muted-foreground mt-1">Paste a Google Drive share link or any direct image URL</p>
+              <Input
+                name="image_url"
+                required
+                value={photoUrlInput}
+                onChange={(e) => setPhotoUrlInput(e.target.value)}
+                placeholder="https://drive.google.com/... or direct image URL"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Paste a Google Drive share link or upload a file directly to your linked Google Drive.</p>
+              {driveStatus.connected && (
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    ref={photoUploadInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void uploadLabPhotoToDrive(file);
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={photoUploading}
+                    onClick={() => photoUploadInputRef.current?.click()}
+                  >
+                    {photoUploading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />}
+                    Upload to Google Drive
+                  </Button>
+                  <span className="text-xs text-muted-foreground">BPAN saves only the Drive link.</span>
+                </div>
+              )}
             </div>
             <div>
               <Label className="text-xs">Caption</Label>
