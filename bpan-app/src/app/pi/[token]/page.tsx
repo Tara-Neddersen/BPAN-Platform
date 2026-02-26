@@ -703,11 +703,11 @@ function PIAnalysisPanel({
       {/* Config */}
       <Card>
         <CardContent className="pt-4 pb-3">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3">
+            <div className="xl:col-span-3 min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Experiment</label>
               <Select value={selectedExperiment} onValueChange={setSelectedExperiment}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-8 text-xs w-full min-w-0"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {availableExperiments.map((exp) => (
                     <SelectItem key={exp} value={exp}>{EXPERIMENT_LABELS[exp] || exp}</SelectItem>
@@ -715,10 +715,10 @@ function PIAnalysisPanel({
                 </SelectContent>
               </Select>
             </div>
-            <div>
+            <div className="xl:col-span-2 min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Timepoint</label>
               <Select value={selectedTimepoint} onValueChange={setSelectedTimepoint}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-8 text-xs w-full min-w-0"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {availableTimepoints.map((tp) => (
                     <SelectItem key={tp} value={String(tp)}>{tp} Day</SelectItem>
@@ -726,10 +726,12 @@ function PIAnalysisPanel({
                 </SelectContent>
               </Select>
             </div>
-            <div>
+            <div className="xl:col-span-5 min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Measure</label>
               <Select value={selectedMeasure} onValueChange={setSelectedMeasure}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-8 text-xs w-full min-w-0">
+                  <SelectValue className="truncate" />
+                </SelectTrigger>
                 <SelectContent>
                   {availableMeasures.map((m) => (
                     <SelectItem key={m} value={m}>{m.replace(/_/g, " ")}</SelectItem>
@@ -737,10 +739,10 @@ function PIAnalysisPanel({
                 </SelectContent>
               </Select>
             </div>
-            <div>
+            <div className="xl:col-span-2 min-w-0">
               <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Chart Type</label>
               <Select value={chartType} onValueChange={setChartType}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-8 text-xs w-full min-w-0"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="scatter">Dot Plot</SelectItem>
                   <SelectItem value="bar">Bar + SEM</SelectItem>
