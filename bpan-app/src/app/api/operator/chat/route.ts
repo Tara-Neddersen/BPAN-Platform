@@ -140,9 +140,10 @@ export async function POST(req: Request) {
     }
 
     // Fallback helper text
-    const { data: counts } = await Promise.all([
-      supabase.from("workspace_calendar_events").select("id", { count: "exact", head: true }).eq("user_id", user.id),
-    ]);
+    const counts = await supabase
+      .from("workspace_calendar_events")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id);
     return NextResponse.json({
       response:
         "I can execute workspace actions. Try commands like:\n" +
@@ -159,4 +160,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Operator failed" }, { status: 500 });
   }
 }
-
