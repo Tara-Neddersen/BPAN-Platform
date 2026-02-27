@@ -4,6 +4,10 @@
     {
       "path": "/api/digest",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/calendar/auto-sync",
+      "schedule": "15 */2 * * *"
     }
   ]
 }
