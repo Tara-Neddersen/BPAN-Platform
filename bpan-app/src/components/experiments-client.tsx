@@ -510,6 +510,15 @@ function CalendarView({
   const filteredColonyExps = animalExperiments.filter(ae => {
     if (ae.status !== "scheduled" && ae.status !== "in_progress" && ae.status !== "completed") return false;
     if (!ae.scheduled_date) return false;
+    // Hide synthetic rows that were historically auto-created from results with "scheduled=today".
+    // They should count in tracker as completed but should not distort the calendar timeline.
+    const isSyntheticCompletedFromResults =
+      ae.status === "completed" &&
+      !!ae.completed_date &&
+      ae.scheduled_date === ae.completed_date &&
+      !ae.notes &&
+      ae.created_at === ae.updated_at;
+    if (isSyntheticCompletedFromResults) return false;
     if (filterCohort !== "all") {
       const animal = animalMap.get(ae.animal_id);
       if (!animal || animal.cohort_id !== filterCohort) return false;
