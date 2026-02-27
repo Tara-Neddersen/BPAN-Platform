@@ -1449,9 +1449,12 @@ function CalendarView({
                                     <option value="completed">done</option>
                                     <option value="skipped">skip</option>
                                   </select>
+                                  <span className="rounded border bg-slate-50 px-1 text-[9px] text-slate-700">
+                                    D:{a.completedDate || "--"}
+                                  </span>
                                   <button
                                     type="button"
-                                    className="h-5 rounded border bg-background px-1.5 text-[9px]"
+                                    className="h-5 rounded border border-indigo-300 bg-indigo-50 px-1.5 text-[9px] text-indigo-700 hover:bg-indigo-100"
                                     title="Set completed date"
                                     onClick={(e) => e.stopPropagation()}
                                     onMouseDown={async (e) => {
@@ -1475,7 +1478,7 @@ function CalendarView({
                                       }
                                     }}
                                   >
-                                    date
+                                    Set date
                                   </button>
                                 </span>
                               )}
