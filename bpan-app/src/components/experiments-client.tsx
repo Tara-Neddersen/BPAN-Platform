@@ -1408,9 +1408,9 @@ function CalendarView({
                         )}
                         <div className="flex flex-wrap gap-1">
                           {g.animals.map((a) => (
-                            <span
+                            <div
                               key={a.id}
-                              className="inline-flex items-center gap-1 text-[10px] bg-white/60 dark:bg-black/20 rounded px-1.5 py-0.5 hover:ring-1 hover:ring-primary/50"
+                              className="flex min-w-[260px] flex-col gap-1 rounded bg-white/70 px-1.5 py-1 text-[10px] hover:ring-1 hover:ring-primary/50 dark:bg-black/20"
                               title={`Drag to reschedule · ${a.cohortName} #${a.identifier} (${a.tpName})${a.ageAtEventDays != null ? ` · age ${a.ageAtEventDays}d` : ""}`}
                               draggable={g.type !== "rotarod_recovery"}
                               onDragStart={(e) => {
@@ -1420,15 +1420,17 @@ function CalendarView({
                               }}
                               onDragEnd={handleDragEnd}
                             >
-                              {g.type !== "rotarod_recovery" && <GripVertical className="h-2.5 w-2.5 opacity-40 mr-0.5 flex-shrink-0" />}
-                              {a.cohortName && <span className="font-medium mr-0.5">{a.cohortName.replace("BPAN ", "B")}</span>}
-                              #{a.identifier}
-                              {a.ageAtEventDays != null && <span className="opacity-80">· {a.ageAtEventDays}d old</span>}
-                              <span className="ml-1 opacity-60">{a.tpName}</span>
+                              <div className="flex items-center gap-1">
+                                {g.type !== "rotarod_recovery" && <GripVertical className="h-2.5 w-2.5 opacity-40 mr-0.5 flex-shrink-0" />}
+                                {a.cohortName && <span className="font-medium mr-0.5">{a.cohortName.replace("BPAN ", "B")}</span>}
+                                <span>#{a.identifier}</span>
+                                {a.ageAtEventDays != null && <span className="opacity-80">· {a.ageAtEventDays}d old</span>}
+                                <span className="ml-1 opacity-60">{a.tpName}</span>
+                              </div>
                               {g.type !== "rotarod_recovery" && (
-                                <span className="ml-1 inline-flex items-center gap-1">
+                                <div className="flex flex-wrap items-center gap-1">
                                   <select
-                                    className="h-5 rounded border bg-background px-1 text-[9px]"
+                                    className="h-6 rounded border bg-background px-1.5 text-[10px]"
                                     defaultValue={g.status}
                                     onClick={(e) => e.stopPropagation()}
                                     onChange={async (e) => {
@@ -1449,12 +1451,12 @@ function CalendarView({
                                     <option value="completed">done</option>
                                     <option value="skipped">skip</option>
                                   </select>
-                                  <span className="rounded border bg-slate-50 px-1 text-[9px] text-slate-700">
+                                  <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-700">
                                     D:{a.completedDate || "--"}
                                   </span>
                                   <button
                                     type="button"
-                                    className="h-5 rounded border border-indigo-300 bg-indigo-50 px-1.5 text-[9px] text-indigo-700 hover:bg-indigo-100"
+                                    className="h-6 rounded border border-indigo-300 bg-indigo-50 px-2 text-[10px] font-medium text-indigo-700 hover:bg-indigo-100"
                                     title="Set completed date"
                                     onClick={(e) => e.stopPropagation()}
                                     onMouseDown={async (e) => {
@@ -1480,9 +1482,9 @@ function CalendarView({
                                   >
                                     Set date
                                   </button>
-                                </span>
+                                </div>
                               )}
-                            </span>
+                            </div>
                           ))}
                         </div>
                       </div>
