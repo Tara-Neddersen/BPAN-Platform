@@ -1449,17 +1449,24 @@ function CalendarView({
                                     <option value="completed">done</option>
                                     <option value="skipped">skip</option>
                                   </select>
-                                  <input
-                                    type="date"
-                                    className="h-6 w-[118px] rounded border bg-background px-1.5 text-[10px]"
-                                    value={a.completedDate || ""}
-                                    title="Set completed date (will mark as done)"
+                                  <button
+                                    type="button"
+                                    className="h-5 rounded border bg-background px-1.5 text-[9px]"
+                                    title="Set completed date"
                                     onClick={(e) => e.stopPropagation()}
-                                    onChange={async (e) => {
-                                      if (!e.target.value) return;
+                                    onMouseDown={async (e) => {
+                                      e.preventDefault();
+                                      const seed = a.completedDate || expandedDay || "";
+                                      const picked = window.prompt("Completed date (YYYY-MM-DD)", seed);
+                                      if (!picked) return;
+                                      const normalized = picked.trim();
+                                      if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+                                        toast.error("Use format YYYY-MM-DD");
+                                        return;
+                                      }
                                       const fd = new FormData();
                                       fd.set("status", "completed");
-                                      fd.set("completed_date", e.target.value);
+                                      fd.set("completed_date", normalized);
                                       const result = await updateAnimalExperiment(a.expId, fd);
                                       if (result.error) toast.error(result.error);
                                       else {
@@ -1467,7 +1474,9 @@ function CalendarView({
                                         router.refresh();
                                       }
                                     }}
-                                  />
+                                  >
+                                    date
+                                  </button>
                                 </span>
                               )}
                             </span>
