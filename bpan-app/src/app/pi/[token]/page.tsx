@@ -1317,6 +1317,41 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
     acc.get(dateKey)!.push(ev);
     return acc;
   }, new Map<string, typeof upcomingCalendarEvents>());
+  const newbornCohorts = (() => {
+    const now = new Date();
+    const byCohort = new Map<string, { cohortName: string; youngestBirth: string; animalCount: number; litterSize: number }>();
+    for (const animal of data.animals) {
+      const cohortName = String(animal.cohort_name || "Unknown cohort");
+      const birth = String(animal.birth_date || "");
+      const key = `${String(animal.cohort_id || "")}::${cohortName}`;
+      const existing = byCohort.get(key);
+      if (!existing) {
+        byCohort.set(key, {
+          cohortName,
+          youngestBirth: birth,
+          animalCount: 1,
+          litterSize: 1,
+        });
+      } else {
+        existing.animalCount += 1;
+        existing.litterSize += 1;
+        if (birth && (!existing.youngestBirth || birth > existing.youngestBirth)) {
+          existing.youngestBirth = birth;
+        }
+      }
+    }
+    return [...byCohort.values()]
+      .map((c) => {
+        const b = c.youngestBirth ? new Date(`${c.youngestBirth}T12:00:00`) : null;
+        const ageDays =
+          b && !Number.isNaN(b.getTime())
+            ? Math.max(0, Math.floor((now.getTime() - b.getTime()) / (24 * 60 * 60 * 1000)))
+            : null;
+        return { ...c, ageDays };
+      })
+      .filter((c) => c.ageDays != null && c.ageDays <= 35)
+      .sort((a, b) => (a.ageDays ?? 999) - (b.ageDays ?? 999));
+  })();
 
   const hasColonyResults = data.can_see.includes("colony_results") && data.colony_results.length > 0;
 
@@ -1461,6 +1496,34 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                 </Card>
               );
             })()}
+
+            {newbornCohorts.length > 0 && (
+              <Card className="border-pink-200/70 bg-gradient-to-br from-rose-50 via-pink-50 to-violet-50">
+                <CardHeader className="py-3 px-4">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <span className="text-base leading-none">🐣</span>
+                    New Cohorts (0–35 days)
+                    <Badge className="bg-pink-100 text-pink-700 text-xs ml-1" variant="secondary">
+                      {newbornCohorts.length} active
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pb-3 space-y-2">
+                  {newbornCohorts.map((c) => (
+                    <div key={`${c.cohortName}-${c.youngestBirth}`} className="flex items-center justify-between rounded-lg border border-pink-200/60 bg-white/70 px-3 py-2 text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">🍼</span>
+                        <span className="font-medium">{c.cohortName}</span>
+                        <Badge variant="outline" className="text-xs">{c.animalCount} animals</Badge>
+                      </div>
+                      <div className="text-xs text-pink-700 font-medium">
+                        {c.ageDays}d old · DOB {c.youngestBirth}
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
 
             {/* Upcoming */}
             {data.can_see.includes("timeline") && upcoming.length > 0 && (
