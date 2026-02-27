@@ -628,7 +628,8 @@ export async function updateAnimalExperiment(id: string, formData: FormData) {
 
 export async function batchUpdateAnimalExperimentStatusByIds(
   ids: string[],
-  newStatus: "scheduled" | "pending" | "in_progress" | "completed" | "skipped"
+  newStatus: "scheduled" | "pending" | "in_progress" | "completed" | "skipped",
+  options?: { completedDate?: string | null }
 ) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -636,7 +637,9 @@ export async function batchUpdateAnimalExperimentStatusByIds(
   if (!ids.length) return { error: "No experiments selected" };
 
   const update: Record<string, unknown> = { status: newStatus };
-  if (newStatus === "completed") update.completed_date = new Date().toISOString().split("T")[0];
+  if (newStatus === "completed") {
+    update.completed_date = options?.completedDate ?? new Date().toISOString().split("T")[0];
+  }
   if (newStatus !== "completed") update.completed_date = null;
 
   const { error } = await supabase

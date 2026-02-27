@@ -25,6 +25,54 @@ export interface MeasureField {
   type?: "number" | "text";
 }
 
+const ROTAROD_AVG_LATENCY_KEY = "latency_to_fall_sec";
+const ROTAROD_AVG_RPM_KEY = "rpm_at_fall";
+const ROTAROD_TRIAL_LATENCY_KEYS = ["trial_1_sec", "trial_2_sec", "trial_3_sec"] as const;
+const ROTAROD_TRIAL_RPM_KEYS = ["trial_1_rpm", "trial_2_rpm", "trial_3_rpm"] as const;
+
+function isRotarodTrialWithAveragesExperiment(exp: string) {
+  return exp === "rotarod_test1" || exp === "rotarod_test2";
+}
+
+function toNumericOrNull(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function applyDerivedMeasuresForExperiment(
+  exp: string,
+  measures: Record<string, string | number | null>
+): Record<string, string | number | null> {
+  if (!isRotarodTrialWithAveragesExperiment(exp)) return measures;
+
+  const next = { ...measures };
+  const latencyValues = ROTAROD_TRIAL_LATENCY_KEYS.map((key) => toNumericOrNull(next[key])).filter(
+    (value): value is number => value !== null
+  );
+  const rpmValues = ROTAROD_TRIAL_RPM_KEYS.map((key) => toNumericOrNull(next[key])).filter(
+    (value): value is number => value !== null
+  );
+
+  next[ROTAROD_AVG_LATENCY_KEY] =
+    latencyValues.length > 0
+      ? Number((latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length).toFixed(2))
+      : null;
+  next[ROTAROD_AVG_RPM_KEY] =
+    rpmValues.length > 0
+      ? Number((rpmValues.reduce((sum, value) => sum + value, 0) / rpmValues.length).toFixed(2))
+      : null;
+
+  return next;
+}
+
+function isDerivedReadOnlyField(exp: string, fieldKey: string) {
+  return (
+    isRotarodTrialWithAveragesExperiment(exp) &&
+    (fieldKey === ROTAROD_AVG_LATENCY_KEY || fieldKey === ROTAROD_AVG_RPM_KEY)
+  );
+}
+
 const DEFAULT_MEASURES: Record<string, MeasureField[]> = {
   y_maze: [
     { key: "spontaneous_alternation_pct", label: "Spontaneous Alternation", unit: "%", type: "number" },
@@ -67,18 +115,24 @@ const DEFAULT_MEASURES: Record<string, MeasureField[]> = {
     { key: "trial_2_sec", label: "Habituation Trial 2", unit: "sec", type: "number" },
   ],
   rotarod_test1: [
-    { key: "trial_1_sec", label: "Trial 1", unit: "sec", type: "number" },
-    { key: "trial_2_sec", label: "Trial 2", unit: "sec", type: "number" },
-    { key: "trial_3_sec", label: "Trial 3", unit: "sec", type: "number" },
+    { key: "trial_1_sec", label: "Trial 1 - Latency to Fall", unit: "sec", type: "number" },
+    { key: "trial_1_rpm", label: "Trial 1 - RPM at Fall", type: "number" },
+    { key: "trial_2_sec", label: "Trial 2 - Latency to Fall", unit: "sec", type: "number" },
+    { key: "trial_2_rpm", label: "Trial 2 - RPM at Fall", type: "number" },
+    { key: "trial_3_sec", label: "Trial 3 - Latency to Fall", unit: "sec", type: "number" },
+    { key: "trial_3_rpm", label: "Trial 3 - RPM at Fall", type: "number" },
     { key: "latency_to_fall_sec", label: "Avg Latency to Fall", unit: "sec", type: "number" },
-    { key: "rpm_at_fall", label: "RPM at Fall", type: "number" },
+    { key: "rpm_at_fall", label: "Avg RPM at Fall", type: "number" },
   ],
   rotarod_test2: [
-    { key: "trial_1_sec", label: "Trial 1", unit: "sec", type: "number" },
-    { key: "trial_2_sec", label: "Trial 2", unit: "sec", type: "number" },
-    { key: "trial_3_sec", label: "Trial 3", unit: "sec", type: "number" },
+    { key: "trial_1_sec", label: "Trial 1 - Latency to Fall", unit: "sec", type: "number" },
+    { key: "trial_1_rpm", label: "Trial 1 - RPM at Fall", type: "number" },
+    { key: "trial_2_sec", label: "Trial 2 - Latency to Fall", unit: "sec", type: "number" },
+    { key: "trial_2_rpm", label: "Trial 2 - RPM at Fall", type: "number" },
+    { key: "trial_3_sec", label: "Trial 3 - Latency to Fall", unit: "sec", type: "number" },
+    { key: "trial_3_rpm", label: "Trial 3 - RPM at Fall", type: "number" },
     { key: "latency_to_fall_sec", label: "Avg Latency to Fall", unit: "sec", type: "number" },
-    { key: "rpm_at_fall", label: "RPM at Fall", type: "number" },
+    { key: "rpm_at_fall", label: "Avg RPM at Fall", type: "number" },
   ],
   stamina: [
     { key: "duration_sec", label: "Duration at 10 RPM", unit: "sec", type: "number" },
@@ -231,6 +285,25 @@ export function ColonyResultsTab({
     } catch { /* ignore */ }
   }, [hiddenFields]);
 
+  // Keep the core rotarod average columns visible even if they were hidden in an older layout.
+  useEffect(() => {
+    setHiddenFields((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const exp of ["rotarod_test1", "rotarod_test2"] as const) {
+        const current = next[exp];
+        if (!current || current.size === 0) continue;
+        if (!current.has(ROTAROD_AVG_LATENCY_KEY) && !current.has(ROTAROD_AVG_RPM_KEY)) continue;
+        const updated = new Set(current);
+        updated.delete(ROTAROD_AVG_LATENCY_KEY);
+        updated.delete(ROTAROD_AVG_RPM_KEY);
+        next[exp] = updated;
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
   // Local editable data: keyed by `${animalId}-${timepoint}-${experiment}`
   const [editData, setEditData] = useState<
     Record<string, { measures: Record<string, string | number | null>; notes: string }>
@@ -288,10 +361,13 @@ export function ColonyResultsTab({
       const existing = getExistingResult(animalId, tp, exp);
       if (existing)
         return {
-          measures: existing.measures as Record<string, string | number | null>,
+          measures: applyDerivedMeasuresForExperiment(
+            exp,
+            (existing.measures as Record<string, string | number | null>) || {}
+          ),
           notes: existing.notes || "",
         };
-      return { measures: {}, notes: "" };
+      return { measures: applyDerivedMeasuresForExperiment(exp, {}), notes: "" };
     },
     [editData, getExistingResult]
   );
@@ -380,14 +456,15 @@ export function ColonyResultsTab({
       const key = `${animalId}-${tp}-${exp}`;
       setEditData((prev) => {
         const current = prev[key] || getRowData(animalId, tp, exp);
+        const nextMeasures = applyDerivedMeasuresForExperiment(exp, {
+          ...current.measures,
+          [fieldKey]: value === "" ? null : value,
+        });
         return {
           ...prev,
           [key]: {
             ...current,
-            measures: {
-              ...current.measures,
-              [fieldKey]: value === "" ? null : value,
-            },
+            measures: nextMeasures,
           },
         };
       });
@@ -449,7 +526,8 @@ export function ColonyResultsTab({
         const data = editData[key] || getRowData(animal.id, tp, exp);
         // Convert string numbers to actual numbers
         const cleanMeasures: Record<string, string | number | null> = {};
-        for (const [k, v] of Object.entries(data.measures)) {
+        const normalizedMeasures = applyDerivedMeasuresForExperiment(exp, data.measures);
+        for (const [k, v] of Object.entries(normalizedMeasures)) {
           if (v === null || v === "") {
             cleanMeasures[k] = null;
           } else if (typeof v === "string" && !isNaN(Number(v))) {
@@ -1269,16 +1347,22 @@ function CohortGroup({
               </td>
               {fields.map((field) => (
                 <td key={field.key} className="px-1.5 py-1.5">
+                  {(() => {
+                    const readOnly = isDerivedReadOnlyField(experiment, field.key);
+                    return (
                   <Input
                     type={field.type === "text" ? "text" : "text"}
                     inputMode={field.type === "text" ? "text" : "decimal"}
-                    className="h-7 text-xs w-full min-w-[100px]"
-                    placeholder="—"
+                    className={`h-7 text-xs w-full min-w-[100px] ${readOnly ? "bg-slate-50 text-slate-600" : ""}`}
+                    placeholder={readOnly ? "auto" : "—"}
                     value={data.measures[field.key] ?? ""}
+                    readOnly={readOnly}
                     onChange={(e) =>
                       updateMeasure(animal.id, timepoint, experiment, field.key, e.target.value)
                     }
                   />
+                    );
+                  })()}
                 </td>
               ))}
               <td className="px-1.5 py-1.5">

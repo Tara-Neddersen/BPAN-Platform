@@ -1371,7 +1371,14 @@ function CalendarView({
                 <div>
                   <p className="text-xs font-medium text-muted-foreground mb-1">Colony Experiments ({totalAnimals} total)</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {colonyGroups.map((g) => (
+                    {colonyGroups.map((g) => {
+                      const groupCompletedDates = Array.from(
+                        new Set(g.animals.map((a) => a.completedDate).filter((v): v is string => !!v))
+                      );
+                      const groupDateLabel =
+                        groupCompletedDates.length === 0 ? "--" : groupCompletedDates.length === 1 ? groupCompletedDates[0] : "mixed";
+
+                      return (
                       <div
                         key={g.type + g.status}
                         className={`rounded-lg p-2.5 ${COLONY_STATUS_COLORS[g.status] || "bg-gray-100"}`}
@@ -1383,7 +1390,7 @@ function CalendarView({
                           </Badge>
                         </div>
                         {g.type !== "rotarod_recovery" && (
-                          <div className="mb-2 flex items-center gap-2">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
                             <span className="text-[10px] text-muted-foreground">Batch status</span>
                             <select
                               className="h-6 rounded border bg-background px-1 text-[10px]"
@@ -1404,6 +1411,37 @@ function CalendarView({
                               <option value="completed">completed</option>
                               <option value="skipped">skipped</option>
                             </select>
+                            <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-700">
+                              D:{groupDateLabel}
+                            </span>
+                            <button
+                              type="button"
+                              className="h-6 rounded border border-indigo-300 bg-indigo-50 px-2 text-[10px] font-medium text-indigo-700 hover:bg-indigo-100"
+                              title="Set completed date for all experiments in this card"
+                              onMouseDown={async (e) => {
+                                e.preventDefault();
+                                const seed = groupCompletedDates.length === 1 ? groupCompletedDates[0] : expandedDay || "";
+                                const picked = window.prompt("Completed date for all rows (YYYY-MM-DD)", seed);
+                                if (!picked) return;
+                                const normalized = picked.trim();
+                                if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+                                  toast.error("Use format YYYY-MM-DD");
+                                  return;
+                                }
+                                const result = await batchUpdateAnimalExperimentStatusByIds(
+                                  g.animals.map((a) => a.expId),
+                                  "completed",
+                                  { completedDate: normalized }
+                                );
+                                if (result.error) toast.error(result.error);
+                                else {
+                                  toast.success(`Updated ${g.animals.length} experiment${g.animals.length === 1 ? "" : "s"}`);
+                                  router.refresh();
+                                }
+                              }}
+                            >
+                              Set date
+                            </button>
                           </div>
                         )}
                         <div className="flex flex-wrap gap-1">
@@ -1488,7 +1526,7 @@ function CalendarView({
                           ))}
                         </div>
                       </div>
-                    ))}
+                    )})}
                   </div>
                 </div>
               )}
