@@ -1621,12 +1621,12 @@ export function ColonyClient({
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {photos.map((p) => (
-                  <div key={p.id} className="relative group rounded-md overflow-hidden border bg-muted aspect-video">
+                  <div key={p.id} className="relative group rounded-md overflow-hidden border bg-muted h-36 sm:h-40 lg:h-44">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={p.image_url}
+                      src={convertDriveUrl(p.image_url)}
                       alt={p.caption || "Lab photo"}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain bg-white"
                       referrerPolicy="no-referrer"
                     />
                     {p.caption && (
