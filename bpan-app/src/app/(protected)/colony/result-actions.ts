@@ -45,7 +45,8 @@ async function markExperimentCompleted(
       animal_id: animalId,
       experiment_type: experimentType,
       timepoint_age_days: timepointAgeDays,
-      scheduled_date: new Date().toISOString().split("T")[0],
+      // Preserve tracker sync without injecting fake schedule dates into calendar.
+      scheduled_date: null,
       completed_date: new Date().toISOString().split("T")[0],
       status: "completed",
     });
