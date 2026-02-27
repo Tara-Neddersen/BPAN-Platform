@@ -102,6 +102,19 @@ const COLONY_MULTI_DAY_SPANS: Record<string, number> = {
   core_acclimation: 2,
 };
 
+function formatDateInLA(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((p) => p.type === "year")?.value ?? "0000";
+  const month = parts.find((p) => p.type === "month")?.value ?? "01";
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+  return `${year}-${month}-${day}`;
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 interface Props {
@@ -469,7 +482,7 @@ function CalendarView({
     target.setMonth(target.getMonth() + monthShift);
     const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
     target.setDate(Math.min(originalDay, lastDay));
-    const targetDate = target.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    const targetDate = formatDateInLA(target);
     await moveColonyExperiments(dragPayload.expIds, dragPayload.expId, dragPayload.fromDate, targetDate);
     setCurrentDate(new Date(target.getFullYear(), target.getMonth(), 1));
     setDragPayload(null);
@@ -541,7 +554,7 @@ function CalendarView({
   function addDays(dateStr: string, daysToAdd: number) {
     const d = new Date(`${dateStr}T12:00:00`);
     d.setDate(d.getDate() + daysToAdd);
-    return d.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    return formatDateInLA(d);
   }
 
   function colonyExperimentOccursOnDate(ae: AnimalExperiment, dateStr: string) {
@@ -596,7 +609,7 @@ function CalendarView({
     // Calendar-only planning event: rotarod recovery day (the day before stamina)
     const nextDate = new Date(`${dateStr}T12:00:00`);
     nextDate.setDate(nextDate.getDate() + 1);
-    const nextDateStr = nextDate.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    const nextDateStr = formatDateInLA(nextDate);
     const nextDayStamina = filteredColonyExps.filter(
       (ae) => ae.experiment_type === "stamina" && ae.scheduled_date === nextDateStr
     );
@@ -625,7 +638,7 @@ function CalendarView({
     return Array.from(groups.values()).sort((a, b) => a.type.localeCompare(b.type));
   }
 
-  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  const todayStr = formatDateInLA(new Date());
 
   // Upcoming timepoints
   const upcoming = timepoints
@@ -1715,7 +1728,7 @@ function GanttView({
     cursor.setMonth(cursor.getMonth() + 1);
   }
 
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  const today = formatDateInLA(new Date());
   const todayOffset = dayOffset(today);
 
   return (
