@@ -407,6 +407,16 @@ export interface AdvisorPortal {
   created_at: string;
 }
 
+export interface AdvisorPortalAccessLog {
+  id: string;
+  user_id: string;
+  portal_id: string;
+  viewed_at: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+}
+
 // ─── Meeting Notes ──────────────────────────────────────────────────────────
 
 export interface ActionItem {

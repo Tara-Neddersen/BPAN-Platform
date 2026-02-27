@@ -33,7 +33,7 @@ async function fetchAllRows(supabase: any, table: string, userId: string): Promi
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ token: string }> }
 ) {
   try {
@@ -59,6 +59,18 @@ export async function GET(
       .from("advisor_portal")
       .update({ last_viewed_at: new Date().toISOString() })
       .eq("id", portal.id);
+
+    const forwardedFor = req.headers.get("x-forwarded-for");
+    const ipAddress = forwardedFor ? forwardedFor.split(",")[0]?.trim() : null;
+    const userAgent = req.headers.get("user-agent");
+
+    await supabase.from("advisor_portal_access_logs").insert({
+      user_id: userId,
+      portal_id: portal.id,
+      viewed_at: new Date().toISOString(),
+      ip_address: ipAddress || null,
+      user_agent: userAgent || null,
+    });
 
     // Fetch live data based on permissions
     let animals: unknown[] = [];

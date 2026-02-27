@@ -12,6 +12,7 @@ import type {
   ColonyPhoto,
   HousingCage,
   ColonyResult,
+  AdvisorPortalAccessLog,
 } from "@/types";
 import {
   createBreederCage,
@@ -106,6 +107,7 @@ export default async function ColonyPage({ searchParams }: { searchParams: Promi
     { data: cohorts },
     { data: timepoints },
     { data: advisorPortals },
+    { data: advisorPortalAccessLogs },
     { data: meetingNotes },
     { data: colonyPhotos },
     { data: housingCages },
@@ -118,6 +120,7 @@ export default async function ColonyPage({ searchParams }: { searchParams: Promi
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
     supabase.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
+    supabase.from("advisor_portal_access_logs").select("*").eq("user_id", user.id).order("viewed_at", { ascending: false }).limit(400),
     supabase.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
     supabase.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
     supabase.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
@@ -144,6 +147,7 @@ export default async function ColonyPage({ searchParams }: { searchParams: Promi
         animalExperiments={(animalExperiments || []) as AnimalExperiment[]}
         timepoints={(timepoints || []) as ColonyTimepoint[]}
         advisorPortals={(advisorPortals || []) as AdvisorPortal[]}
+        advisorPortalAccessLogs={(advisorPortalAccessLogs || []) as AdvisorPortalAccessLog[]}
         meetingNotes={(meetingNotes || []) as MeetingNote[]}
         cageChanges={(cageChanges || []) as CageChange[]}
         colonyPhotos={(colonyPhotos || []) as ColonyPhoto[]}

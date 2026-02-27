@@ -28,7 +28,7 @@ import { toast } from "sonner";
 import type {
   BreederCage, Cohort, Animal, AnimalExperiment,
   ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange, ColonyPhoto,
-  HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AnimalStatus,
+  HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AnimalStatus, AdvisorPortalAccessLog,
 } from "@/types";
 import { ColonyResultsTab } from "@/components/colony-results-tab";
 import { ColonyAnalysisPanel } from "@/components/colony-analysis-panel";
@@ -138,6 +138,7 @@ interface ColonyClientProps {
   animalExperiments: AnimalExperiment[];
   timepoints: ColonyTimepoint[];
   advisorPortals: AdvisorPortal[];
+  advisorPortalAccessLogs: AdvisorPortalAccessLog[];
   meetingNotes: MeetingNote[];
   cageChanges: CageChange[];
   colonyPhotos: ColonyPhoto[];
@@ -239,6 +240,7 @@ export function ColonyClient({
   animalExperiments: initExps,
   timepoints: initTPs,
   advisorPortals: initPortals,
+  advisorPortalAccessLogs: initPortalAccessLogs,
   meetingNotes: initMeetings,
   cageChanges: initCageChanges,
   colonyPhotos: initPhotos,
@@ -262,6 +264,7 @@ export function ColonyClient({
   const [experiments, setExperiments] = useState(initExps);
   const [timepoints, setTimepoints] = useState(initTPs);
   const [portals, setPortals] = useState(initPortals);
+  const [portalAccessLogs, setPortalAccessLogs] = useState(initPortalAccessLogs);
   const [meetings, setMeetings] = useState(initMeetings);
   const [cageChanges, setCageChanges] = useState(initCageChanges);
   const [photos, setPhotos] = useState(initPhotos);
@@ -311,11 +314,12 @@ export function ColonyClient({
         return;
       }
       // Small tables: normal query. Large tables: cursor-based pagination.
-      const [r1, r2, r5, r6, r7, r9, r10, allAnimals, allExps, allCageChanges, allResults] = await Promise.all([
+      const [r1, r2, r5, r6, r6b, r7, r9, r10, allAnimals, allExps, allCageChanges, allResults] = await Promise.all([
         sb.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
         sb.from("cohorts").select("*").eq("user_id", user.id).order("name"),
         sb.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
         sb.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
+        sb.from("advisor_portal_access_logs").select("*").eq("user_id", user.id).order("viewed_at", { ascending: false }).limit(400),
         sb.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
         sb.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
         sb.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
@@ -330,6 +334,7 @@ export function ColonyClient({
       setExperiments(allExps as AnimalExperiment[]);
       setTimepoints((r5.data || []) as ColonyTimepoint[]);
       setPortals((r6.data || []) as AdvisorPortal[]);
+      setPortalAccessLogs((r6b.data || []) as AdvisorPortalAccessLog[]);
       setMeetings((r7.data || []) as MeetingNote[]);
       setCageChanges(allCageChanges as CageChange[]);
       setPhotos((r9.data || []) as ColonyPhoto[]);
@@ -394,6 +399,16 @@ export function ColonyClient({
   const [animalFormEarTag, setAnimalFormEarTag] = useState("0000");
   const birthDateRef = useRef<HTMLInputElement>(null);
   const identifierRef = useRef<HTMLInputElement>(null);
+
+  const portalAccessByPortalId = useMemo(() => {
+    const byPortal = new Map<string, AdvisorPortalAccessLog[]>();
+    for (const log of portalAccessLogs) {
+      const arr = byPortal.get(log.portal_id) || [];
+      arr.push(log);
+      byPortal.set(log.portal_id, arr);
+    }
+    return byPortal;
+  }, [portalAccessLogs]);
 
   // Auto-suggest animal identifier when cohort + sex + genotype are selected
   useEffect(() => {
@@ -1579,12 +1594,22 @@ export function ColonyClient({
                         <div className="font-semibold text-sm">{p.advisor_name}</div>
                         <div className="text-xs text-muted-foreground">
                           {p.advisor_email || "No email"}
-                          {p.last_viewed_at ? ` · Last viewed: ${new Date(p.last_viewed_at).toLocaleDateString()}` : " · Not viewed yet"}
+                          {p.last_viewed_at ? ` · Last viewed: ${new Date(p.last_viewed_at).toLocaleString()}` : " · Not viewed yet"}
                         </div>
                         <div className="flex gap-1 mt-1">
                           {p.can_see.map((s) => (
                             <Badge key={s} variant="secondary" className="text-xs">{s}</Badge>
                           ))}
+                        </div>
+                        <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                          {(portalAccessByPortalId.get(p.id) || []).slice(0, 5).map((log) => (
+                            <div key={log.id} className="leading-tight">
+                              Accessed: {new Date(log.viewed_at).toLocaleString()}
+                            </div>
+                          ))}
+                          {(portalAccessByPortalId.get(p.id) || []).length === 0 && (
+                            <div>No access history yet</div>
+                          )}
                         </div>
                       </div>
                       <div className="flex gap-1">
