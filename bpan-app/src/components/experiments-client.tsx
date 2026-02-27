@@ -592,7 +592,7 @@ function CalendarView({
     const dayExps = filteredColonyExps.filter(ae => colonyExperimentOccursOnDate(ae, dateStr));
 
     // Group by experiment_type + status
-    const groups = new Map<string, { type: string; status: string; isVirtual?: boolean; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string; ageAtEventDays: number | null }[] }>();
+    const groups = new Map<string, { type: string; status: string; isVirtual?: boolean; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string; ageAtEventDays: number | null; completedDate: string | null }[] }>();
     for (const ae of dayExps) {
       const key = `${ae.experiment_type}::${ae.status}`;
       if (!groups.has(key)) {
@@ -612,6 +612,7 @@ function CalendarView({
         cohortName: cohort?.name || "",
         tpName: tp?.name || `${ae.timepoint_age_days}d`,
         ageAtEventDays: ageOnDateDays(animal?.birth_date, dateStr),
+        completedDate: ae.completed_date ?? null,
       });
     }
 
@@ -639,6 +640,7 @@ function CalendarView({
             cohortName: cohort?.name || "",
             tpName: tp?.name || `${ae.timepoint_age_days}d`,
             ageAtEventDays: ageOnDateDays(animal?.birth_date, dateStr),
+            completedDate: null,
           };
         }),
       });
@@ -1424,24 +1426,49 @@ function CalendarView({
                               {a.ageAtEventDays != null && <span className="opacity-80">· {a.ageAtEventDays}d old</span>}
                               <span className="ml-1 opacity-60">{a.tpName}</span>
                               {g.type !== "rotarod_recovery" && (
-                                <select
-                                  className="ml-1 h-5 rounded border bg-background px-1 text-[9px]"
-                                  defaultValue={g.status}
-                                  onClick={(e) => e.stopPropagation()}
-                                  onChange={async (e) => {
-                                    const fd = new FormData();
-                                    fd.set("status", e.target.value);
-                                    const result = await updateAnimalExperiment(a.expId, fd);
-                                    if (result.error) toast.error(result.error);
-                                    else router.refresh();
-                                  }}
-                                >
-                                  <option value="scheduled">sched</option>
-                                  <option value="pending">pend</option>
-                                  <option value="in_progress">IP</option>
-                                  <option value="completed">done</option>
-                                  <option value="skipped">skip</option>
-                                </select>
+                                <>
+                                  <select
+                                    className="ml-1 h-5 rounded border bg-background px-1 text-[9px]"
+                                    defaultValue={g.status}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={async (e) => {
+                                      const nextStatus = e.target.value;
+                                      const fd = new FormData();
+                                      fd.set("status", nextStatus);
+                                      if (nextStatus === "completed") {
+                                        fd.set("completed_date", a.completedDate || expandedDay!);
+                                      }
+                                      const result = await updateAnimalExperiment(a.expId, fd);
+                                      if (result.error) toast.error(result.error);
+                                      else router.refresh();
+                                    }}
+                                  >
+                                    <option value="scheduled">sched</option>
+                                    <option value="pending">pend</option>
+                                    <option value="in_progress">IP</option>
+                                    <option value="completed">done</option>
+                                    <option value="skipped">skip</option>
+                                  </select>
+                                  {g.status === "completed" && (
+                                    <input
+                                      type="date"
+                                      className="ml-1 h-5 rounded border bg-background px-1 text-[9px]"
+                                      value={a.completedDate || expandedDay!}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onChange={async (e) => {
+                                        const fd = new FormData();
+                                        fd.set("status", "completed");
+                                        fd.set("completed_date", e.target.value);
+                                        const result = await updateAnimalExperiment(a.expId, fd);
+                                        if (result.error) toast.error(result.error);
+                                        else {
+                                          toast.success("Done date updated");
+                                          router.refresh();
+                                        }
+                                      }}
+                                    />
+                                  )}
+                                </>
                               )}
                             </span>
                           ))}
