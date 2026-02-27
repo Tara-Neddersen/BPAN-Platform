@@ -1426,9 +1426,9 @@ function CalendarView({
                               {a.ageAtEventDays != null && <span className="opacity-80">· {a.ageAtEventDays}d old</span>}
                               <span className="ml-1 opacity-60">{a.tpName}</span>
                               {g.type !== "rotarod_recovery" && (
-                                <>
+                                <span className="ml-1 inline-flex items-center gap-1">
                                   <select
-                                    className="ml-1 h-5 rounded border bg-background px-1 text-[9px]"
+                                    className="h-5 rounded border bg-background px-1 text-[9px]"
                                     defaultValue={g.status}
                                     onClick={(e) => e.stopPropagation()}
                                     onChange={async (e) => {
@@ -1452,8 +1452,9 @@ function CalendarView({
                                   {g.status === "completed" && (
                                     <input
                                       type="date"
-                                      className="ml-1 h-5 rounded border bg-background px-1 text-[9px]"
+                                      className="h-6 w-[118px] rounded border bg-background px-1.5 text-[10px]"
                                       value={a.completedDate || expandedDay!}
+                                      title="Completed date"
                                       onClick={(e) => e.stopPropagation()}
                                       onChange={async (e) => {
                                         const fd = new FormData();
@@ -1468,7 +1469,7 @@ function CalendarView({
                                       }}
                                     />
                                   )}
-                                </>
+                                </span>
                               )}
                             </span>
                           ))}
