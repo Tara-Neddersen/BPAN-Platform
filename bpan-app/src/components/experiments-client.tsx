@@ -1449,26 +1449,25 @@ function CalendarView({
                                     <option value="completed">done</option>
                                     <option value="skipped">skip</option>
                                   </select>
-                                  {g.status === "completed" && (
-                                    <input
-                                      type="date"
-                                      className="h-6 w-[118px] rounded border bg-background px-1.5 text-[10px]"
-                                      value={a.completedDate || expandedDay!}
-                                      title="Completed date"
-                                      onClick={(e) => e.stopPropagation()}
-                                      onChange={async (e) => {
-                                        const fd = new FormData();
-                                        fd.set("status", "completed");
-                                        fd.set("completed_date", e.target.value);
-                                        const result = await updateAnimalExperiment(a.expId, fd);
-                                        if (result.error) toast.error(result.error);
-                                        else {
-                                          toast.success("Done date updated");
-                                          router.refresh();
-                                        }
-                                      }}
-                                    />
-                                  )}
+                                  <input
+                                    type="date"
+                                    className="h-6 w-[118px] rounded border bg-background px-1.5 text-[10px]"
+                                    value={a.completedDate || ""}
+                                    title="Set completed date (will mark as done)"
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={async (e) => {
+                                      if (!e.target.value) return;
+                                      const fd = new FormData();
+                                      fd.set("status", "completed");
+                                      fd.set("completed_date", e.target.value);
+                                      const result = await updateAnimalExperiment(a.expId, fd);
+                                      if (result.error) toast.error(result.error);
+                                      else {
+                                        toast.success("Done date updated");
+                                        router.refresh();
+                                      }
+                                    }}
+                                  />
                                 </span>
                               )}
                             </span>
