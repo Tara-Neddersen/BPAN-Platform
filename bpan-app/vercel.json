@@ -7,7 +7,7 @@
     },
     {
       "path": "/api/calendar/auto-sync",
-      "schedule": "15 */2 * * *"
+      "schedule": "15 9 * * *"
     }
   ]
 }
