@@ -592,7 +592,7 @@ function CalendarView({
     const dayExps = filteredColonyExps.filter(ae => colonyExperimentOccursOnDate(ae, dateStr));
 
     // Group by experiment_type + status
-    const groups = new Map<string, { type: string; status: string; isVirtual?: boolean; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string; ageAtEventDays: number | null; completedDate: string | null }[] }>();
+    const groups = new Map<string, { type: string; status: string; isVirtual?: boolean; animals: { id: string; expId: string; identifier: string; cohortName: string; tpName: string; ageAtEventDays: number | null; scheduledDate: string | null; completedDate: string | null }[] }>();
     for (const ae of dayExps) {
       const key = `${ae.experiment_type}::${ae.status}`;
       if (!groups.has(key)) {
@@ -612,6 +612,7 @@ function CalendarView({
         cohortName: cohort?.name || "",
         tpName: tp?.name || `${ae.timepoint_age_days}d`,
         ageAtEventDays: ageOnDateDays(animal?.birth_date, dateStr),
+        scheduledDate: ae.scheduled_date ?? null,
         completedDate: ae.completed_date ?? null,
       });
     }
@@ -640,6 +641,7 @@ function CalendarView({
             cohortName: cohort?.name || "",
             tpName: tp?.name || `${ae.timepoint_age_days}d`,
             ageAtEventDays: ageOnDateDays(animal?.birth_date, dateStr),
+            scheduledDate: ae.scheduled_date ?? null,
             completedDate: null,
           };
         }),
@@ -1372,9 +1374,14 @@ function CalendarView({
                   <p className="text-xs font-medium text-muted-foreground mb-1">Colony Experiments ({totalAnimals} total)</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {colonyGroups.map((g) => {
+                      const groupScheduledDates = Array.from(
+                        new Set(g.animals.map((a) => a.scheduledDate).filter((v): v is string => !!v))
+                      );
                       const groupCompletedDates = Array.from(
                         new Set(g.animals.map((a) => a.completedDate).filter((v): v is string => !!v))
                       );
+                      const groupScheduledLabel =
+                        groupScheduledDates.length === 0 ? "--" : groupScheduledDates.length === 1 ? groupScheduledDates[0] : "mixed";
                       const groupDateLabel =
                         groupCompletedDates.length === 0 ? "--" : groupCompletedDates.length === 1 ? groupCompletedDates[0] : "mixed";
 
@@ -1412,6 +1419,33 @@ function CalendarView({
                               <option value="skipped">skipped</option>
                             </select>
                             <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-700">
+                              S:{groupScheduledLabel}
+                            </span>
+                            <button
+                              type="button"
+                              className="h-6 rounded border border-sky-300 bg-sky-50 px-2 text-[10px] font-medium text-sky-700 hover:bg-sky-100"
+                              title="Set scheduled date for all experiments in this card"
+                              onMouseDown={async (e) => {
+                                e.preventDefault();
+                                const seed = groupScheduledDates.length === 1 ? groupScheduledDates[0] : expandedDay || "";
+                                const picked = window.prompt("Scheduled date for all rows (YYYY-MM-DD)", seed);
+                                if (!picked) return;
+                                const normalized = picked.trim();
+                                if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+                                  toast.error("Use format YYYY-MM-DD");
+                                  return;
+                                }
+                                const result = await rescheduleExperimentDates(g.animals.map((a) => a.expId), normalized);
+                                if (result.error) toast.error(result.error);
+                                else {
+                                  toast.success(`Rescheduled ${g.animals.length} experiment${g.animals.length === 1 ? "" : "s"}`);
+                                  router.refresh();
+                                }
+                              }}
+                            >
+                              Set sched
+                            </button>
+                            <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-700">
                               D:{groupDateLabel}
                             </span>
                             <button
@@ -1440,7 +1474,7 @@ function CalendarView({
                                 }
                               }}
                             >
-                              Set date
+                              Set done
                             </button>
                           </div>
                         )}
@@ -1490,6 +1524,36 @@ function CalendarView({
                                     <option value="skipped">skip</option>
                                   </select>
                                   <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-700">
+                                    S:{a.scheduledDate || "--"}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="h-6 rounded border border-sky-300 bg-sky-50 px-2 text-[10px] font-medium text-sky-700 hover:bg-sky-100"
+                                    title="Set scheduled date"
+                                    onClick={(e) => e.stopPropagation()}
+                                    onMouseDown={async (e) => {
+                                      e.preventDefault();
+                                      const seed = a.scheduledDate || expandedDay || "";
+                                      const picked = window.prompt("Scheduled date (YYYY-MM-DD)", seed);
+                                      if (!picked) return;
+                                      const normalized = picked.trim();
+                                      if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+                                        toast.error("Use format YYYY-MM-DD");
+                                        return;
+                                      }
+                                      const fd = new FormData();
+                                      fd.set("scheduled_date", normalized);
+                                      const result = await updateAnimalExperiment(a.expId, fd);
+                                      if (result.error) toast.error(result.error);
+                                      else {
+                                        toast.success("Scheduled date updated");
+                                        router.refresh();
+                                      }
+                                    }}
+                                  >
+                                    Set sched
+                                  </button>
+                                  <span className="rounded border bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-700">
                                     D:{a.completedDate || "--"}
                                   </span>
                                   <button
@@ -1518,7 +1582,7 @@ function CalendarView({
                                       }
                                     }}
                                   >
-                                    Set date
+                                    Set done
                                   </button>
                                 </div>
                               )}
