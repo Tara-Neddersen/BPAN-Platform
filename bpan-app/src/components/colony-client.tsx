@@ -2148,9 +2148,8 @@ export function ColonyClient({
                   <Select name="male_genotype" defaultValue={editingCage?.male_genotype || ""}>
                     <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="homo">HOMO</SelectItem>
+                      <SelectItem value="hemi">HEMI</SelectItem>
                       <SelectItem value="wt">WT</SelectItem>
-                      <SelectItem value="het">HET</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
