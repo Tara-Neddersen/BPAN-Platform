@@ -56,9 +56,15 @@ function addDaysIso(dateStr: string, days: number) {
   return d.toISOString().split("T")[0];
 }
 
+function getBooleanField(formData: FormData, key: string) {
+  const values = formData.getAll(key);
+  if (!values.length) return false;
+  return String(values[values.length - 1]) === "true";
+}
+
 function getBreederCagePayload(formData: FormData) {
   const pupBirthDate = (formData.get("pup_birth_date") as string) || null;
-  const pupsWeaned = formData.get("pups_weaned") === "true";
+  const pupsWeaned = getBooleanField(formData, "pups_weaned");
   const explicitWeanDue = (formData.get("pup_wean_due_date") as string) || null;
 
   return {
@@ -74,12 +80,12 @@ function getBreederCagePayload(formData: FormData) {
     female_3_genotype: (formData.get("female_3_genotype") as string) || null,
     male_strain: (formData.get("male_strain") as string) || null,
     male_genotype: (formData.get("male_genotype") as string) || null,
-    is_temporary_split: formData.get("is_temporary_split") === "true",
+    is_temporary_split: getBooleanField(formData, "is_temporary_split"),
     linked_breeder_cage_id: (formData.get("linked_breeder_cage_id") as string) || null,
     male_location: (formData.get("male_location") as string) || "this_cage",
     location: (formData.get("location") as string) || null,
     breeding_start: (formData.get("breeding_start") as string) || null,
-    is_pregnant: formData.get("is_pregnant") === "true",
+    is_pregnant: getBooleanField(formData, "is_pregnant"),
     pregnancy_start_date: (formData.get("pregnancy_start_date") as string) || null,
     expected_birth_date: (formData.get("expected_birth_date") as string) || null,
     pup_birth_date: pupBirthDate,
