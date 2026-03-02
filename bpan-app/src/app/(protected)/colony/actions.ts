@@ -49,25 +49,117 @@ async function fetchAllRows(supabase: any, table: string, userId: string, extraF
 
 // ─── Breeder Cages ─────────────────────────────────────────────────────
 
-export async function createBreederCage(formData: FormData) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/auth/login");
+function addDaysIso(dateStr: string, days: number) {
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split("T")[0];
+}
 
-  const { error } = await supabase.from("breeder_cages").insert({
-    user_id: user.id,
+function getBreederCagePayload(formData: FormData) {
+  const pupBirthDate = (formData.get("pup_birth_date") as string) || null;
+  const pupsWeaned = formData.get("pups_weaned") === "true";
+  const explicitWeanDue = (formData.get("pup_wean_due_date") as string) || null;
+
+  return {
     name: formData.get("name") as string,
     strain: (formData.get("strain") as string) || null,
+    barcode: (formData.get("barcode") as string) || null,
+    cage_type: (formData.get("cage_type") as string) || "normal",
+    female_1_strain: (formData.get("female_1_strain") as string) || null,
+    female_1_genotype: (formData.get("female_1_genotype") as string) || null,
+    female_2_strain: (formData.get("female_2_strain") as string) || null,
+    female_2_genotype: (formData.get("female_2_genotype") as string) || null,
+    female_3_strain: (formData.get("female_3_strain") as string) || null,
+    female_3_genotype: (formData.get("female_3_genotype") as string) || null,
+    male_strain: (formData.get("male_strain") as string) || null,
+    male_genotype: (formData.get("male_genotype") as string) || null,
+    is_temporary_split: formData.get("is_temporary_split") === "true",
+    linked_breeder_cage_id: (formData.get("linked_breeder_cage_id") as string) || null,
+    male_location: (formData.get("male_location") as string) || "this_cage",
     location: (formData.get("location") as string) || null,
     breeding_start: (formData.get("breeding_start") as string) || null,
     is_pregnant: formData.get("is_pregnant") === "true",
     pregnancy_start_date: (formData.get("pregnancy_start_date") as string) || null,
     expected_birth_date: (formData.get("expected_birth_date") as string) || null,
+    pup_birth_date: pupBirthDate,
+    pup_wean_due_date: explicitWeanDue || (pupBirthDate ? addDaysIso(pupBirthDate, 21) : null),
+    pups_weaned: pupsWeaned,
+    pups_weaned_date: pupsWeaned ? ((formData.get("pups_weaned_date") as string) || new Date().toISOString().split("T")[0]) : null,
     last_check_date: (formData.get("last_check_date") as string) || null,
     check_interval_days: parseInt(formData.get("check_interval_days") as string) || 7,
     notes: (formData.get("notes") as string) || null,
+  };
+}
+
+async function upsertBreederWeanReminder(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  userId: string,
+  cageId: string,
+  cageName: string,
+  dueDate: string | null,
+  isResolved: boolean
+) {
+  const existingTasks = await supabase
+    .from("tasks")
+    .delete()
+    .eq("user_id", userId)
+    .eq("source_type", "reminder")
+    .eq("source_id", cageId);
+
+  if (existingTasks.error) console.error("upsertBreederWeanReminder tasks delete:", existingTasks.error.message);
+
+  const existingEvents = await supabase
+    .from("workspace_calendar_events")
+    .delete()
+    .eq("user_id", userId)
+    .eq("source_type", "breeder_cage")
+    .eq("source_id", cageId);
+
+  if (existingEvents.error) console.error("upsertBreederWeanReminder events delete:", existingEvents.error.message);
+
+  if (!dueDate || isResolved) return;
+
+  await supabase.from("tasks").insert({
+    user_id: userId,
+    title: `Wean pups (${cageName})`,
+    description: "Breeder cage has pups approaching weaning age. Review litter, split pups, and move adults back to their home cage if needed.",
+    due_date: dueDate,
+    priority: "high",
+    status: "pending",
+    source_type: "reminder",
+    source_id: cageId,
+    source_label: `Breeder cage: ${cageName}`,
+    tags: ["colony", "breeder", "weaning"],
   });
+
+  await supabase.from("workspace_calendar_events").insert({
+    user_id: userId,
+    title: `Wean pups (${cageName})`,
+    category: "colony",
+    status: "planned",
+    start_at: `${dueDate}T09:00:00`,
+    end_at: `${dueDate}T09:30:00`,
+    source_type: "breeder_cage",
+    source_id: cageId,
+    source_label: cageName,
+    notes: "Auto-created from breeder cage pup DOB.",
+  });
+}
+
+export async function createBreederCage(formData: FormData) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const payload = getBreederCagePayload(formData);
+  const { data, error } = await supabase.from("breeder_cages").insert({
+    user_id: user.id,
+    ...payload,
+  }).select("id, name, pup_wean_due_date, pups_weaned").single();
   if (error) return { error: error.message };
+  await upsertBreederWeanReminder(supabase, user.id, data.id, data.name, data.pup_wean_due_date, data.pups_weaned);
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
@@ -78,23 +170,16 @@ export async function updateBreederCage(id: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const { error } = await supabase
+  const payload = getBreederCagePayload(formData);
+  const { data, error } = await supabase
     .from("breeder_cages")
-    .update({
-      name: formData.get("name") as string,
-      strain: (formData.get("strain") as string) || null,
-      location: (formData.get("location") as string) || null,
-      breeding_start: (formData.get("breeding_start") as string) || null,
-      is_pregnant: formData.get("is_pregnant") === "true",
-      pregnancy_start_date: (formData.get("pregnancy_start_date") as string) || null,
-      expected_birth_date: (formData.get("expected_birth_date") as string) || null,
-      last_check_date: (formData.get("last_check_date") as string) || null,
-      check_interval_days: parseInt(formData.get("check_interval_days") as string) || 7,
-      notes: (formData.get("notes") as string) || null,
-    })
+    .update(payload)
     .eq("id", id)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .select("id, name, pup_wean_due_date, pups_weaned")
+    .single();
   if (error) return { error: error.message };
+  await upsertBreederWeanReminder(supabase, user.id, data.id, data.name, data.pup_wean_due_date, data.pups_weaned);
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
@@ -105,6 +190,8 @@ export async function deleteBreederCage(id: string) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  await supabase.from("tasks").delete().eq("user_id", user.id).eq("source_type", "reminder").eq("source_id", id);
+  await supabase.from("workspace_calendar_events").delete().eq("user_id", user.id).eq("source_type", "breeder_cage").eq("source_id", id);
   const { error } = await supabase.from("breeder_cages").delete().eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
   revalidatePath("/colony");

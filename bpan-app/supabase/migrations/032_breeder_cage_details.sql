@@ -1,0 +1,18 @@
+ALTER TABLE public.breeder_cages
+  ADD COLUMN IF NOT EXISTS barcode text,
+  ADD COLUMN IF NOT EXISTS cage_type text DEFAULT 'normal',
+  ADD COLUMN IF NOT EXISTS female_1_strain text,
+  ADD COLUMN IF NOT EXISTS female_1_genotype text,
+  ADD COLUMN IF NOT EXISTS female_2_strain text,
+  ADD COLUMN IF NOT EXISTS female_2_genotype text,
+  ADD COLUMN IF NOT EXISTS female_3_strain text,
+  ADD COLUMN IF NOT EXISTS female_3_genotype text,
+  ADD COLUMN IF NOT EXISTS male_strain text,
+  ADD COLUMN IF NOT EXISTS male_genotype text,
+  ADD COLUMN IF NOT EXISTS is_temporary_split boolean DEFAULT false,
+  ADD COLUMN IF NOT EXISTS linked_breeder_cage_id uuid REFERENCES public.breeder_cages(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS male_location text DEFAULT 'this_cage',
+  ADD COLUMN IF NOT EXISTS pup_birth_date date,
+  ADD COLUMN IF NOT EXISTS pup_wean_due_date date,
+  ADD COLUMN IF NOT EXISTS pups_weaned boolean DEFAULT false,
+  ADD COLUMN IF NOT EXISTS pups_weaned_date date;

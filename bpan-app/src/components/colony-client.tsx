@@ -45,6 +45,16 @@ const GENOTYPE_LABELS: Record<string, string> = {
 
 const GENOTYPE_SORT: Record<string, number> = { hemi: 0, het: 1, wt: 2 };
 const SEX_SORT: Record<string, number> = { male: 0, female: 1 };
+const BREEDER_CAGE_TYPE_LABELS: Record<string, string> = {
+  normal: "Normal",
+  trio: "Trio Breeding",
+  harem: "Harem Cage",
+};
+const FEMALE_SLOT_COUNT: Record<string, number> = {
+  normal: 1,
+  trio: 2,
+  harem: 3,
+};
 
 const EXPERIMENT_LABELS: Record<string, string> = {
   handling: "Handling (5 days)",
@@ -354,6 +364,7 @@ export function ColonyClient({
   const [showGenerateCageChanges, setShowGenerateCageChanges] = useState(false);
   const [showAddHousingCage, setShowAddHousingCage] = useState(false);
   const [editingCage, setEditingCage] = useState<BreederCage | null>(null);
+  const [cageFormType, setCageFormType] = useState<"normal" | "trio" | "harem">("normal");
   const [editingCohort, setEditingCohort] = useState<Cohort | null>(null);
   const [editingAnimal, setEditingAnimal] = useState<Animal | null>(null);
   const [editingTP, setEditingTP] = useState<ColonyTimepoint | null>(null);
@@ -368,6 +379,14 @@ export function ColonyClient({
   const [tpRescheduleSelectedExperimentTypes, setTpRescheduleSelectedExperimentTypes] = useState<Set<string>>(new Set());
   const [tpRescheduleBusy, setTpRescheduleBusy] = useState(false);
   const [editingHousingCage, setEditingHousingCage] = useState<HousingCage | null>(null);
+
+  useEffect(() => {
+    if (editingCage?.cage_type && editingCage.cage_type in FEMALE_SLOT_COUNT) {
+      setCageFormType(editingCage.cage_type as "normal" | "trio" | "harem");
+      return;
+    }
+    if (showAddCage) setCageFormType("normal");
+  }, [editingCage, showAddCage]);
   const [selectedAnimal, setSelectedAnimal] = useState<Animal | null>(null);
   // Batch Schedule modal state
   const [showBatchSchedule, setShowBatchSchedule] = useState(false);
@@ -602,6 +621,14 @@ export function ColonyClient({
     [cages]
   );
 
+  const weanReminders = useMemo(
+    () =>
+      cages
+        .filter((c) => c.pup_birth_date && !c.pups_weaned && c.pup_wean_due_date)
+        .sort((a, b) => String(a.pup_wean_due_date || "").localeCompare(String(b.pup_wean_due_date || ""))),
+    [cages]
+  );
+
   // Stats
   const activeCount = animals.filter((a) => a.status === "active").length;
   const pendingExps = experiments.filter((e) => e.status === "scheduled").length;
@@ -709,6 +736,38 @@ export function ColonyClient({
     setTimeout(() => setCopiedToken(null), 2000);
   }
 
+  function buildBreederCageFormData(c: BreederCage, overrides?: Record<string, string>) {
+    const fd = new FormData();
+    fd.set("name", overrides?.name ?? c.name);
+    fd.set("strain", overrides?.strain ?? c.strain ?? "");
+    fd.set("barcode", overrides?.barcode ?? c.barcode ?? "");
+    fd.set("cage_type", overrides?.cage_type ?? c.cage_type ?? "normal");
+    fd.set("female_1_strain", overrides?.female_1_strain ?? c.female_1_strain ?? "");
+    fd.set("female_1_genotype", overrides?.female_1_genotype ?? c.female_1_genotype ?? "");
+    fd.set("female_2_strain", overrides?.female_2_strain ?? c.female_2_strain ?? "");
+    fd.set("female_2_genotype", overrides?.female_2_genotype ?? c.female_2_genotype ?? "");
+    fd.set("female_3_strain", overrides?.female_3_strain ?? c.female_3_strain ?? "");
+    fd.set("female_3_genotype", overrides?.female_3_genotype ?? c.female_3_genotype ?? "");
+    fd.set("male_strain", overrides?.male_strain ?? c.male_strain ?? "");
+    fd.set("male_genotype", overrides?.male_genotype ?? c.male_genotype ?? "");
+    fd.set("is_temporary_split", overrides?.is_temporary_split ?? (c.is_temporary_split ? "true" : "false"));
+    fd.set("linked_breeder_cage_id", overrides?.linked_breeder_cage_id ?? c.linked_breeder_cage_id ?? "");
+    fd.set("male_location", overrides?.male_location ?? c.male_location ?? "this_cage");
+    fd.set("location", overrides?.location ?? c.location ?? "");
+    fd.set("breeding_start", overrides?.breeding_start ?? c.breeding_start ?? "");
+    fd.set("is_pregnant", overrides?.is_pregnant ?? (c.is_pregnant ? "true" : "false"));
+    fd.set("pregnancy_start_date", overrides?.pregnancy_start_date ?? c.pregnancy_start_date ?? "");
+    fd.set("expected_birth_date", overrides?.expected_birth_date ?? c.expected_birth_date ?? "");
+    fd.set("pup_birth_date", overrides?.pup_birth_date ?? c.pup_birth_date ?? "");
+    fd.set("pup_wean_due_date", overrides?.pup_wean_due_date ?? c.pup_wean_due_date ?? "");
+    fd.set("pups_weaned", overrides?.pups_weaned ?? (c.pups_weaned ? "true" : "false"));
+    fd.set("pups_weaned_date", overrides?.pups_weaned_date ?? c.pups_weaned_date ?? "");
+    fd.set("last_check_date", overrides?.last_check_date ?? c.last_check_date ?? "");
+    fd.set("check_interval_days", overrides?.check_interval_days ?? String(c.check_interval_days || 7));
+    fd.set("notes", overrides?.notes ?? c.notes ?? "");
+    return fd;
+  }
+
   return (
     <>
       {/* Stats */}
@@ -732,7 +791,7 @@ export function ColonyClient({
       </div>
 
       {/* Upcoming alerts — next 7 days + overdue summary */}
-      {(upcoming.length > 0 || upcomingCageChanges.length > 0 || breederReminders.length > 0 || overdueExps.length > 0) && (
+      {(upcoming.length > 0 || upcomingCageChanges.length > 0 || breederReminders.length > 0 || weanReminders.length > 0 || overdueExps.length > 0) && (
         <Card className="border-yellow-200 dark:border-yellow-800">
           <CardHeader className="py-3 px-4">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -776,23 +835,41 @@ export function ColonyClient({
                 <Button
                   variant="outline" size="sm" className="h-6 text-xs px-2"
                   onClick={async () => {
-                    const fd = new FormData();
-                    fd.set("name", c.name);
-                    fd.set("strain", c.strain || "");
-                    fd.set("location", c.location || "");
-                    fd.set("breeding_start", c.breeding_start || "");
-                    fd.set("is_pregnant", "true");
-                    fd.set("pregnancy_start_date", c.pregnancy_start_date || "");
-                    fd.set("expected_birth_date", c.expected_birth_date || "");
-                    fd.set("last_check_date", new Date().toISOString().split("T")[0]);
-                    fd.set("check_interval_days", String(c.check_interval_days || 7));
-                    fd.set("notes", c.notes || "");
+                    const fd = buildBreederCageFormData(c, {
+                      is_pregnant: "true",
+                      last_check_date: new Date().toISOString().split("T")[0],
+                    });
                     const res = await actions.updateBreederCage(c.id, fd);
                     if (res.error) toast.error(res.error);
                     else { toast.success(`${c.name} marked as checked!`); refetchAll(); }
                   }}
                 >
                   <Check className="h-3 w-3 mr-0.5" /> Checked
+                </Button>
+              </div>
+            ))}
+            {weanReminders.map((c) => (
+              <div key={`wean-${c.id}`} className="flex items-center justify-between text-sm">
+                <div className="flex items-center gap-2">
+                  <Badge className="bg-amber-100 text-amber-700" variant="secondary">🐣</Badge>
+                  <span className="font-medium">{c.name}</span>
+                  <span className="text-muted-foreground">Wean pups by {c.pup_wean_due_date}</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs px-2"
+                  onClick={async () => {
+                    const fd = buildBreederCageFormData(c, {
+                      pups_weaned: "true",
+                      pups_weaned_date: new Date().toISOString().split("T")[0],
+                    });
+                    const res = await actions.updateBreederCage(c.id, fd);
+                    if (res.error) toast.error(res.error);
+                    else { toast.success(`${c.name} marked as weaned`); refetchAll(); }
+                  }}
+                >
+                  <Check className="h-3 w-3 mr-0.5" /> Weaned
                 </Button>
               </div>
             ))}
@@ -1254,6 +1331,7 @@ export function ColonyClient({
                 const needsCheck = c.is_pregnant && c.last_check_date
                   ? (Date.now() - new Date(c.last_check_date).getTime()) / (1000 * 60 * 60 * 24) >= (c.check_interval_days || 7)
                   : c.is_pregnant;
+                const waitingToWean = !!(c.pup_birth_date && !c.pups_weaned);
                 const daysPregnant = c.pregnancy_start_date
                   ? Math.floor((Date.now() - new Date(c.pregnancy_start_date).getTime()) / (1000 * 60 * 60 * 24))
                   : null;
@@ -1261,12 +1339,23 @@ export function ColonyClient({
                   ? Math.ceil((new Date(c.expected_birth_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
                   : null;
                 return (
-                  <Card key={c.id} className={needsCheck ? "border-pink-300 dark:border-pink-800" : ""}>
+                  <Card
+                    key={c.id}
+                    className={
+                      waitingToWean
+                        ? "border-amber-300 bg-amber-50/40 dark:border-amber-700 dark:bg-amber-950/20"
+                        : needsCheck
+                          ? "border-pink-300 bg-pink-50/30 dark:border-pink-800 dark:bg-pink-950/20"
+                          : ""
+                    }
+                  >
                     <CardContent className="py-3">
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="font-semibold text-sm flex items-center gap-2">
                             {c.name}
+                            {c.barcode && <Badge variant="outline" className="text-xs font-mono">{c.barcode}</Badge>}
+                            <Badge variant="outline" className="text-xs">{BREEDER_CAGE_TYPE_LABELS[c.cage_type || "normal"] || "Normal"}</Badge>
                             {c.strain && <Badge variant="outline" className="text-xs">{c.strain}</Badge>}
                             <Badge variant="secondary" className="text-xs">{cageCohorts.length} cohorts</Badge>
                             {c.is_pregnant && (
@@ -1279,9 +1368,25 @@ export function ColonyClient({
                                 ⏰ Check needed
                               </Badge>
                             )}
+                            {waitingToWean && (
+                              <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 text-xs">
+                                🍼 Waiting to wean
+                              </Badge>
+                            )}
+                            {c.is_temporary_split && (
+                              <Badge className="bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300 text-xs">
+                                Split cage
+                              </Badge>
+                            )}
                           </div>
                           <div className="text-xs text-muted-foreground mt-0.5 flex flex-wrap gap-2">
                             <span>{c.location || "No location"}{c.breeding_start ? ` · Since: ${c.breeding_start}` : ""}</span>
+                            {c.male_location && (
+                              <span>· Male: {c.male_location === "this_cage" ? "this cage" : c.male_location === "linked_cage" ? "linked cage" : "separated"}</span>
+                            )}
+                            {c.linked_breeder_cage_id && (
+                              <span>· Linked: {(cages.find((other) => other.id === c.linked_breeder_cage_id)?.name) || "paired cage"}</span>
+                            )}
                             {c.is_pregnant && daysToBirth != null && daysToBirth > 0 && (
                               <span className="text-pink-600">· Expected birth in {daysToBirth}d ({c.expected_birth_date})</span>
                             )}
@@ -1291,6 +1396,21 @@ export function ColonyClient({
                             {c.last_check_date && (
                               <span>· Last checked: {c.last_check_date}</span>
                             )}
+                            {c.pup_birth_date && (
+                              <span className="text-amber-700">· Pup DOB: {c.pup_birth_date}</span>
+                            )}
+                            {c.pup_wean_due_date && !c.pups_weaned && (
+                              <span className="text-amber-700">· DOW: {c.pup_wean_due_date}</span>
+                            )}
+                            {c.pups_weaned && c.pups_weaned_date && (
+                              <span className="text-emerald-700">· Weaned: {c.pups_weaned_date}</span>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-2">
+                            {c.female_1_strain && <span>F1: {c.female_1_strain} / {c.female_1_genotype || "—"}</span>}
+                            {c.female_2_strain && <span>F2: {c.female_2_strain} / {c.female_2_genotype || "—"}</span>}
+                            {c.female_3_strain && <span>F3: {c.female_3_strain} / {c.female_3_genotype || "—"}</span>}
+                            {c.male_strain && <span>M: {c.male_strain} / {c.male_genotype || "—"}</span>}
                           </div>
                         </div>
                         <div className="flex gap-1">
@@ -1300,17 +1420,10 @@ export function ColonyClient({
                               size="sm"
                               className="h-7 text-xs gap-1"
                               onClick={async () => {
-                                const fd = new FormData();
-                                fd.set("name", c.name);
-                                fd.set("strain", c.strain || "");
-                                fd.set("location", c.location || "");
-                                fd.set("breeding_start", c.breeding_start || "");
-                                fd.set("is_pregnant", "true");
-                                fd.set("pregnancy_start_date", c.pregnancy_start_date || "");
-                                fd.set("expected_birth_date", c.expected_birth_date || "");
-                                fd.set("last_check_date", new Date().toISOString().split("T")[0]);
-                                fd.set("check_interval_days", String(c.check_interval_days || 7));
-                                fd.set("notes", c.notes || "");
+                                const fd = buildBreederCageFormData(c, {
+                                  is_pregnant: "true",
+                                  last_check_date: new Date().toISOString().split("T")[0],
+                                });
                                 const res = await actions.updateBreederCage(c.id, fd);
                                 if (res.error) toast.error(res.error);
                                 else { toast.success("Marked as checked today!"); refetchAll(); }
@@ -1950,7 +2063,7 @@ export function ColonyClient({
 
       {/* Add / Edit Breeder Cage */}
       <Dialog open={showAddCage || !!editingCage} onOpenChange={(v) => { if (!v) { setShowAddCage(false); setEditingCage(null); } }}>
-        <DialogContent>
+        <DialogContent className="max-w-3xl">
           <DialogHeader><DialogTitle>{editingCage ? "Edit Breeder Cage" : "Add Breeder Cage"}</DialogTitle></DialogHeader>
           <form onSubmit={(e) => {
             if (editingCage) {
@@ -1961,9 +2074,117 @@ export function ColonyClient({
           }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <div><Label className="text-xs">Cage Name *</Label><Input name="name" required placeholder="e.g. Breeder A" defaultValue={editingCage?.name || ""} /></div>
+              <div><Label className="text-xs">Barcode</Label><Input name="barcode" placeholder="Scan or enter barcode" defaultValue={editingCage?.barcode || ""} /></div>
               <div><Label className="text-xs">Strain</Label><Input name="strain" placeholder="e.g. BPAN / ATP13A2" defaultValue={editingCage?.strain || ""} /></div>
+              <div>
+                <Label className="text-xs">Cage Type</Label>
+                <Select
+                  name="cage_type"
+                  value={cageFormType}
+                  onValueChange={(v) => setCageFormType((v as "normal" | "trio" | "harem") || "normal")}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="normal">Normal</SelectItem>
+                    <SelectItem value="trio">Trio breeding</SelectItem>
+                    <SelectItem value="harem">Harem cage</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div><Label className="text-xs">Location</Label><Input name="location" placeholder="Room, rack" defaultValue={editingCage?.location || ""} /></div>
               <div><Label className="text-xs">Breeding Start</Label><Input name="breeding_start" type="date" defaultValue={editingCage?.breeding_start || ""} /></div>
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <div className="text-xs font-medium">Breeding Setup</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div><Label className="text-xs">Female 1 Strain</Label><Input name="female_1_strain" defaultValue={editingCage?.female_1_strain || ""} placeholder="BPAN / WT" /></div>
+                <div>
+                  <Label className="text-xs">Female 1 Genotype</Label>
+                  <Select name="female_1_genotype" defaultValue={editingCage?.female_1_genotype || ""}>
+                    <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="homo">HOMO</SelectItem>
+                      <SelectItem value="wt">WT</SelectItem>
+                      <SelectItem value="het">HET</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {cageFormType !== "normal" && (
+                  <>
+                    <div><Label className="text-xs">Female 2 Strain</Label><Input name="female_2_strain" defaultValue={editingCage?.female_2_strain || ""} placeholder="BPAN / WT" /></div>
+                    <div>
+                      <Label className="text-xs">Female 2 Genotype</Label>
+                      <Select name="female_2_genotype" defaultValue={editingCage?.female_2_genotype || ""}>
+                        <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="homo">HOMO</SelectItem>
+                          <SelectItem value="wt">WT</SelectItem>
+                          <SelectItem value="het">HET</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                )}
+                {cageFormType === "harem" && (
+                  <>
+                    <div><Label className="text-xs">Female 3 Strain</Label><Input name="female_3_strain" defaultValue={editingCage?.female_3_strain || ""} placeholder="BPAN / WT" /></div>
+                    <div>
+                      <Label className="text-xs">Female 3 Genotype</Label>
+                      <Select name="female_3_genotype" defaultValue={editingCage?.female_3_genotype || ""}>
+                        <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="homo">HOMO</SelectItem>
+                          <SelectItem value="wt">WT</SelectItem>
+                          <SelectItem value="het">HET</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                )}
+                <div><Label className="text-xs">Male Strain</Label><Input name="male_strain" defaultValue={editingCage?.male_strain || ""} placeholder="BPAN / WT" /></div>
+                <div>
+                  <Label className="text-xs">Male Genotype</Label>
+                  <Select name="male_genotype" defaultValue={editingCage?.male_genotype || ""}>
+                    <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="homo">HOMO</SelectItem>
+                      <SelectItem value="wt">WT</SelectItem>
+                      <SelectItem value="het">HET</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <input type="hidden" name="is_temporary_split" value="false" />
+                <input type="checkbox" name="is_temporary_split" value="true" className="h-4 w-4" defaultChecked={editingCage?.is_temporary_split || false} />
+                Temporary split cage
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs">Linked Breeding Cage</Label>
+                  <Select name="linked_breeder_cage_id" defaultValue={editingCage?.linked_breeder_cage_id || ""}>
+                    <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+                    <SelectContent>
+                      {cages.filter((c) => c.id !== editingCage?.id).map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Male Location</Label>
+                  <Select name="male_location" defaultValue={editingCage?.male_location || "this_cage"}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="this_cage">Male is in this cage</SelectItem>
+                      <SelectItem value="linked_cage">Male is in linked cage</SelectItem>
+                      <SelectItem value="separated">Male is separated</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
             <Separator />
             <div className="space-y-2">
@@ -1975,6 +2196,16 @@ export function ColonyClient({
               <div className="grid gap-3 sm:grid-cols-2">
                 <div><Label className="text-xs">Pregnancy Start</Label><Input name="pregnancy_start_date" type="date" defaultValue={editingCage?.pregnancy_start_date || ""} /></div>
                 <div><Label className="text-xs">Expected Birth</Label><Input name="expected_birth_date" type="date" defaultValue={editingCage?.expected_birth_date || ""} /></div>
+                <div><Label className="text-xs">Pup DOB</Label><Input name="pup_birth_date" type="date" defaultValue={editingCage?.pup_birth_date || ""} /></div>
+                <div><Label className="text-xs">Auto Wean Date (DOW)</Label><Input name="pup_wean_due_date" type="date" defaultValue={editingCage?.pup_wean_due_date || ""} /></div>
+                <div className="sm:col-span-2">
+                  <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                    <input type="hidden" name="pups_weaned" value="false" />
+                    <input type="checkbox" name="pups_weaned" value="true" className="h-4 w-4" defaultChecked={editingCage?.pups_weaned || false} />
+                    Pups weaned
+                  </label>
+                </div>
+                <div><Label className="text-xs">Weaned On</Label><Input name="pups_weaned_date" type="date" defaultValue={editingCage?.pups_weaned_date || ""} /></div>
                 <div><Label className="text-xs">Last Checked</Label><Input name="last_check_date" type="date" defaultValue={editingCage?.last_check_date || ""} /></div>
                 <div><Label className="text-xs">Check Every (days)</Label><Input name="check_interval_days" type="number" min={1} defaultValue={editingCage?.check_interval_days ?? 7} /></div>
               </div>
