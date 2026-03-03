@@ -99,26 +99,152 @@ function getBreederCagePayload(formData: FormData) {
   };
 }
 
-async function applyTempSplitName(
+async function createCohortFollowups(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any,
+  userId: string,
+  cohort: { id: string; name: string; birth_date: string }
+) {
+  const birth = new Date(cohort.birth_date);
+  if (Number.isNaN(birth.getTime())) return;
+
+  const addDays = (d: Date, days: number) => {
+    const next = new Date(d);
+    next.setDate(next.getDate() + days);
+    return next.toISOString().split("T")[0];
+  };
+  const day21 = addDays(birth, 21);
+  const day30 = addDays(birth, 30);
+  const day35 = addDays(birth, 35);
+
+  const sourceLabel = `Cohort follow-up: ${cohort.name}`;
+  await supabase.from("tasks").insert([
+    {
+      user_id: userId,
+      title: `Cohort details check-in (${cohort.name})`,
+      description: "Enter/confirm pup count, sex breakdown, weaning status, and any notes once pups are old enough.",
+      due_date: day21,
+      priority: "high",
+      status: "pending",
+      source_type: "cohort_followup",
+      source_id: cohort.id,
+      source_label: sourceLabel,
+      tags: ["colony", "cohort", "weaning"],
+    },
+    {
+      user_id: userId,
+      title: `Genotyping follow-up (${cohort.name})`,
+      description: `Genotyping usually lands around day 30–35. Start checking at day 30 and finalize genotype entry by day 35 (${day35}).`,
+      due_date: day30,
+      priority: "high",
+      status: "pending",
+      source_type: "cohort_followup",
+      source_id: cohort.id,
+      source_label: sourceLabel,
+      tags: ["colony", "cohort", "genotyping"],
+    },
+  ]);
+
+  await supabase.from("workspace_calendar_events").insert([
+    {
+      user_id: userId,
+      title: `Cohort details check-in (${cohort.name})`,
+      category: "colony",
+      status: "planned",
+      start_at: `${day21}T09:00:00`,
+      end_at: `${day21}T09:30:00`,
+      source_type: "cohort",
+      source_id: cohort.id,
+      source_label: cohort.name,
+    },
+    {
+      user_id: userId,
+      title: `Genotyping follow-up (${cohort.name})`,
+      category: "colony",
+      status: "planned",
+      start_at: `${day30}T09:00:00`,
+      end_at: `${day30}T09:30:00`,
+      source_type: "cohort",
+      source_id: cohort.id,
+      source_label: cohort.name,
+    },
+  ]);
+}
+
+async function maybeCreateAutoCohortFromBreederLitter(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  userId: string,
+  cage: { id: string; name: string; pup_birth_date: string | null }
+) {
+  if (!cage.pup_birth_date) return;
+
+  const { data: existing } = await supabase
+    .from("cohorts")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("breeder_cage_id", cage.id)
+    .eq("birth_date", cage.pup_birth_date)
+    .maybeSingle();
+
+  if (existing?.id) return;
+
+  const { data: cohort, error } = await supabase
+    .from("cohorts")
+    .insert({
+      user_id: userId,
+      breeder_cage_id: cage.id,
+      name: `${cage.name} Litter`,
+      birth_date: cage.pup_birth_date,
+      notes: "Auto-created from breeder cage pup DOB.",
+    })
+    .select("id, name, birth_date")
+    .single();
+
+  if (!error && cohort) {
+    await createCohortFollowups(supabase, userId, cohort);
+  }
+}
+
+async function applyTempSplitMetadata(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  userId: string,
   payload: ReturnType<typeof getBreederCagePayload>
 ) {
   if (payload.cage_type !== "temp_split") return payload;
 
   let linkedName: string | null = null;
+  let linkedBarcode: string | null = null;
   if (payload.linked_breeder_cage_id) {
     const { data } = await supabase
       .from("breeder_cages")
-      .select("name")
+      .select("name, barcode")
       .eq("id", payload.linked_breeder_cage_id)
       .maybeSingle();
     linkedName = (data?.name as string) || null;
+    linkedBarcode = (data?.barcode as string) || null;
   }
 
-  const base = linkedName || payload.barcode || "Breeder";
+  let barcode = payload.barcode;
+  if (!barcode) {
+    const baseBarcode = (linkedBarcode || linkedName || "TMP")
+      .replace(/[^A-Za-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toUpperCase();
+    const { count } = await supabase
+      .from("breeder_cages")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("cage_type", "temp_split")
+      .eq("linked_breeder_cage_id", payload.linked_breeder_cage_id || "");
+    barcode = `${baseBarcode || "TMP"}-TS${(count || 0) + 1}`;
+  }
+
+  const base = linkedName || barcode || "Breeder";
   return {
     ...payload,
+    barcode,
     name: `${base} Temp Split`,
     is_temporary_split: true,
   };
@@ -185,13 +311,14 @@ export async function createBreederCage(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const payload = await applyTempSplitName(supabase, getBreederCagePayload(formData));
+  const payload = await applyTempSplitMetadata(supabase, user.id, getBreederCagePayload(formData));
   const { data, error } = await supabase.from("breeder_cages").insert({
     user_id: user.id,
     ...payload,
-  }).select("id, name, pup_wean_due_date, pups_weaned").single();
+  }).select("id, name, pup_wean_due_date, pups_weaned, pup_birth_date").single();
   if (error) return { error: error.message };
   await upsertBreederWeanReminder(supabase, user.id, data.id, data.name, data.pup_wean_due_date, data.pups_weaned);
+  await maybeCreateAutoCohortFromBreederLitter(supabase, user.id, data);
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
@@ -202,16 +329,90 @@ export async function updateBreederCage(id: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const payload = await applyTempSplitName(supabase, getBreederCagePayload(formData));
+  const payload = await applyTempSplitMetadata(supabase, user.id, getBreederCagePayload(formData));
   const { data, error } = await supabase
     .from("breeder_cages")
     .update(payload)
     .eq("id", id)
     .eq("user_id", user.id)
-    .select("id, name, pup_wean_due_date, pups_weaned")
+    .select("id, name, pup_wean_due_date, pups_weaned, pup_birth_date")
     .single();
   if (error) return { error: error.message };
   await upsertBreederWeanReminder(supabase, user.id, data.id, data.name, data.pup_wean_due_date, data.pups_weaned);
+  await maybeCreateAutoCohortFromBreederLitter(supabase, user.id, data);
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true };
+}
+
+export async function createTempSplitCageFromBreeder(breederCageId: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { data: source, error } = await supabase
+    .from("breeder_cages")
+    .select("*")
+    .eq("id", breederCageId)
+    .eq("user_id", user.id)
+    .single();
+  if (error || !source) return { error: error?.message || "Breeder cage not found." };
+
+  const basePayload = {
+    name: "",
+    strain: source.strain || null,
+    barcode: null,
+    cage_type: "temp_split",
+    female_1_strain: source.female_1_strain || null,
+    female_1_genotype: source.female_1_genotype || null,
+    female_2_strain: null,
+    female_2_genotype: null,
+    female_3_strain: null,
+    female_3_genotype: null,
+    male_strain: source.male_strain || null,
+    male_genotype: source.male_genotype || null,
+    is_temporary_split: true,
+    linked_breeder_cage_id: source.id,
+    male_location: "linked_cage",
+    location: source.location || null,
+    breeding_start: source.breeding_start || null,
+    is_pregnant: false,
+    pregnancy_start_date: null,
+    expected_birth_date: null,
+    pup_birth_date: null,
+    pup_wean_due_date: null,
+    pups_weaned: false,
+    pups_weaned_date: null,
+    last_check_date: null,
+    check_interval_days: source.check_interval_days || 7,
+    notes: `Auto-created split cage from ${source.name}.`,
+  };
+
+  const payload = await applyTempSplitMetadata(supabase, user.id, basePayload);
+  const { error: insertError } = await supabase.from("breeder_cages").insert({
+    user_id: user.id,
+    ...payload,
+  });
+  if (insertError) return { error: insertError.message };
+
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true };
+}
+
+export async function normalizeBreederMaleGenotypes() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { error } = await supabase
+    .from("breeder_cages")
+    .update({ male_genotype: "wt" })
+    .eq("user_id", user.id)
+    .not("male_genotype", "is", null)
+    .not("male_genotype", "in", "(hemi,wt)");
+
+  if (error) return { error: error.message };
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
@@ -255,72 +456,7 @@ export async function createCohort(formData: FormData) {
   // Auto-create litter follow-up reminders (default on) so you can enter minimal info now and fill details later.
   const createFollowups = formData.get("create_followup_tasks") === "true";
   if (createFollowups && cohort?.birth_date) {
-    const birth = new Date(cohort.birth_date);
-    if (!Number.isNaN(birth.getTime())) {
-      const addDays = (d: Date, days: number) => {
-        const next = new Date(d);
-        next.setDate(next.getDate() + days);
-        return next.toISOString().split("T")[0];
-      };
-      const day21 = addDays(birth, 21);
-      const day30 = addDays(birth, 30);
-      const day35 = addDays(birth, 35);
-
-      const sourceLabel = `Cohort follow-up: ${cohort.name}`;
-      const followupTasks = [
-        {
-          user_id: user.id,
-          title: `Cohort details check-in (${cohort.name})`,
-          description: "Enter/confirm pup count, sex breakdown, weaning status, and any notes once pups are old enough.",
-          due_date: day21,
-          priority: "high" as const,
-          status: "pending" as const,
-          source_type: "cohort_followup" as const,
-          source_id: cohort.id,
-          source_label: sourceLabel,
-          tags: ["colony", "cohort", "weaning"],
-        },
-        {
-          user_id: user.id,
-          title: `Genotyping follow-up (${cohort.name})`,
-          description: `Genotyping usually lands around day 30–35. Start checking at day 30 and finalize genotype entry by day 35 (${day35}).`,
-          due_date: day30,
-          priority: "high" as const,
-          status: "pending" as const,
-          source_type: "cohort_followup" as const,
-          source_id: cohort.id,
-          source_label: sourceLabel,
-          tags: ["colony", "cohort", "genotyping"],
-        },
-      ];
-      await supabase.from("tasks").insert(followupTasks);
-
-      // Add calendar reminders too when the workspace calendar table exists.
-      await supabase.from("workspace_calendar_events").insert([
-        {
-          user_id: user.id,
-          title: `Cohort details check-in (${cohort.name})`,
-          category: "colony",
-          status: "planned",
-          start_at: `${day21}T09:00:00`,
-          end_at: `${day21}T09:30:00`,
-          source_type: "cohort",
-          source_id: cohort.id,
-          source_label: cohort.name,
-        },
-        {
-          user_id: user.id,
-          title: `Genotyping follow-up (${cohort.name})`,
-          category: "colony",
-          status: "planned",
-          start_at: `${day30}T09:00:00`,
-          end_at: `${day30}T09:30:00`,
-          source_type: "cohort",
-          source_id: cohort.id,
-          source_label: cohort.name,
-        },
-      ]);
-    }
+    await createCohortFollowups(supabase, user.id, cohort);
   }
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);

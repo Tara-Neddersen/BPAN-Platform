@@ -174,6 +174,8 @@ interface ColonyClientProps {
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
+    createTempSplitCageFromBreeder: (breederCageId: string) => Promise<{ success?: boolean; error?: string }>;
+    normalizeBreederMaleGenotypes: () => Promise<{ success?: boolean; error?: string }>;
     deleteBreederCage: (id: string) => Promise<{ success?: boolean; error?: string }>;
     createCohort: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateCohort: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -613,9 +615,9 @@ export function ColonyClient({
   // Upcoming cage changes — only next 7 days
   const upcomingCageChanges = useMemo(
     () => cageChanges
-      .filter((c) => !c.is_completed && c.scheduled_date <= oneWeekFromNow)
+      .filter((c) => !c.is_completed && c.scheduled_date >= todayStr && c.scheduled_date <= oneWeekFromNow)
       .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)),
-    [cageChanges, oneWeekFromNow]
+    [cageChanges, oneWeekFromNow, todayStr]
   );
 
   // Pregnant breeder check reminders
@@ -632,9 +634,9 @@ export function ColonyClient({
   const weanReminders = useMemo(
     () =>
       cages
-        .filter((c) => c.pup_birth_date && !c.pups_weaned && c.pup_wean_due_date)
+        .filter((c) => c.pup_birth_date && !c.pups_weaned && c.pup_wean_due_date && c.pup_wean_due_date >= todayStr && c.pup_wean_due_date <= oneWeekFromNow)
         .sort((a, b) => String(a.pup_wean_due_date || "").localeCompare(String(b.pup_wean_due_date || ""))),
-    [cages]
+    [cages, todayStr, oneWeekFromNow]
   );
 
   // Stats
@@ -1380,7 +1382,17 @@ export function ColonyClient({
 
         {/* ─── Breeders Tab ─────────────────────────────────────── */}
         <TabsContent value="breeders" className="space-y-4">
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                const result = await act(actions.normalizeBreederMaleGenotypes());
+                if (!result.error) toast.success("Normalized breeder male genotypes.");
+              }}
+            >
+              Normalize Male Genotypes
+            </Button>
             <Button onClick={() => setShowAddCage(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Breeder Cage</Button>
           </div>
           {cages.length === 0 ? (
@@ -1475,6 +1487,19 @@ export function ColonyClient({
                           </div>
                         </div>
                         <div className="flex gap-1">
+                          {!c.is_temporary_split && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs gap-1"
+                              onClick={async () => {
+                                const result = await act(actions.createTempSplitCageFromBreeder(c.id));
+                                if (!result.error) toast.success(`Created temp split cage from ${c.name}`);
+                              }}
+                            >
+                              <Plus className="h-3 w-3" /> Split
+                            </Button>
+                          )}
                           {c.is_pregnant && (
                             <Button
                               variant="outline"

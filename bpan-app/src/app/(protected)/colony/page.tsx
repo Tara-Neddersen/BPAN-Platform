@@ -17,6 +17,8 @@ import type {
 import {
   createBreederCage,
   updateBreederCage,
+  createTempSplitCageFromBreeder,
+  normalizeBreederMaleGenotypes,
   deleteBreederCage,
   createCohort,
   updateCohort,
@@ -159,6 +161,8 @@ export default async function ColonyPage({ searchParams }: { searchParams: Promi
         actions={{
           createBreederCage,
           updateBreederCage,
+          createTempSplitCageFromBreeder,
+          normalizeBreederMaleGenotypes,
           deleteBreederCage,
           createCohort,
           updateCohort,
