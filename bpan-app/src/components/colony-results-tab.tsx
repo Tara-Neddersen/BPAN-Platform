@@ -25,12 +25,19 @@ export interface MeasureField {
   type?: "number" | "text";
 }
 
+type MeasureValue = string | number | null | string[];
+type MeasureMap = Record<string, MeasureValue>;
+
 const ROTAROD_AVG_LATENCY_KEY = "latency_to_fall_sec";
 const ROTAROD_AVG_RPM_KEY = "rpm_at_fall";
 const ROTAROD_TRIAL_LATENCY_KEYS = ["trial_1_sec", "trial_2_sec", "trial_3_sec"] as const;
 const ROTAROD_TRIAL_RPM_KEYS = ["trial_1_rpm", "trial_2_rpm", "trial_3_rpm"] as const;
 const STAMINA_AVG_KEY = "avg_duration_sec";
 const STAMINA_TRIAL_KEYS = ["test_1_sec", "test_2_sec", "test_3_sec"] as const;
+const CAGE_IMAGE_KEY = "__cage_image";
+const CAGE_IMAGE_LIST_KEY = "__cage_images";
+const RAW_DATA_URL_KEY = "__raw_data_url";
+const RAW_DATA_URL_LIST_KEY = "__raw_data_urls";
 
 function isRotarodTrialWithAveragesExperiment(exp: string) {
   return exp === "rotarod_test1" || exp === "rotarod_test2";
@@ -40,7 +47,29 @@ function isStaminaWithAverageExperiment(exp: string) {
   return exp === "stamina";
 }
 
-function toNumericOrNull(value: string | number | null | undefined) {
+function getAttachmentUrls(measures: MeasureMap, arrayKey: string, legacyKey: string) {
+  const arrayVal = measures[arrayKey];
+  if (Array.isArray(arrayVal)) {
+    return arrayVal.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  }
+  const legacyVal = measures[legacyKey];
+  if (typeof legacyVal === "string" && legacyVal.trim()) return [legacyVal.trim()];
+  return [];
+}
+
+function applyAttachmentUrls(measures: MeasureMap, arrayKey: string, legacyKey: string, urls: string[]): MeasureMap {
+  const normalized = urls
+    .map((url) => (typeof url === "string" ? url.trim() : ""))
+    .filter((url, index, arr) => url.length > 0 && arr.indexOf(url) === index);
+  return {
+    ...measures,
+    [arrayKey]: normalized,
+    [legacyKey]: normalized[0] ?? null,
+  };
+}
+
+function toNumericOrNull(value: MeasureValue | undefined) {
+  if (Array.isArray(value)) return null;
   if (value === null || value === undefined || value === "") return null;
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -48,8 +77,8 @@ function toNumericOrNull(value: string | number | null | undefined) {
 
 function applyDerivedMeasuresForExperiment(
   exp: string,
-  measures: Record<string, string | number | null>
-): Record<string, string | number | null> {
+  measures: MeasureMap
+): MeasureMap {
   if (isStaminaWithAverageExperiment(exp)) {
     const next = { ...measures };
     const staminaValues = STAMINA_TRIAL_KEYS.map((key) => toNumericOrNull(next[key])).filter(
@@ -224,7 +253,7 @@ interface ColonyResultsTabProps {
     experimentType: string,
     entries: {
       animalId: string;
-      measures: Record<string, string | number | null>;
+      measures: MeasureMap;
       notes?: string;
     }[],
     options?: { emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave" }
@@ -250,13 +279,16 @@ export function ColonyResultsTab({
 }: ColonyResultsTabProps) {
   type SaveEntry = {
     animalId: string;
-    measures: Record<string, string | number | null>;
+    measures: MeasureMap;
     notes?: string;
   };
 
-  const hasMeaningfulMeasures = useCallback((measures: Record<string, string | number | null> | null | undefined) => {
+  const hasMeaningfulMeasures = useCallback((measures: MeasureMap | null | undefined) => {
     if (!measures) return false;
-    return Object.values(measures).some((v) => v !== null && v !== "" && v !== undefined);
+    return Object.values(measures).some((v) => {
+      if (Array.isArray(v)) return v.length > 0;
+      return v !== null && v !== "" && v !== undefined;
+    });
   }, []);
 
   // State
@@ -337,7 +369,7 @@ export function ColonyResultsTab({
 
   // Local editable data: keyed by `${animalId}-${timepoint}-${experiment}`
   const [editData, setEditData] = useState<
-    Record<string, { measures: Record<string, string | number | null>; notes: string }>
+    Record<string, { measures: MeasureMap; notes: string }>
   >({});
   // Track which rows were changed
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
@@ -394,7 +426,7 @@ export function ColonyResultsTab({
         return {
           measures: applyDerivedMeasuresForExperiment(
             exp,
-            (existing.measures as Record<string, string | number | null>) || {}
+            (existing.measures as MeasureMap) || {}
           ),
           notes: existing.notes || "",
         };
@@ -483,7 +515,7 @@ export function ColonyResultsTab({
 
   // Update a specific measure for an animal
   const updateMeasure = useCallback(
-    (animalId: string, tp: number, exp: string, fieldKey: string, value: string) => {
+    (animalId: string, tp: number, exp: string, fieldKey: string, value: MeasureValue) => {
       const key = `${animalId}-${tp}-${exp}`;
       setEditData((prev) => {
         const current = prev[key] || getRowData(animalId, tp, exp);
@@ -502,6 +534,27 @@ export function ColonyResultsTab({
       setDirtyKeys((prev) => new Set(prev).add(key));
     },
     [getRowData]
+  );
+
+  const updateAttachments = useCallback(
+    (animalId: string, tp: number, exp: string, arrayKey: string, legacyKey: string, urls: string[]) => {
+      const key = `${animalId}-${tp}-${exp}`;
+      setEditData((prev) => {
+        const current = prev[key] || getRowData(animalId, tp, exp);
+        return {
+          ...prev,
+          [key]: {
+            ...current,
+            measures: applyDerivedMeasuresForExperiment(
+              exp,
+              applyAttachmentUrls(current.measures, arrayKey, legacyKey, urls)
+            ),
+          },
+        };
+      });
+      setDirtyKeys((prev) => new Set(prev).add(key));
+    },
+    [applyAttachmentUrls, getRowData]
   );
 
   // Update notes for an animal
@@ -556,10 +609,12 @@ export function ColonyResultsTab({
       if (dirtyKeys.has(key)) {
         const data = editData[key] || getRowData(animal.id, tp, exp);
         // Convert string numbers to actual numbers
-        const cleanMeasures: Record<string, string | number | null> = {};
+        const cleanMeasures: MeasureMap = {};
         const normalizedMeasures = applyDerivedMeasuresForExperiment(exp, data.measures);
         for (const [k, v] of Object.entries(normalizedMeasures)) {
-          if (v === null || v === "") {
+          if (Array.isArray(v)) {
+            cleanMeasures[k] = v.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+          } else if (v === null || v === "") {
             cleanMeasures[k] = null;
           } else if (typeof v === "string" && !isNaN(Number(v))) {
             cleanMeasures[k] = Number(v);
@@ -583,7 +638,7 @@ export function ColonyResultsTab({
     const clearedRows = entries.filter((entry) => {
       const existing = getExistingResult(entry.animalId, tp, exp);
       if (!existing) return false;
-      const existingHasData = hasMeaningfulMeasures(existing.measures as Record<string, string | number | null>);
+      const existingHasData = hasMeaningfulMeasures(existing.measures as MeasureMap);
       const nextHasData = hasMeaningfulMeasures(entry.measures);
       return existingHasData && !nextHasData;
     });
@@ -797,7 +852,7 @@ export function ColonyResultsTab({
   // Count how many animals have results for current view
   const filledCount = activeAnimals.filter((a) => {
     const data = getRowData(a.id, tp, activeExperiment);
-    return Object.values(data.measures).some((v) => v !== null && v !== "");
+    return hasMeaningfulMeasures(data.measures);
   }).length;
 
   // Group animals by cohort for display
@@ -1221,6 +1276,7 @@ export function ColonyResultsTab({
                                 getRowData={getRowData}
                                 getExistingResult={getExistingResult}
                                 updateMeasure={updateMeasure}
+                                updateAttachments={updateAttachments}
                                 updateNotes={updateNotes}
                                 dirtyKeys={dirtyKeys}
                                 isImageExperiment={IMAGE_EXPERIMENTS.has(exp)}
@@ -1265,9 +1321,10 @@ interface CohortGroupProps {
   timepoint: number;
   experiment: string;
   fields: MeasureField[];
-  getRowData: (animalId: string, tp: number, exp: string) => { measures: Record<string, string | number | null>; notes: string };
+  getRowData: (animalId: string, tp: number, exp: string) => { measures: MeasureMap; notes: string };
   getExistingResult: (animalId: string, tp: number, exp: string) => ColonyResult | undefined;
-  updateMeasure: (animalId: string, tp: number, exp: string, fieldKey: string, value: string) => void;
+  updateMeasure: (animalId: string, tp: number, exp: string, fieldKey: string, value: MeasureValue) => void;
+  updateAttachments: (animalId: string, tp: number, exp: string, arrayKey: string, legacyKey: string, urls: string[]) => void;
   updateNotes: (animalId: string, tp: number, exp: string, notes: string) => void;
   dirtyKeys: Set<string>;
   isImageExperiment: boolean;
@@ -1282,6 +1339,7 @@ function CohortGroup({
   getRowData,
   getExistingResult,
   updateMeasure,
+  updateAttachments,
   updateNotes,
   dirtyKeys,
   isImageExperiment,
@@ -1290,7 +1348,7 @@ function CohortGroup({
 
   const filledInGroup = animals.filter((a) => {
     const existing = getExistingResult(a.id, timepoint, experiment);
-    return existing && Object.values(existing.measures as Record<string, unknown>).some((v) => v !== null);
+    return existing && Object.values(existing.measures as Record<string, unknown>).some((v) => (Array.isArray(v) ? v.length > 0 : v !== null && v !== ""));
   }).length;
 
   return (
@@ -1411,9 +1469,9 @@ function CohortGroup({
                     animalIdentifier={animal.identifier}
                     experiment={experiment}
                     timepoint={timepoint}
-                    currentUrl={data.measures.__cage_image as string | null}
-                    onUploaded={(url) =>
-                      updateMeasure(animal.id, timepoint, experiment, "__cage_image", url)
+                    currentUrls={getAttachmentUrls(data.measures, CAGE_IMAGE_LIST_KEY, CAGE_IMAGE_KEY)}
+                    onChange={(urls) =>
+                      updateAttachments(animal.id, timepoint, experiment, CAGE_IMAGE_LIST_KEY, CAGE_IMAGE_KEY, urls)
                     }
                   />
                 ) : (
@@ -1422,9 +1480,9 @@ function CohortGroup({
                     animalIdentifier={animal.identifier}
                     experiment={experiment}
                     timepoint={timepoint}
-                    currentUrl={data.measures.__raw_data_url as string | null}
-                    onChange={(url) =>
-                      updateMeasure(animal.id, timepoint, experiment, "__raw_data_url", url)
+                    currentUrls={getAttachmentUrls(data.measures, RAW_DATA_URL_LIST_KEY, RAW_DATA_URL_KEY)}
+                    onChange={(urls) =>
+                      updateAttachments(animal.id, timepoint, experiment, RAW_DATA_URL_LIST_KEY, RAW_DATA_URL_KEY, urls)
                     }
                   />
                 )}
@@ -1454,15 +1512,15 @@ function CageImageCell({
   animalIdentifier,
   experiment,
   timepoint,
-  currentUrl,
-  onUploaded,
+  currentUrls,
+  onChange,
 }: {
   cohortName: string;
   animalIdentifier: string;
   experiment: string;
   timepoint: number;
-  currentUrl: string | null;
-  onUploaded: (url: string) => void;
+  currentUrls: string[];
+  onChange: (urls: string[]) => void;
 }) {
   const [uploading, setUploading] = useState(false);
   const fileRef = useCallback((input: HTMLInputElement | null) => {
@@ -1471,87 +1529,89 @@ function CageImageCell({
 
   const handleUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
+      const files = Array.from(e.target.files || []);
+      if (files.length === 0) return;
 
       setUploading(true);
       try {
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("cohort_name", cohortName);
-        formData.append("animal_identifier", animalIdentifier);
-        formData.append("experiment_type", `${experiment}_${timepoint}d`);
+        const nextUrls = [...currentUrls];
+        for (const file of files) {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("cohort_name", cohortName);
+          formData.append("animal_identifier", animalIdentifier);
+          formData.append("experiment_type", `${experiment}_${timepoint}d`);
 
-        const res = await fetch("/api/gdrive/upload", {
-          method: "POST",
-          body: formData,
-        });
+          const res = await fetch("/api/gdrive/upload", {
+            method: "POST",
+            body: formData,
+          });
 
-        const json = await res.json();
-        if (json.error) {
-          toast.error(json.error);
-        } else {
-          toast.success("Uploaded to Google Drive!");
-          onUploaded(json.url);
+          const json = await res.json();
+          if (json.error) {
+            toast.error(json.error);
+            continue;
+          }
+          if (typeof json.url === "string" && json.url.trim()) {
+            nextUrls.push(json.url);
+          }
         }
+        onChange(nextUrls);
+        toast.success(`Uploaded ${files.length} image${files.length === 1 ? "" : "s"} to Google Drive`);
       } catch {
         toast.error("Upload failed — is Google Drive connected?");
       } finally {
         setUploading(false);
+        e.target.value = "";
       }
     },
-    [cohortName, animalIdentifier, experiment, timepoint, onUploaded]
+    [cohortName, animalIdentifier, experiment, timepoint, currentUrls, onChange]
   );
 
-  const hasUrl = !!(currentUrl && currentUrl.trim());
-
   return (
-    <div className="flex items-center gap-1 min-w-[70px]">
-      {hasUrl ? (
-        <>
-          <a
-            href={currentUrl!}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-green-600 hover:text-green-800 transition-colors"
-            title="View on Google Drive"
-          >
-            <ImageIcon className="w-4 h-4" />
-          </a>
-          <label className="cursor-pointer text-muted-foreground hover:text-foreground transition-colors" title="Replace image">
-            {uploading ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Camera className="w-3.5 h-3.5" />
-            )}
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleUpload}
-              disabled={uploading}
-            />
-          </label>
-        </>
-      ) : (
-        <label className="cursor-pointer flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors" title="Upload cage image to Google Drive">
+    <div className="min-w-[120px] space-y-1">
+      {currentUrls.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {currentUrls.map((url, index) => (
+            <div key={`${url}-${index}`} className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 py-1">
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-green-600 hover:text-green-800 transition-colors"
+                title="View on Google Drive"
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+              </a>
+              <button
+                type="button"
+                className="text-red-500 hover:text-red-700"
+                title="Remove image"
+                onClick={() => onChange(currentUrls.filter((_, currentIndex) => currentIndex !== index))}
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <label className="cursor-pointer flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors" title={currentUrls.length > 0 ? "Upload more images to Google Drive" : "Upload cage image to Google Drive"}>
           {uploading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
           ) : (
             <Camera className="w-4 h-4" />
           )}
-          <span className="text-[10px]">Upload</span>
+          <span className="text-[10px]">{currentUrls.length > 0 ? "Add more" : "Upload"}</span>
           <input
             ref={fileRef}
             type="file"
             accept="image/*"
+            multiple
             className="hidden"
             onChange={handleUpload}
             disabled={uploading}
           />
-        </label>
-      )}
+      </label>
     </div>
   );
 }
@@ -1563,47 +1623,52 @@ function RawDataLinkCell({
   animalIdentifier,
   experiment,
   timepoint,
-  currentUrl,
+  currentUrls,
   onChange,
 }: {
   cohortName: string;
   animalIdentifier: string;
   experiment: string;
   timepoint: number;
-  currentUrl: string | null;
-  onChange: (url: string) => void;
+  currentUrls: string[];
+  onChange: (urls: string[]) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [inputVal, setInputVal] = useState(currentUrl || "");
-
-  const hasUrl = !!(currentUrl && currentUrl.trim());
+  const [inputVal, setInputVal] = useState("");
 
   const handleFileUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
+      const files = Array.from(e.target.files || []);
+      if (files.length === 0) return;
 
       setUploading(true);
       try {
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("cohort_name", cohortName);
-        formData.append("animal_identifier", animalIdentifier);
-        formData.append("experiment_type", `${experiment}_${timepoint}d`);
+        const nextUrls = [...currentUrls];
+        for (const file of files) {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("cohort_name", cohortName);
+          formData.append("animal_identifier", animalIdentifier);
+          formData.append("experiment_type", `${experiment}_${timepoint}d`);
 
-        const res = await fetch("/api/gdrive/upload", {
-          method: "POST",
-          body: formData,
-        });
+          const res = await fetch("/api/gdrive/upload", {
+            method: "POST",
+            body: formData,
+          });
 
-        const json = await res.json();
-        if (json.error) {
-          toast.error(json.error);
-        } else {
-          toast.success("Uploaded to Google Drive!");
-          onChange(json.url);
+          const json = await res.json();
+          if (json.error) {
+            toast.error(json.error);
+            continue;
+          }
+          if (typeof json.url === "string" && json.url.trim()) {
+            nextUrls.push(json.url);
+          }
         }
+        onChange(nextUrls);
+        toast.success(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"} to Google Drive`);
       } catch {
         toast.error("Upload failed — is Google Drive connected?");
       } finally {
@@ -1611,7 +1676,7 @@ function RawDataLinkCell({
         e.target.value = "";
       }
     },
-    [cohortName, animalIdentifier, experiment, timepoint, onChange]
+    [cohortName, animalIdentifier, experiment, timepoint, currentUrls, onChange]
   );
 
   if (editing) {
@@ -1624,15 +1689,38 @@ function RawDataLinkCell({
           autoFocus
           onChange={(e) => setInputVal(e.target.value)}
           onBlur={() => {
-            onChange(inputVal);
+            const nextUrls = [...currentUrls];
+            const trimmed = inputVal.trim();
+            if (editingIndex === null) {
+              if (trimmed) nextUrls.push(trimmed);
+            } else if (trimmed) {
+              nextUrls[editingIndex] = trimmed;
+            } else if (editingIndex !== null) {
+              nextUrls.splice(editingIndex, 1);
+            }
+            onChange(nextUrls);
             setEditing(false);
+            setEditingIndex(null);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
-              onChange(inputVal);
+              const nextUrls = [...currentUrls];
+              const trimmed = inputVal.trim();
+              if (editingIndex === null) {
+                if (trimmed) nextUrls.push(trimmed);
+              } else if (trimmed) {
+                nextUrls[editingIndex] = trimmed;
+              } else {
+                nextUrls.splice(editingIndex, 1);
+              }
+              onChange(nextUrls);
               setEditing(false);
+              setEditingIndex(null);
             }
-            if (e.key === "Escape") setEditing(false);
+            if (e.key === "Escape") {
+              setEditing(false);
+              setEditingIndex(null);
+            }
           }}
         />
       </div>
@@ -1640,56 +1728,74 @@ function RawDataLinkCell({
   }
 
   return (
-    <div className="flex items-center gap-1 min-w-[70px]">
-      {hasUrl ? (
-        <>
-          <a
-            href={currentUrl!}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 hover:text-blue-800 transition-colors"
-            title={currentUrl!}
-          >
-            <ExternalLink className="w-4 h-4" />
-          </a>
-          <button
-            onClick={() => {
-              setInputVal(currentUrl || "");
-              setEditing(true);
-            }}
-            className="text-muted-foreground hover:text-foreground text-[10px]"
-            title="Edit URL"
-          >
-            ✎
-          </button>
-        </>
-      ) : (
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setEditing(true)}
-            className="flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors"
-            title="Paste a URL"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            <span className="text-[10px]">Link</span>
-          </button>
-          <span className="text-muted-foreground/30 text-[10px]">|</span>
-          <label className="cursor-pointer flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors" title="Upload file to Google Drive">
-            {uploading ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Upload className="w-3.5 h-3.5" />
-            )}
-            <span className="text-[10px]">Upload</span>
-            <input
-              type="file"
-              className="hidden"
-              onChange={handleFileUpload}
-              disabled={uploading}
-            />
-          </label>
+    <div className="min-w-[145px] space-y-1">
+      {currentUrls.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {currentUrls.map((url, index) => (
+            <div key={`${url}-${index}`} className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[10px]">
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-800 transition-colors"
+                title={url}
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+              <button
+                type="button"
+                className="text-slate-500 hover:text-slate-700"
+                title="Edit URL"
+                onClick={() => {
+                  setInputVal(url);
+                  setEditingIndex(index);
+                  setEditing(true);
+                }}
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                className="text-red-500 hover:text-red-700"
+                title="Remove file"
+                onClick={() => onChange(currentUrls.filter((_, currentIndex) => currentIndex !== index))}
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
         </div>
       )}
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => {
+            setInputVal("");
+            setEditingIndex(null);
+            setEditing(true);
+          }}
+          className="flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors"
+          title="Paste a URL"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          <span className="text-[10px]">{currentUrls.length > 0 ? "Add link" : "Link"}</span>
+        </button>
+        <span className="text-muted-foreground/30 text-[10px]">|</span>
+        <label className="cursor-pointer flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors" title="Upload file to Google Drive">
+          {uploading ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Upload className="w-3.5 h-3.5" />
+          )}
+          <span className="text-[10px]">{currentUrls.length > 0 ? "Add file" : "Upload"}</span>
+          <input
+            type="file"
+            className="hidden"
+            multiple
+            onChange={handleFileUpload}
+            disabled={uploading}
+          />
+        </label>
+      </div>
     </div>
   );
 }

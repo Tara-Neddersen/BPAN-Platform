@@ -112,9 +112,12 @@ async function markExperimentWithStatus(
     .eq("id", exp.id);
 }
 
-function hasMeaningfulMeasures(measures: Record<string, string | number | null> | null | undefined) {
+function hasMeaningfulMeasures(measures: Record<string, string | number | null | string[]> | null | undefined) {
   if (!measures) return false;
-  return Object.values(measures).some((v) => v !== null && v !== "" && v !== undefined);
+  return Object.values(measures).some((v) => {
+    if (Array.isArray(v)) return v.length > 0;
+    return v !== null && v !== "" && v !== undefined;
+  });
 }
 
 /**
@@ -126,7 +129,7 @@ export async function upsertColonyResult(
   animalId: string,
   timepointAgeDays: number,
   experimentType: string,
-  measures: Record<string, string | number | null>,
+  measures: Record<string, string | number | null | string[]>,
   notes?: string
 ) {
   const supabase = await createClient();
@@ -189,7 +192,7 @@ export async function batchUpsertColonyResults(
   experimentType: string,
   entries: {
     animalId: string;
-    measures: Record<string, string | number | null>;
+    measures: Record<string, string | number | null | string[]>;
     notes?: string;
   }[],
   options?: {
@@ -346,7 +349,7 @@ export async function reconcileTrackerFromExistingColonyResults() {
 
   for (const row of rows || []) {
     const hasData = hasMeaningfulMeasures(
-      (row.measures || {}) as Record<string, string | number | null>
+      (row.measures || {}) as Record<string, string | number | null | string[]>
     );
     if (!hasData) {
       ignored++;

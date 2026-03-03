@@ -298,12 +298,16 @@ export interface BreederCage {
   cage_type: string | null;
   female_1_strain: string | null;
   female_1_genotype: string | null;
+  female_1_birth_date: string | null;
   female_2_strain: string | null;
   female_2_genotype: string | null;
+  female_2_birth_date: string | null;
   female_3_strain: string | null;
   female_3_genotype: string | null;
+  female_3_birth_date: string | null;
   male_strain: string | null;
   male_genotype: string | null;
+  male_birth_date: string | null;
   is_temporary_split: boolean;
   linked_breeder_cage_id: string | null;
   male_location: string | null;
@@ -490,6 +494,7 @@ export interface HousingCage {
   user_id: string;
   cage_label: string;
   cage_id: string | null;
+  cage_sex: AnimalSex;
   location: string | null;
   max_occupancy: number;
   cage_type: "standard" | "eeg" | "recovery" | "quarantine";
@@ -507,7 +512,7 @@ export interface ColonyResult {
   animal_id: string;
   timepoint_age_days: number;
   experiment_type: string;
-  measures: Record<string, string | number | null>;
+  measures: Record<string, string | number | null | string[]>;
   notes: string | null;
   recorded_at: string;
   created_at: string;

@@ -42,6 +42,12 @@ const GENOTYPE_LABELS: Record<string, string> = {
   wt: "Wild-type",
   het: "Heterozygous",
 };
+const BREEDER_GENOTYPE_LABELS: Record<string, string> = {
+  hemi: "Hemi",
+  homo: "Homo",
+  het: "Het",
+  wt: "WT",
+};
 
 const GENOTYPE_SORT: Record<string, number> = { hemi: 0, het: 1, wt: 2 };
 const SEX_SORT: Record<string, number> = { male: 0, female: 1 };
@@ -161,7 +167,7 @@ interface ColonyClientProps {
     experimentType: string,
     entries: {
       animalId: string;
-      measures: Record<string, string | number | null>;
+      measures: Record<string, string | number | null | string[]>;
       notes?: string;
     }[]
   ) => Promise<{ success?: boolean; error?: string; saved?: number; errors?: string[] }>;
@@ -231,6 +237,13 @@ function daysUntil(dateStr: string) {
 
 function genotypeLabel(sex: AnimalSex, genotype: AnimalGenotype) {
   return `${GENOTYPE_LABELS[genotype]} ${sex === "male" ? "Male" : "Female"}`;
+}
+
+function breederGenotypeLabel(slotLabel: string, genotype?: string | null, birthDate?: string | null) {
+  if (!genotype && !birthDate) return null;
+  const parts = [`${slotLabel}: ${genotype ? (BREEDER_GENOTYPE_LABELS[genotype] || genotype) : "—"}`];
+  if (birthDate) parts.push(`DOB ${birthDate}`);
+  return parts.join(" · ");
 }
 
 /** Convert Google Drive share links to direct image URLs */
@@ -754,12 +767,16 @@ export function ColonyClient({
     fd.set("cage_type", overrides?.cage_type ?? c.cage_type ?? "normal");
     fd.set("female_1_strain", overrides?.female_1_strain ?? c.female_1_strain ?? "");
     fd.set("female_1_genotype", overrides?.female_1_genotype ?? c.female_1_genotype ?? "");
+    fd.set("female_1_birth_date", overrides?.female_1_birth_date ?? c.female_1_birth_date ?? "");
     fd.set("female_2_strain", overrides?.female_2_strain ?? c.female_2_strain ?? "");
     fd.set("female_2_genotype", overrides?.female_2_genotype ?? c.female_2_genotype ?? "");
+    fd.set("female_2_birth_date", overrides?.female_2_birth_date ?? c.female_2_birth_date ?? "");
     fd.set("female_3_strain", overrides?.female_3_strain ?? c.female_3_strain ?? "");
     fd.set("female_3_genotype", overrides?.female_3_genotype ?? c.female_3_genotype ?? "");
+    fd.set("female_3_birth_date", overrides?.female_3_birth_date ?? c.female_3_birth_date ?? "");
     fd.set("male_strain", overrides?.male_strain ?? c.male_strain ?? "");
     fd.set("male_genotype", overrides?.male_genotype ?? c.male_genotype ?? "");
+    fd.set("male_birth_date", overrides?.male_birth_date ?? c.male_birth_date ?? "");
     fd.set("is_temporary_split", overrides?.is_temporary_split ?? (c.is_temporary_split ? "true" : "false"));
     fd.set("linked_breeder_cage_id", overrides?.linked_breeder_cage_id ?? c.linked_breeder_cage_id ?? "");
     fd.set("male_location", overrides?.male_location ?? c.male_location ?? "this_cage");
@@ -776,6 +793,18 @@ export function ColonyClient({
     fd.set("check_interval_days", overrides?.check_interval_days ?? String(c.check_interval_days || 7));
     fd.set("notes", overrides?.notes ?? c.notes ?? "");
     return fd;
+  }
+
+  function seedCohortFromBreeder(cage: BreederCage) {
+    const existingCount = cohorts.filter((co) => co.breeder_cage_id === cage.id).length;
+    const suggestedName = existingCount === 0 ? `${cage.name} Litter` : `${cage.name} Litter ${existingCount + 1}`;
+    setNewCohortSeed({
+      breederCageId: cage.id,
+      birthDate: cage.pup_birth_date || "",
+      litterSize: null,
+      suggestedName,
+    });
+    setShowAddCohort(true);
   }
 
   const pendingBreederLitters = useMemo(() => {
@@ -1216,15 +1245,7 @@ export function ColonyClient({
                         variant="outline"
                         size="sm"
                         className="h-7 text-xs"
-                        onClick={() => {
-                          setNewCohortSeed({
-                            breederCageId: c.id,
-                            birthDate: c.pup_birth_date as string,
-                            litterSize: null,
-                            suggestedName: `${c.name} Litter`,
-                          });
-                          setShowAddCohort(true);
-                        }}
+                        onClick={() => seedCohortFromBreeder(c)}
                       >
                         <Plus className="h-3 w-3 mr-1" /> Add As Cohort
                       </Button>
@@ -1480,10 +1501,14 @@ export function ColonyClient({
                             )}
                           </div>
                           <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-2">
-                            {c.female_1_strain && <span>F1: {c.female_1_strain} / {c.female_1_genotype || "—"}</span>}
-                            {c.female_2_strain && <span>F2: {c.female_2_strain} / {c.female_2_genotype || "—"}</span>}
-                            {c.female_3_strain && <span>F3: {c.female_3_strain} / {c.female_3_genotype || "—"}</span>}
-                            {c.male_strain && <span>M: {c.male_strain} / {c.male_genotype || "—"}</span>}
+                            {[
+                              breederGenotypeLabel("♀1", c.female_1_genotype, c.female_1_birth_date),
+                              breederGenotypeLabel("♀2", c.female_2_genotype, c.female_2_birth_date),
+                              breederGenotypeLabel("♀3", c.female_3_genotype, c.female_3_birth_date),
+                              breederGenotypeLabel("♂", c.male_genotype, c.male_birth_date),
+                            ].filter((label): label is string => Boolean(label)).map((label) => (
+                              <span key={label}>{label}</span>
+                            ))}
                           </div>
                         </div>
                         <div className="flex gap-1">
@@ -1500,6 +1525,14 @@ export function ColonyClient({
                               <Plus className="h-3 w-3" /> Split
                             </Button>
                           )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs gap-1"
+                            onClick={() => seedCohortFromBreeder(c)}
+                          >
+                            <Plus className="h-3 w-3" /> Cohort
+                          </Button>
                           {c.is_pregnant && (
                             <Button
                               variant="outline"
@@ -1599,15 +1632,27 @@ export function ColonyClient({
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {housingCages.filter(hc => hc.is_active).map((hc) => {
                 const occupants = animals.filter(a => a.housing_cage_id === hc.id && a.status === "active");
+                const availableAnimals = animals.filter(
+                  (a) => a.status === "active" && !a.housing_cage_id && a.sex === hc.cage_sex
+                );
                 const isFull = occupants.length >= hc.max_occupancy;
+                const sexBadgeClass = hc.cage_sex === "female"
+                  ? "bg-pink-100 text-pink-700 border-pink-200"
+                  : "bg-blue-100 text-blue-700 border-blue-200";
+                const cardClass = isFull
+                  ? "border-orange-300"
+                  : hc.cage_sex === "female"
+                    ? "border-pink-200 bg-pink-50/40"
+                    : "border-blue-200 bg-blue-50/40";
                 return (
-                  <Card key={hc.id} className={isFull ? "border-orange-300" : ""}>
+                  <Card key={hc.id} className={cardClass}>
                     <CardHeader className="py-3">
                       <div className="flex items-center justify-between">
                         <CardTitle className="text-sm flex items-center gap-2">
                           <Home className="h-4 w-4" />
                           {hc.cage_label}
                           <Badge variant="outline" className="text-[10px]">{hc.cage_type}</Badge>
+                          <Badge variant="outline" className={`text-[10px] capitalize ${sexBadgeClass}`}>{hc.cage_sex}</Badge>
                         </CardTitle>
                         <div className="flex items-center gap-1">
                           <Button variant="ghost" size="sm" onClick={() => setEditingHousingCage(hc)}>
@@ -1648,15 +1693,13 @@ export function ColonyClient({
                       ) : (
                         <p className="text-xs text-muted-foreground italic">Empty cage</p>
                       )}
-                      {!isFull && (
+                      {!isFull && availableAnimals.length > 0 && (
                         <Select onValueChange={(animalId) => act(actions.assignAnimalToCage(animalId, hc.id))}>
                           <SelectTrigger className="h-7 text-xs">
-                            <SelectValue placeholder="+ Assign animal..." />
+                            <SelectValue placeholder={`+ Assign ${hc.cage_sex} animal...`} />
                           </SelectTrigger>
                           <SelectContent>
-                            {animals
-                              .filter(a => a.status === "active" && !a.housing_cage_id)
-                              .map(a => {
+                            {availableAnimals.map(a => {
                                 const cohortName = cohorts.find(c => c.id === a.cohort_id)?.name;
                                 return (
                                   <SelectItem key={a.id} value={a.id}>
@@ -1666,6 +1709,9 @@ export function ColonyClient({
                               })}
                           </SelectContent>
                         </Select>
+                      )}
+                      {!isFull && availableAnimals.length === 0 && (
+                        <p className="text-xs text-muted-foreground italic">No unhoused {hc.cage_sex} animals available.</p>
                       )}
                       {hc.notes && <p className="text-xs text-muted-foreground">{hc.notes}</p>}
                     </CardContent>
@@ -2194,60 +2240,72 @@ export function ColonyClient({
             <div className="space-y-2">
               <div className="text-xs font-medium">Breeding Setup</div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <div><Label className="text-xs">Female 1 Strain</Label><Input name="female_1_strain" defaultValue={editingCage?.female_1_strain || ""} placeholder="BPAN / WT" /></div>
                 <div>
-                  <Label className="text-xs">Female 1 Genotype</Label>
+                  <Label className="text-xs">♀1 Genotype</Label>
                   <Select name="female_1_genotype" defaultValue={editingCage?.female_1_genotype || ""}>
                     <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="homo">HOMO</SelectItem>
+                      <SelectItem value="homo">Homo</SelectItem>
                       <SelectItem value="wt">WT</SelectItem>
-                      <SelectItem value="het">HET</SelectItem>
+                      <SelectItem value="het">Het</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
+                <div>
+                  <Label className="text-xs">♀1 DOB</Label>
+                  <Input name="female_1_birth_date" type="date" defaultValue={editingCage?.female_1_birth_date || ""} />
+                </div>
                 {(cageFormType === "trio" || cageFormType === "harem") && (
                   <>
-                    <div><Label className="text-xs">Female 2 Strain</Label><Input name="female_2_strain" defaultValue={editingCage?.female_2_strain || ""} placeholder="BPAN / WT" /></div>
                     <div>
-                      <Label className="text-xs">Female 2 Genotype</Label>
+                      <Label className="text-xs">♀2 Genotype</Label>
                       <Select name="female_2_genotype" defaultValue={editingCage?.female_2_genotype || ""}>
                         <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="homo">HOMO</SelectItem>
+                          <SelectItem value="homo">Homo</SelectItem>
                           <SelectItem value="wt">WT</SelectItem>
-                          <SelectItem value="het">HET</SelectItem>
+                          <SelectItem value="het">Het</SelectItem>
                         </SelectContent>
                       </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">♀2 DOB</Label>
+                      <Input name="female_2_birth_date" type="date" defaultValue={editingCage?.female_2_birth_date || ""} />
                     </div>
                   </>
                 )}
                 {cageFormType === "harem" && (
                   <>
-                    <div><Label className="text-xs">Female 3 Strain</Label><Input name="female_3_strain" defaultValue={editingCage?.female_3_strain || ""} placeholder="BPAN / WT" /></div>
                     <div>
-                      <Label className="text-xs">Female 3 Genotype</Label>
+                      <Label className="text-xs">♀3 Genotype</Label>
                       <Select name="female_3_genotype" defaultValue={editingCage?.female_3_genotype || ""}>
                         <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="homo">HOMO</SelectItem>
+                          <SelectItem value="homo">Homo</SelectItem>
                           <SelectItem value="wt">WT</SelectItem>
-                          <SelectItem value="het">HET</SelectItem>
+                          <SelectItem value="het">Het</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
+                    <div>
+                      <Label className="text-xs">♀3 DOB</Label>
+                      <Input name="female_3_birth_date" type="date" defaultValue={editingCage?.female_3_birth_date || ""} />
+                    </div>
                   </>
                 )}
-                <div><Label className="text-xs">Male Strain</Label><Input name="male_strain" defaultValue={editingCage?.male_strain || ""} placeholder="BPAN / WT" /></div>
                 <div>
-                  <Label className="text-xs">Male Genotype</Label>
+                  <Label className="text-xs">♂ Genotype</Label>
                   <Select name="male_genotype" defaultValue={editingCage?.male_genotype || ""}>
                     <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="hemi">HEMI</SelectItem>
+                      <SelectItem value="hemi">Hemi</SelectItem>
                       <SelectItem value="wt">WT</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">♂ DOB</Label>
+                  <Input name="male_birth_date" type="date" defaultValue={editingCage?.male_birth_date || ""} />
                 </div>
               </div>
             </div>
@@ -2984,7 +3042,12 @@ export function ColonyClient({
               act(editingHousingCage
                 ? actions.updateHousingCage(editingHousingCage.id, fd)
                 : actions.createHousingCage(fd)
-              ).then(() => { setShowAddHousingCage(false); setEditingHousingCage(null); });
+              ).then((result) => {
+                if (!result.error) {
+                  setShowAddHousingCage(false);
+                  setEditingHousingCage(null);
+                }
+              });
             }}
           >
             <div className="grid gap-3 sm:grid-cols-2">
@@ -3006,6 +3069,16 @@ export function ColonyClient({
                 <Label className="text-xs">Max Mice</Label>
                 <Input name="max_occupancy" type="number" min="1" max="10" defaultValue={editingHousingCage?.max_occupancy || 5} />
               </div>
+            </div>
+            <div>
+              <Label className="text-xs">Cage Sex</Label>
+              <Select name="cage_sex" defaultValue={editingHousingCage?.cage_sex || "female"}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="female">Female</SelectItem>
+                  <SelectItem value="male">Male</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label className="text-xs">Cage Type</Label>

@@ -182,7 +182,7 @@ interface BehaviorImportDialogProps {
     experimentType: string,
     entries: {
       animalId: string;
-      measures: Record<string, string | number | null>;
+      measures: Record<string, string | number | null | string[]>;
       notes?: string;
     }[]
   ) => Promise<{
@@ -386,7 +386,7 @@ export function BehaviorImportDialog({
         string,
         {
           animalId: string;
-          measures: Record<string, string | number | null>;
+          measures: Record<string, string | number | null | string[]>;
         }
       >();
 
