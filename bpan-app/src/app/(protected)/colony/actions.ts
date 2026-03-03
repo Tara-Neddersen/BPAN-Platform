@@ -75,12 +75,16 @@ function getBreederCagePayload(formData: FormData) {
     cage_type: cageType,
     female_1_strain: (formData.get("female_1_strain") as string) || null,
     female_1_genotype: (formData.get("female_1_genotype") as string) || null,
+    female_1_birth_date: (formData.get("female_1_birth_date") as string) || null,
     female_2_strain: (formData.get("female_2_strain") as string) || null,
     female_2_genotype: (formData.get("female_2_genotype") as string) || null,
+    female_2_birth_date: (formData.get("female_2_birth_date") as string) || null,
     female_3_strain: (formData.get("female_3_strain") as string) || null,
     female_3_genotype: (formData.get("female_3_genotype") as string) || null,
+    female_3_birth_date: (formData.get("female_3_birth_date") as string) || null,
     male_strain: (formData.get("male_strain") as string) || null,
     male_genotype: (formData.get("male_genotype") as string) || null,
+    male_birth_date: (formData.get("male_birth_date") as string) || null,
     is_temporary_split: getBooleanField(formData, "is_temporary_split") || cageType === "temp_split",
     linked_breeder_cage_id: (formData.get("linked_breeder_cage_id") as string) || null,
     male_location: (formData.get("male_location") as string) || "this_cage",
@@ -365,12 +369,16 @@ export async function createTempSplitCageFromBreeder(breederCageId: string) {
     cage_type: "temp_split",
     female_1_strain: null,
     female_1_genotype: source.female_1_genotype || null,
+    female_1_birth_date: source.female_1_birth_date || null,
     female_2_strain: null,
     female_2_genotype: null,
+    female_2_birth_date: null,
     female_3_strain: null,
     female_3_genotype: null,
+    female_3_birth_date: null,
     male_strain: null,
     male_genotype: source.male_genotype || null,
+    male_birth_date: source.male_birth_date || null,
     is_temporary_split: true,
     linked_breeder_cage_id: source.id,
     male_location: "linked_cage",
@@ -422,6 +430,23 @@ export async function deleteBreederCage(id: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
+
+  const { data: cage, error: cageError } = await supabase
+    .from("breeder_cages")
+    .select("id, is_temporary_split, linked_breeder_cage_id")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .single();
+  if (cageError || !cage) return { error: cageError?.message || "Breeder cage not found." };
+
+  if (cage.is_temporary_split && cage.linked_breeder_cage_id) {
+    const { error: reassignError } = await supabase
+      .from("cohorts")
+      .update({ breeder_cage_id: cage.linked_breeder_cage_id })
+      .eq("user_id", user.id)
+      .eq("breeder_cage_id", id);
+    if (reassignError) return { error: reassignError.message };
+  }
 
   await supabase.from("tasks").delete().eq("user_id", user.id).eq("source_type", "reminder").eq("source_id", id);
   await supabase.from("workspace_calendar_events").delete().eq("user_id", user.id).eq("source_type", "breeder_cage").eq("source_id", id);
@@ -2180,6 +2205,7 @@ export async function createHousingCage(formData: FormData) {
     user_id: user.id,
     cage_label: formData.get("cage_label") as string,
     cage_id: (formData.get("cage_id") as string) || null,
+    cage_sex: (formData.get("cage_sex") as string) || "female",
     location: (formData.get("location") as string) || null,
     max_occupancy: parseInt(formData.get("max_occupancy") as string) || 5,
     cage_type: (formData.get("cage_type") as string) || "standard",
@@ -2201,6 +2227,7 @@ export async function updateHousingCage(id: string, formData: FormData) {
     .update({
       cage_label: formData.get("cage_label") as string,
       cage_id: (formData.get("cage_id") as string) || null,
+      cage_sex: (formData.get("cage_sex") as string) || "female",
       location: (formData.get("location") as string) || null,
       max_occupancy: parseInt(formData.get("max_occupancy") as string) || 5,
       cage_type: (formData.get("cage_type") as string) || "standard",
@@ -2236,8 +2263,15 @@ export async function assignAnimalToCage(animalId: string, housingCageId: string
   if (housingCageId) {
     const { data: cage } = await supabase
       .from("housing_cages")
-      .select("max_occupancy")
+      .select("max_occupancy, cage_sex")
       .eq("id", housingCageId)
+      .eq("user_id", user.id)
+      .single();
+
+    const { data: animal } = await supabase
+      .from("animals")
+      .select("sex")
+      .eq("id", animalId)
       .eq("user_id", user.id)
       .single();
 
@@ -2250,6 +2284,10 @@ export async function assignAnimalToCage(animalId: string, housingCageId: string
 
     if (cage && count !== null && count >= cage.max_occupancy) {
       return { error: `Cage is full (${count}/${cage.max_occupancy} mice). Remove an animal first.` };
+    }
+
+    if (cage && animal && cage.cage_sex !== animal.sex) {
+      return { error: `This is a ${cage.cage_sex} cage. Only ${cage.cage_sex} animals can be assigned.` };
     }
   }
 

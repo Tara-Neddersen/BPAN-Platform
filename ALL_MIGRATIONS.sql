@@ -871,6 +871,8 @@ CREATE TABLE IF NOT EXISTS public.housing_cages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
   cage_label text NOT NULL,
+  cage_id text,
+  cage_sex text DEFAULT 'female' CHECK (cage_sex IN ('female', 'male')),
   location text,
   max_occupancy int DEFAULT 5,
   cage_type text DEFAULT 'standard',
