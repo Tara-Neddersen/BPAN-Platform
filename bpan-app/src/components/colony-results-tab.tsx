@@ -29,9 +29,15 @@ const ROTAROD_AVG_LATENCY_KEY = "latency_to_fall_sec";
 const ROTAROD_AVG_RPM_KEY = "rpm_at_fall";
 const ROTAROD_TRIAL_LATENCY_KEYS = ["trial_1_sec", "trial_2_sec", "trial_3_sec"] as const;
 const ROTAROD_TRIAL_RPM_KEYS = ["trial_1_rpm", "trial_2_rpm", "trial_3_rpm"] as const;
+const STAMINA_AVG_KEY = "avg_duration_sec";
+const STAMINA_TRIAL_KEYS = ["test_1_sec", "test_2_sec", "test_3_sec"] as const;
 
 function isRotarodTrialWithAveragesExperiment(exp: string) {
   return exp === "rotarod_test1" || exp === "rotarod_test2";
+}
+
+function isStaminaWithAverageExperiment(exp: string) {
+  return exp === "stamina";
 }
 
 function toNumericOrNull(value: string | number | null | undefined) {
@@ -44,6 +50,18 @@ function applyDerivedMeasuresForExperiment(
   exp: string,
   measures: Record<string, string | number | null>
 ): Record<string, string | number | null> {
+  if (isStaminaWithAverageExperiment(exp)) {
+    const next = { ...measures };
+    const staminaValues = STAMINA_TRIAL_KEYS.map((key) => toNumericOrNull(next[key])).filter(
+      (value): value is number => value !== null
+    );
+    next[STAMINA_AVG_KEY] =
+      staminaValues.length > 0
+        ? Number((staminaValues.reduce((sum, value) => sum + value, 0) / staminaValues.length).toFixed(2))
+        : toNumericOrNull(next[STAMINA_AVG_KEY]) ?? toNumericOrNull(next.duration_sec);
+    return next;
+  }
+
   if (!isRotarodTrialWithAveragesExperiment(exp)) return measures;
 
   const next = { ...measures };
@@ -68,8 +86,9 @@ function applyDerivedMeasuresForExperiment(
 
 function isDerivedReadOnlyField(exp: string, fieldKey: string) {
   return (
-    isRotarodTrialWithAveragesExperiment(exp) &&
-    (fieldKey === ROTAROD_AVG_LATENCY_KEY || fieldKey === ROTAROD_AVG_RPM_KEY)
+    (isRotarodTrialWithAveragesExperiment(exp) &&
+      (fieldKey === ROTAROD_AVG_LATENCY_KEY || fieldKey === ROTAROD_AVG_RPM_KEY)) ||
+    (isStaminaWithAverageExperiment(exp) && fieldKey === STAMINA_AVG_KEY)
   );
 }
 
@@ -135,8 +154,10 @@ const DEFAULT_MEASURES: Record<string, MeasureField[]> = {
     { key: "rpm_at_fall", label: "Avg RPM at Fall", type: "number" },
   ],
   stamina: [
-    { key: "duration_sec", label: "Duration at 10 RPM", unit: "sec", type: "number" },
-    { key: "distance_m", label: "Distance", unit: "m", type: "number" },
+    { key: "test_1_sec", label: "Test 1", unit: "sec", type: "number" },
+    { key: "test_2_sec", label: "Test 2", unit: "sec", type: "number" },
+    { key: "test_3_sec", label: "Test 3", unit: "sec", type: "number" },
+    { key: STAMINA_AVG_KEY, label: "Average", unit: "sec", type: "number" },
   ],
   blood_draw: [
     { key: "volume_ul", label: "Volume Collected", unit: "µL", type: "number" },
@@ -301,6 +322,16 @@ export function ColonyResultsTab({
         changed = true;
       }
       return changed ? next : prev;
+    });
+  }, []);
+
+  useEffect(() => {
+    setHiddenFields((prev) => {
+      const current = prev.stamina;
+      if (!current || current.size === 0 || !current.has(STAMINA_AVG_KEY)) return prev;
+      const next = { ...prev, stamina: new Set(current) };
+      next.stamina.delete(STAMINA_AVG_KEY);
+      return next;
     });
   }, []);
 
