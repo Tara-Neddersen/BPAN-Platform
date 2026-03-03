@@ -181,7 +181,6 @@ interface ColonyClientProps {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     createTempSplitCageFromBreeder: (breederCageId: string) => Promise<{ success?: boolean; error?: string }>;
-    normalizeBreederMaleGenotypes: () => Promise<{ success?: boolean; error?: string }>;
     deleteBreederCage: (id: string) => Promise<{ success?: boolean; error?: string }>;
     createCohort: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateCohort: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -1403,17 +1402,7 @@ export function ColonyClient({
 
         {/* ─── Breeders Tab ─────────────────────────────────────── */}
         <TabsContent value="breeders" className="space-y-4">
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={async () => {
-                const result = await act(actions.normalizeBreederMaleGenotypes());
-                if (!result.error) toast.success("Normalized breeder male genotypes.");
-              }}
-            >
-              Normalize Male Genotypes
-            </Button>
+          <div className="flex justify-end">
             <Button onClick={() => setShowAddCage(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Breeder Cage</Button>
           </div>
           {cages.length === 0 ? (
