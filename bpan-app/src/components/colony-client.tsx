@@ -49,11 +49,13 @@ const BREEDER_CAGE_TYPE_LABELS: Record<string, string> = {
   normal: "Normal",
   trio: "Trio Breeding",
   harem: "Harem Cage",
+  temp_split: "Temp Split",
 };
 const FEMALE_SLOT_COUNT: Record<string, number> = {
   normal: 1,
   trio: 2,
   harem: 3,
+  temp_split: 1,
 };
 
 const EXPERIMENT_LABELS: Record<string, string> = {
@@ -364,7 +366,13 @@ export function ColonyClient({
   const [showGenerateCageChanges, setShowGenerateCageChanges] = useState(false);
   const [showAddHousingCage, setShowAddHousingCage] = useState(false);
   const [editingCage, setEditingCage] = useState<BreederCage | null>(null);
-  const [cageFormType, setCageFormType] = useState<"normal" | "trio" | "harem">("normal");
+  const [cageFormType, setCageFormType] = useState<"normal" | "trio" | "harem" | "temp_split">("normal");
+  const [newCohortSeed, setNewCohortSeed] = useState<null | {
+    breederCageId: string;
+    birthDate: string;
+    litterSize: number | null;
+    suggestedName: string;
+  }>(null);
   const [editingCohort, setEditingCohort] = useState<Cohort | null>(null);
   const [editingAnimal, setEditingAnimal] = useState<Animal | null>(null);
   const [editingTP, setEditingTP] = useState<ColonyTimepoint | null>(null);
@@ -382,7 +390,7 @@ export function ColonyClient({
 
   useEffect(() => {
     if (editingCage?.cage_type && editingCage.cage_type in FEMALE_SLOT_COUNT) {
-      setCageFormType(editingCage.cage_type as "normal" | "trio" | "harem");
+      setCageFormType(editingCage.cage_type as "normal" | "trio" | "harem" | "temp_split");
       return;
     }
     if (showAddCage) setCageFormType("normal");
@@ -767,6 +775,13 @@ export function ColonyClient({
     fd.set("notes", overrides?.notes ?? c.notes ?? "");
     return fd;
   }
+
+  const pendingBreederLitters = useMemo(() => {
+    return cages.filter((c) => {
+      if (!c.pup_birth_date || c.pups_weaned) return false;
+      return !cohorts.some((co) => co.breeder_cage_id === c.id && co.birth_date === c.pup_birth_date);
+    });
+  }, [cages, cohorts]);
 
   return (
     <>
@@ -1174,8 +1189,49 @@ export function ColonyClient({
             >
               <Calendar className="h-4 w-4 mr-1" /> Batch Schedule
             </Button>
-            <Button onClick={() => setShowAddCohort(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Cohort</Button>
+            <Button onClick={() => { setNewCohortSeed(null); setShowAddCohort(true); }} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Cohort</Button>
           </div>
+          {pendingBreederLitters.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">New Litters From Breeders</div>
+              {pendingBreederLitters.map((c) => (
+                <Card key={`pending-litter-${c.id}`} className="border-amber-300 bg-amber-50/60">
+                  <CardContent className="py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-sm flex items-center gap-2">
+                          {c.name}
+                          <Badge className="bg-pink-100 text-pink-700 text-xs">🐣 New litter</Badge>
+                          <Badge className="bg-amber-100 text-amber-700 text-xs">Not weaned</Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          Pup DOB: {c.pup_birth_date}
+                          {c.pup_wean_due_date ? ` · Wean by: ${c.pup_wean_due_date}` : ""}
+                          {c.barcode ? ` · ${c.barcode}` : ""}
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          setNewCohortSeed({
+                            breederCageId: c.id,
+                            birthDate: c.pup_birth_date as string,
+                            litterSize: null,
+                            suggestedName: `${c.name} Litter`,
+                          });
+                          setShowAddCohort(true);
+                        }}
+                      >
+                        <Plus className="h-3 w-3 mr-1" /> Add As Cohort
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
           {cohorts.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">No cohorts yet.</div>
           ) : (
@@ -1185,6 +1241,7 @@ export function ColonyClient({
                 const cohortAnimals = animals.filter((a) => a.cohort_id === c.id && a.status === "active");
                 const age = daysOld(c.birth_date);
                 const cohortExpCount = experiments.filter(e => cohortAnimals.some(a => a.id === e.animal_id)).length;
+                const awaitingWean = !!(cage && cage.pup_birth_date === c.birth_date && !cage.pups_weaned);
                 return (
                   <Card key={c.id}>
                     <CardContent className="py-3">
@@ -1194,6 +1251,9 @@ export function ColonyClient({
                             {c.name}
                             <Badge variant="outline" className="text-xs">{age} days old</Badge>
                             <Badge variant="secondary" className="text-xs">{cohortAnimals.length} animals</Badge>
+                            {awaitingWean && (
+                              <Badge className="bg-amber-100 text-amber-700 text-xs">🐣 Not weaned</Badge>
+                            )}
                             {cohortExpCount > 0 && (
                               <Badge variant="secondary" className="text-xs text-green-600">{cohortExpCount} experiments</Badge>
                             )}
@@ -1201,6 +1261,7 @@ export function ColonyClient({
                           <div className="text-xs text-muted-foreground mt-0.5">
                             Born: {c.birth_date}{cage ? ` · From: ${cage.name}` : ""}
                             {c.litter_size ? ` · Litter: ${c.litter_size}` : ""}
+                            {awaitingWean && cage?.pup_wean_due_date ? ` · Wean by: ${cage.pup_wean_due_date}` : ""}
                           </div>
                         </div>
                         <div className="flex gap-1">
@@ -1996,28 +2057,28 @@ export function ColonyClient({
       </Dialog>
 
       {/* Add / Edit Cohort */}
-      <Dialog open={showAddCohort || !!editingCohort} onOpenChange={(v) => { if (!v) { setShowAddCohort(false); setEditingCohort(null); } }}>
+      <Dialog open={showAddCohort || !!editingCohort} onOpenChange={(v) => { if (!v) { setShowAddCohort(false); setEditingCohort(null); setNewCohortSeed(null); } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{editingCohort ? "Edit Cohort" : "Add Cohort"}</DialogTitle></DialogHeader>
           <form onSubmit={(e) => {
             if (editingCohort) {
-              handleFormAction((fd) => actions.updateCohort(editingCohort.id, fd), e, () => setEditingCohort(null));
+              handleFormAction((fd) => actions.updateCohort(editingCohort.id, fd), e, () => { setEditingCohort(null); setNewCohortSeed(null); });
             } else {
-              handleFormAction(actions.createCohort, e, () => setShowAddCohort(false));
+              handleFormAction(actions.createCohort, e, () => { setShowAddCohort(false); setNewCohortSeed(null); });
             }
           }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="text-xs">Cohort Name *</Label>
-                <Input name="name" placeholder="e.g. BPAN 1" required defaultValue={editingCohort?.name || ""} />
+                <Input name="name" placeholder="e.g. BPAN 1" required defaultValue={editingCohort?.name || newCohortSeed?.suggestedName || ""} />
               </div>
               <div>
                 <Label className="text-xs">Birth Date *</Label>
-                <Input name="birth_date" type="date" required defaultValue={editingCohort?.birth_date || ""} />
+                <Input name="birth_date" type="date" required defaultValue={editingCohort?.birth_date || newCohortSeed?.birthDate || ""} />
               </div>
               <div>
                 <Label className="text-xs">Breeder Cage</Label>
-                <Select name="breeder_cage_id" defaultValue={editingCohort?.breeder_cage_id || ""}>
+                <Select name="breeder_cage_id" defaultValue={editingCohort?.breeder_cage_id || newCohortSeed?.breederCageId || ""}>
                   <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
                   <SelectContent>
                     {cages.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -2026,7 +2087,7 @@ export function ColonyClient({
               </div>
               <div>
                 <Label className="text-xs">Litter Size</Label>
-                <Input name="litter_size" type="number" placeholder="Optional" defaultValue={editingCohort?.litter_size ?? ""} />
+                <Input name="litter_size" type="number" placeholder="Optional" defaultValue={editingCohort?.litter_size ?? newCohortSeed?.litterSize ?? ""} />
               </div>
             </div>
             <div>
@@ -2054,7 +2115,7 @@ export function ColonyClient({
               </div>
             )}
             <DialogFooter>
-              <Button variant="outline" type="button" onClick={() => { setShowAddCohort(false); setEditingCohort(null); }}>Cancel</Button>
+              <Button variant="outline" type="button" onClick={() => { setShowAddCohort(false); setEditingCohort(null); setNewCohortSeed(null); }}>Cancel</Button>
               <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}{editingCohort ? "Save Changes" : "Add Cohort"}</Button>
             </DialogFooter>
           </form>
@@ -2073,7 +2134,16 @@ export function ColonyClient({
             }
           }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
-              <div><Label className="text-xs">Cage Name *</Label><Input name="name" required placeholder="e.g. Breeder A" defaultValue={editingCage?.name || ""} /></div>
+              <div>
+                <Label className="text-xs">Cage Name {cageFormType === "temp_split" ? "(auto-generated)" : "*"}</Label>
+                <Input
+                  name="name"
+                  required={cageFormType !== "temp_split"}
+                  placeholder={cageFormType === "temp_split" ? "Auto-generated from linked cage" : "e.g. Breeder A"}
+                  defaultValue={editingCage?.name || ""}
+                  readOnly={cageFormType === "temp_split"}
+                />
+              </div>
               <div><Label className="text-xs">Barcode</Label><Input name="barcode" placeholder="Scan or enter barcode" defaultValue={editingCage?.barcode || ""} /></div>
               <div><Label className="text-xs">Strain</Label><Input name="strain" placeholder="e.g. BPAN / ATP13A2" defaultValue={editingCage?.strain || ""} /></div>
               <div>
@@ -2081,13 +2151,14 @@ export function ColonyClient({
                 <Select
                   name="cage_type"
                   value={cageFormType}
-                  onValueChange={(v) => setCageFormType((v as "normal" | "trio" | "harem") || "normal")}
+                  onValueChange={(v) => setCageFormType((v as "normal" | "trio" | "harem" | "temp_split") || "normal")}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="normal">Normal</SelectItem>
                     <SelectItem value="trio">Trio breeding</SelectItem>
                     <SelectItem value="harem">Harem cage</SelectItem>
+                    <SelectItem value="temp_split">Temp split</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -2110,7 +2181,7 @@ export function ColonyClient({
                     </SelectContent>
                   </Select>
                 </div>
-                {cageFormType !== "normal" && (
+                {(cageFormType === "trio" || cageFormType === "harem") && (
                   <>
                     <div><Label className="text-xs">Female 2 Strain</Label><Input name="female_2_strain" defaultValue={editingCage?.female_2_strain || ""} placeholder="BPAN / WT" /></div>
                     <div>
@@ -2157,11 +2228,12 @@ export function ColonyClient({
             </div>
             <Separator />
             <div className="space-y-2">
-              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                <input type="hidden" name="is_temporary_split" value="false" />
-                <input type="checkbox" name="is_temporary_split" value="true" className="h-4 w-4" defaultChecked={editingCage?.is_temporary_split || false} />
-                Temporary split cage
-              </label>
+              <input type="hidden" name="is_temporary_split" value={cageFormType === "temp_split" ? "true" : "false"} />
+              {cageFormType === "temp_split" && (
+                <div className="rounded-md border border-sky-200 bg-sky-50/60 p-2 text-xs text-sky-700">
+                  Temp split cages are auto-named and track overflow housing during breeding or pregnancy.
+                </div>
+              )}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <Label className="text-xs">Linked Breeding Cage</Label>

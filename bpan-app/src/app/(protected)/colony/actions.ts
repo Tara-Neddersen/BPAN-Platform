@@ -66,12 +66,13 @@ function getBreederCagePayload(formData: FormData) {
   const pupBirthDate = (formData.get("pup_birth_date") as string) || null;
   const pupsWeaned = getBooleanField(formData, "pups_weaned");
   const explicitWeanDue = (formData.get("pup_wean_due_date") as string) || null;
+  const cageType = (formData.get("cage_type") as string) || "normal";
 
   return {
     name: formData.get("name") as string,
     strain: (formData.get("strain") as string) || null,
     barcode: (formData.get("barcode") as string) || null,
-    cage_type: (formData.get("cage_type") as string) || "normal",
+    cage_type: cageType,
     female_1_strain: (formData.get("female_1_strain") as string) || null,
     female_1_genotype: (formData.get("female_1_genotype") as string) || null,
     female_2_strain: (formData.get("female_2_strain") as string) || null,
@@ -80,7 +81,7 @@ function getBreederCagePayload(formData: FormData) {
     female_3_genotype: (formData.get("female_3_genotype") as string) || null,
     male_strain: (formData.get("male_strain") as string) || null,
     male_genotype: (formData.get("male_genotype") as string) || null,
-    is_temporary_split: getBooleanField(formData, "is_temporary_split"),
+    is_temporary_split: getBooleanField(formData, "is_temporary_split") || cageType === "temp_split",
     linked_breeder_cage_id: (formData.get("linked_breeder_cage_id") as string) || null,
     male_location: (formData.get("male_location") as string) || "this_cage",
     location: (formData.get("location") as string) || null,
@@ -95,6 +96,31 @@ function getBreederCagePayload(formData: FormData) {
     last_check_date: (formData.get("last_check_date") as string) || null,
     check_interval_days: parseInt(formData.get("check_interval_days") as string) || 7,
     notes: (formData.get("notes") as string) || null,
+  };
+}
+
+async function applyTempSplitName(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  payload: ReturnType<typeof getBreederCagePayload>
+) {
+  if (payload.cage_type !== "temp_split") return payload;
+
+  let linkedName: string | null = null;
+  if (payload.linked_breeder_cage_id) {
+    const { data } = await supabase
+      .from("breeder_cages")
+      .select("name")
+      .eq("id", payload.linked_breeder_cage_id)
+      .maybeSingle();
+    linkedName = (data?.name as string) || null;
+  }
+
+  const base = linkedName || payload.barcode || "Breeder";
+  return {
+    ...payload,
+    name: `${base} Temp Split`,
+    is_temporary_split: true,
   };
 }
 
@@ -159,7 +185,7 @@ export async function createBreederCage(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const payload = getBreederCagePayload(formData);
+  const payload = await applyTempSplitName(supabase, getBreederCagePayload(formData));
   const { data, error } = await supabase.from("breeder_cages").insert({
     user_id: user.id,
     ...payload,
@@ -176,7 +202,7 @@ export async function updateBreederCage(id: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const payload = getBreederCagePayload(formData);
+  const payload = await applyTempSplitName(supabase, getBreederCagePayload(formData));
   const { data, error } = await supabase
     .from("breeder_cages")
     .update(payload)
