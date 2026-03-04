@@ -229,6 +229,9 @@ export function ExperimentsClient({
         <GanttView
           experiments={experiments}
           timepoints={timepoints}
+          animalExperiments={animalExperiments}
+          animals={animals}
+          cohorts={cohorts}
           onEdit={setEditingExperiment}
         />
       )}
@@ -1833,12 +1836,188 @@ function ExperimentCard({
 function GanttView({
   experiments,
   timepoints,
+  animalExperiments,
+  animals,
+  cohorts,
   onEdit,
 }: {
   experiments: Experiment[];
   timepoints: ExperimentTimepoint[];
+  animalExperiments: AnimalExperiment[];
+  animals: Animal[];
+  cohorts: Cohort[];
   onEdit: (e: Experiment) => void;
 }) {
+  const animalMap = new Map(animals.map((animal) => [animal.id, animal]));
+  const cohortMap = new Map(cohorts.map((cohort) => [cohort.id, cohort]));
+  const colonyRows = Array.from(
+    animalExperiments
+      .filter((ae) => {
+        if (!ae.scheduled_date) return false;
+        if (ae.status !== "scheduled" && ae.status !== "in_progress" && ae.status !== "completed") return false;
+        const isSyntheticCompletedFromResults =
+          ae.status === "completed" &&
+          !!ae.completed_date &&
+          ae.scheduled_date === ae.completed_date &&
+          !ae.notes &&
+          ae.created_at === ae.updated_at;
+        return !isSyntheticCompletedFromResults;
+      })
+      .reduce((groups, ae) => {
+        const animal = animalMap.get(ae.animal_id);
+        const cohortName = animal ? (cohortMap.get(animal.cohort_id)?.name || "Unknown Cohort") : "Unknown Cohort";
+        const timepointLabel = ae.timepoint_age_days != null ? `${ae.timepoint_age_days}d` : "Ad hoc";
+        const key = [
+          animal?.cohort_id || "unknown",
+          ae.timepoint_age_days ?? "adhoc",
+          ae.experiment_type,
+          ae.scheduled_date,
+          ae.status,
+        ].join("::");
+        const existing = groups.get(key);
+        const spanDays = COLONY_MULTI_DAY_SPANS[ae.experiment_type] ?? 1;
+        const endDate = new Date(`${ae.scheduled_date}T12:00:00`);
+        endDate.setDate(endDate.getDate() + spanDays - 1);
+
+        if (existing) {
+          existing.count += 1;
+          return groups;
+        }
+
+        groups.set(key, {
+          key,
+          cohortName,
+          timepointLabel,
+          typeLabel: COLONY_EXP_LABELS[ae.experiment_type] || ae.experiment_type,
+          status: ae.status,
+          startDate: ae.scheduled_date,
+          endDate: formatDateInLA(endDate),
+          count: 1,
+        });
+        return groups;
+      }, new Map<string, {
+        key: string;
+        cohortName: string;
+        timepointLabel: string;
+        typeLabel: string;
+        status: string;
+        startDate: string;
+        endDate: string;
+        count: number;
+      }>())
+      .values()
+  ).sort((a, b) =>
+    a.startDate.localeCompare(b.startDate)
+    || a.cohortName.localeCompare(b.cohortName)
+    || a.timepointLabel.localeCompare(b.timepointLabel)
+    || a.typeLabel.localeCompare(b.typeLabel)
+  );
+
+  if (colonyRows.length > 0) {
+    const allDates = colonyRows.flatMap((row) => [row.startDate, row.endDate]);
+    const minDate = new Date(allDates.sort()[0]);
+    const maxDate = new Date(allDates.sort().reverse()[0]);
+
+    minDate.setDate(minDate.getDate() - 3);
+    maxDate.setDate(maxDate.getDate() + 3);
+
+    const totalDays = Math.max(1, Math.ceil((maxDate.getTime() - minDate.getTime()) / (1000 * 60 * 60 * 24)));
+
+    function dayOffset(dateStr: string) {
+      return Math.ceil((new Date(dateStr).getTime() - minDate.getTime()) / (1000 * 60 * 60 * 24));
+    }
+
+    const months: { label: string; offset: number; width: number }[] = [];
+    const cursor = new Date(minDate);
+    cursor.setDate(1);
+    while (cursor <= maxDate) {
+      const mStart = Math.max(0, dayOffset(cursor.toISOString().split("T")[0]));
+      const nextMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+      const mEnd = Math.min(totalDays, dayOffset(nextMonth.toISOString().split("T")[0]));
+      months.push({
+        label: cursor.toLocaleDateString("en-US", { month: "short", year: "numeric" }),
+        offset: mStart,
+        width: Math.max(mEnd - mStart, 1),
+      });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+
+    const todayOffset = dayOffset(formatDateInLA(new Date()));
+
+    return (
+      <div className="space-y-2">
+        <div className="overflow-x-auto border rounded-lg">
+          <div style={{ minWidth: `${Math.max(totalDays * 8, 600)}px` }}>
+            <div className="flex border-b bg-muted">
+              <div className="w-56 flex-shrink-0 px-3 py-1.5 text-xs font-medium">Cohort Schedule</div>
+              <div className="flex-1 relative flex">
+                {months.map((m) => (
+                  <div
+                    key={m.label}
+                    style={{ left: `${(m.offset / totalDays) * 100}%`, width: `${(m.width / totalDays) * 100}%` }}
+                    className="absolute text-xs text-muted-foreground text-center py-1.5"
+                  >
+                    {m.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {colonyRows.map((row) => {
+              const start = dayOffset(row.startDate);
+              const end = dayOffset(row.endDate);
+              const width = Math.max(end - start + 1, 1);
+              const barClass =
+                row.status === "completed" ? "bg-emerald-500" :
+                row.status === "in_progress" ? "bg-amber-500" :
+                "bg-indigo-500";
+
+              return (
+                <div key={row.key} className="flex border-b hover:bg-accent/30 transition-colors">
+                  <div
+                    className="w-56 flex-shrink-0 px-3 py-2 text-xs truncate"
+                    title={`${row.cohortName} • ${row.timepointLabel} • ${row.typeLabel}`}
+                  >
+                    <span className="font-medium">{row.cohortName}</span>
+                    <span className="text-muted-foreground"> · {row.timepointLabel} · {row.typeLabel}</span>
+                  </div>
+                  <div className="flex-1 relative py-1.5">
+                    {todayOffset >= 0 && todayOffset <= totalDays && (
+                      <div
+                        className="absolute top-0 bottom-0 w-px bg-red-400 z-10"
+                        style={{ left: `${(todayOffset / totalDays) * 100}%` }}
+                      />
+                    )}
+                    <div
+                      className={`absolute h-5 rounded-full flex items-center px-2 text-[10px] font-medium text-white ${barClass}`}
+                      style={{
+                        left: `${(start / totalDays) * 100}%`,
+                        width: `${(width / totalDays) * 100}%`,
+                        minWidth: "24px",
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                      }}
+                      title={`${row.startDate}${row.endDate !== row.startDate ? ` → ${row.endDate}` : ""}`}
+                    >
+                      {row.count} mouse{row.count === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-indigo-500 inline-block" /> Scheduled</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-amber-500 inline-block" /> In Progress</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-500 inline-block" /> Completed</span>
+          <span className="flex items-center gap-1"><span className="w-px h-3 bg-red-400 inline-block" /> Today</span>
+        </div>
+      </div>
+    );
+  }
+
   // Find date range
   const dated = experiments.filter((e) => e.start_date);
   if (dated.length === 0) {
