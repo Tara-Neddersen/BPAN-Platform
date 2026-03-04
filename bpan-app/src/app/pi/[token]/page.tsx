@@ -85,6 +85,24 @@ interface PortalData {
   cohorts: Cohort[];
   timepoints: ColonyTimepoint[];
   calendar_events: WorkspaceCalendarEvent[];
+  meeting_actions: Array<{
+    meeting_id: string;
+    meeting_title: string;
+    meeting_date: string;
+    text: string;
+    done: boolean;
+    due_date: string | null;
+    owner: string | null;
+  }>;
+  shared_tasks: Array<{
+    id: string;
+    title: string;
+    description: string | null;
+    due_date: string | null;
+    status: string;
+    priority: string;
+    source_label: string | null;
+  }>;
   photos: PortalPhoto[];
   stats: {
     total_animals: number; active_animals: number;
@@ -1354,6 +1372,112 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
   })();
 
   const hasColonyResults = data.can_see.includes("colony_results") && data.colony_results.length > 0;
+  const meetingActions = [...(data.meeting_actions || [])].sort((a, b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    const dueA = a.due_date || "9999-12-31";
+    const dueB = b.due_date || "9999-12-31";
+    if (dueA !== dueB) return dueA.localeCompare(dueB);
+    return b.meeting_date.localeCompare(a.meeting_date);
+  });
+  const meetingActionSections = Array.from(
+    meetingActions.reduce((acc, item) => {
+      const owner = String(item.owner || "").trim() || "Unassigned";
+      if (!acc.has(owner)) acc.set(owner, []);
+      acc.get(owner)!.push(item);
+      return acc;
+    }, new Map<string, typeof meetingActions>())
+  ).sort(([ownerA], [ownerB]) => {
+    if (ownerA === "Tara") return -1;
+    if (ownerB === "Tara") return 1;
+    if (ownerA === "Unassigned") return 1;
+    if (ownerB === "Unassigned") return -1;
+    return ownerA.localeCompare(ownerB);
+  });
+  const sharedTasks = [...(data.shared_tasks || [])].sort((a, b) => {
+    const doneA = a.status === "completed";
+    const doneB = b.status === "completed";
+    if (doneA !== doneB) return doneA ? 1 : -1;
+    const dueA = a.due_date || "9999-12-31";
+    const dueB = b.due_date || "9999-12-31";
+    return dueA.localeCompare(dueB);
+  });
+
+  function renderMeetingActionsCard() {
+    if (meetingActionSections.length === 0) return null;
+    return (
+      <Card>
+        <CardHeader className="py-3 px-4">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <ClipboardCheck className="h-4 w-4" /> Meeting Action Items
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 pb-3">
+          {meetingActionSections.map(([owner, items]) => (
+            <div key={owner} className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{owner}</span>
+                <Badge variant="outline" className="text-[10px]">
+                  {items.filter((item) => item.done).length}/{items.length} done
+                </Badge>
+              </div>
+              {items.map((item, idx) => (
+                <div key={`${owner}-${idx}-${item.meeting_id}`} className="flex items-start gap-2 rounded-md border px-2.5 py-2 text-sm">
+                  <span className={item.done ? "text-green-600" : "text-amber-500"}>
+                    {item.done ? "✓" : "○"}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className={item.done ? "line-through text-muted-foreground" : ""}>{item.text}</div>
+                    <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                      <span>{item.meeting_title}</span>
+                      <span>· {item.meeting_date}</span>
+                      {item.due_date && <span>· Due {item.due_date}</span>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  function renderSharedTasksCard() {
+    if (sharedTasks.length === 0) return null;
+    return (
+      <Card>
+        <CardHeader className="py-3 px-4">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <ClipboardCheck className="h-4 w-4" /> Shared Tasks
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 pb-3">
+          {sharedTasks.map((task) => (
+            <div key={task.id} className="flex items-start gap-2 rounded-md border px-2.5 py-2 text-sm">
+              <span className={task.status === "completed" ? "text-green-600" : "text-amber-500"}>
+                {task.status === "completed" ? "✓" : "○"}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className={task.status === "completed" ? "line-through text-muted-foreground" : ""}>
+                  {task.title}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                  {task.source_label && <span>{task.source_label}</span>}
+                  {task.due_date && <span>· Due {task.due_date}</span>}
+                  <span>· {String(task.priority || "medium")}</span>
+                </div>
+                {task.description && (
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    {task.description}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="min-h-screen" style={{ background: "linear-gradient(135deg, #f8faff 0%, #f0f4ff 40%, #f5f0ff 100%)" }}>
@@ -1428,6 +1552,11 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
             {data.can_see.includes("calendar") && (
               <TabsTrigger value="calendar" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
                 <Calendar className="h-3.5 w-3.5" /> Calendar
+              </TabsTrigger>
+            )}
+            {(meetingActionSections.length > 0 || sharedTasks.length > 0) && (
+              <TabsTrigger value="actions" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
+                <ClipboardCheck className="h-3.5 w-3.5" /> Action Items
               </TabsTrigger>
             )}
             <TabsTrigger value="operator" className="flex-1 gap-1.5 rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">
@@ -1592,6 +1721,9 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
               </Card>
             )}
 
+            {renderMeetingActionsCard()}
+            {renderSharedTasksCard()}
+
             {/* Animals */}
             {data.can_see.includes("animals") && (
               <Card>
@@ -1664,6 +1796,13 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+          )}
+
+          {(meetingActionSections.length > 0 || sharedTasks.length > 0) && (
+            <TabsContent value="actions" className="mt-4">
+              {renderMeetingActionsCard()}
+              {renderSharedTasksCard()}
             </TabsContent>
           )}
 
@@ -1937,6 +2076,9 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
               </CardContent>
             </Card>
           )}
+
+          {renderMeetingActionsCard()}
+          {renderSharedTasksCard()}
 
           {data.can_see.includes("experiments") && (
             <Card>

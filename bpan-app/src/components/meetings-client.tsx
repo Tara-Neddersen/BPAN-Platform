@@ -19,6 +19,8 @@ import { toast } from "sonner";
 import type { MeetingNote, ActionItem } from "@/types";
 import { syncMeetingActionsToTasks } from "@/app/(protected)/tasks/actions";
 
+const DEFAULT_ACTION_OWNER = "Tara";
+
 // ─── Types ───────────────────────────────────────────────────────────────
 
 interface MeetingsClientProps {
@@ -238,6 +240,12 @@ function inferActionDueDate(text: string, meetingDate: string): string | undefin
   return undefined;
 }
 
+function normalizeActionOwner(owner?: string | null): string | undefined {
+  const normalized = String(owner || "").trim();
+  if (!normalized || normalized.toLowerCase() === "unassigned") return undefined;
+  return normalized || undefined;
+}
+
 // ─── Meeting Detail Sub-component ────────────────────────────────────────
 
 function MeetingDetail({
@@ -254,6 +262,7 @@ function MeetingDetail({
   const [content, setContent] = useState(meeting.content);
   const [actionItems, setActionItems] = useState<ActionItem[]>(meeting.action_items || []);
   const [newAction, setNewAction] = useState("");
+  const [newActionOwner, setNewActionOwner] = useState(DEFAULT_ACTION_OWNER);
   const [aiSummary, setAiSummary] = useState(meeting.ai_summary || "");
   const [hasRecoverableDraft, setHasRecoverableDraft] = useState(false);
   const [draftUpdatedAt, setDraftUpdatedAt] = useState<string | null>(null);
@@ -326,14 +335,32 @@ function MeetingDetail({
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      const items: string[] = data.items || [];
+      const items: Array<string | { text?: string; owner?: string | null }> = data.items || [];
       if (items.length === 0) {
         toast.info("No action items found in the notes.");
       } else {
-        const existingTexts = new Set(actionItems.map((a) => a.text.toLowerCase().trim()));
+        const existingKeys = new Set(
+          actionItems.map((a) => `${a.text.toLowerCase().trim()}::${(normalizeActionOwner(a.owner) || "").toLowerCase()}`)
+        );
         const newItems = items
-          .filter((t) => !existingTexts.has(t.toLowerCase().trim()))
-          .map((t) => ({ text: t, done: false, due_date: inferActionDueDate(t, meeting.meeting_date) }));
+          .map((item) => {
+            if (typeof item === "string") {
+              const text = item.trim();
+              return text ? { text } : null;
+            }
+            const text = String(item?.text || "").trim();
+            if (!text) return null;
+            const owner = normalizeActionOwner(item?.owner);
+            return owner ? { text, owner } : { text };
+          })
+          .filter((item): item is { text: string; owner?: string } => Boolean(item))
+          .filter((item) => !existingKeys.has(`${item.text.toLowerCase().trim()}::${(item.owner || "").toLowerCase()}`))
+          .map((item) => ({
+            text: item.text,
+            owner: item.owner,
+            done: false,
+            due_date: inferActionDueDate(item.text, meeting.meeting_date),
+          }));
         setActionItems([...actionItems, ...newItems]);
         toast.success(`Found ${newItems.length} new action item${newItems.length !== 1 ? "s" : ""}!`);
       }
@@ -406,7 +433,15 @@ function MeetingDetail({
   function addAction() {
     if (!newAction.trim()) return;
     const text = newAction.trim();
-    setActionItems([...actionItems, { text, done: false, due_date: inferActionDueDate(text, meeting.meeting_date) }]);
+    setActionItems([
+      ...actionItems,
+      {
+        text,
+        owner: normalizeActionOwner(newActionOwner),
+        done: false,
+        due_date: inferActionDueDate(text, meeting.meeting_date),
+      },
+    ]);
     setNewAction("");
   }
 
@@ -420,6 +455,10 @@ function MeetingDetail({
 
   function setActionDueDate(idx: number, dueDate: string) {
     setActionItems(actionItems.map((a, i) => i === idx ? { ...a, due_date: dueDate || undefined } : a));
+  }
+
+  function setActionOwner(idx: number, owner: string) {
+    setActionItems(actionItems.map((a, i) => i === idx ? { ...a, owner: normalizeActionOwner(owner) } : a));
   }
 
   function handleSave() {
@@ -516,6 +555,31 @@ function MeetingDetail({
     setRecoveringDraft(null);
     toast.success("Unsaved draft discarded");
   }
+
+  const ownerOptions = [
+    "Unassigned",
+    DEFAULT_ACTION_OWNER,
+    ...meeting.attendees,
+    ...actionItems.map((item) => item.owner || ""),
+  ].filter((value, idx, arr) => {
+    const normalized = value.trim();
+    if (!normalized) return false;
+    return arr.findIndex((entry) => entry.trim().toLowerCase() === normalized.toLowerCase()) === idx;
+  });
+
+  const ownerSections = ownerOptions
+    .filter((owner) => owner !== "Unassigned")
+    .map((owner) => ({
+      owner,
+      items: actionItems
+        .map((item, idx) => ({ item, idx }))
+        .filter(({ item }) => (normalizeActionOwner(item.owner) || "") === owner),
+    }))
+    .filter((section) => section.items.length > 0);
+
+  const unassignedItems = actionItems
+    .map((item, idx) => ({ item, idx }))
+    .filter(({ item }) => !normalizeActionOwner(item.owner));
 
   return (
     <>
@@ -676,31 +740,53 @@ function MeetingDetail({
         </div>
         {actionItems.length > 0 && (
           <div className="space-y-1.5 mb-3">
-            {actionItems.map((item, idx) => (
-              <div key={idx} className="flex items-center gap-2 text-sm">
-                <button
-                  className={`h-5 w-5 rounded border flex items-center justify-center flex-shrink-0 ${
-                    item.done ? "bg-green-500 border-green-500 text-white" : "border-gray-300 hover:border-primary"
-                  }`}
-                  onClick={() => toggleAction(idx)}
-                >
-                  {item.done && <Check className="h-3 w-3" />}
-                </button>
-                <div className="flex-1 min-w-0">
-                  <span className={`${item.done ? "line-through text-muted-foreground" : ""}`}>{item.text}</span>
-                  <div className="mt-1">
-                    <Input
-                      type="date"
-                      value={item.due_date || ""}
-                      onChange={(e) => setActionDueDate(idx, e.target.value)}
-                      className="h-7 w-[150px] text-xs"
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </div>
+            {[...ownerSections, ...(unassignedItems.length > 0 ? [{ owner: "Unassigned", items: unassignedItems }] : [])].map((section) => (
+              <div key={section.owner} className="rounded-md border p-2">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-xs font-medium">{section.owner} Action Items</span>
+                  <Badge variant="outline" className="text-[10px]">
+                    {section.items.filter(({ item }) => item.done).length}/{section.items.length} done
+                  </Badge>
                 </div>
-                <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => removeAction(idx)}>
-                  <X className="h-3 w-3" />
-                </Button>
+                <div className="space-y-1.5">
+                  {section.items.map(({ item, idx }) => (
+                    <div key={`${section.owner}-${idx}`} className="flex items-center gap-2 text-sm">
+                      <button
+                        className={`h-5 w-5 rounded border flex items-center justify-center flex-shrink-0 ${
+                          item.done ? "bg-green-500 border-green-500 text-white" : "border-gray-300 hover:border-primary"
+                        }`}
+                        onClick={() => toggleAction(idx)}
+                        type="button"
+                      >
+                        {item.done && <Check className="h-3 w-3" />}
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <span className={`${item.done ? "line-through text-muted-foreground" : ""}`}>{item.text}</span>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          <select
+                            value={normalizeActionOwner(item.owner) || "Unassigned"}
+                            onChange={(e) => setActionOwner(idx, e.target.value)}
+                            className="h-7 rounded-md border bg-background px-2 text-xs"
+                          >
+                            {ownerOptions.map((owner) => (
+                              <option key={owner} value={owner}>{owner}</option>
+                            ))}
+                          </select>
+                          <Input
+                            type="date"
+                            value={item.due_date || ""}
+                            onChange={(e) => setActionDueDate(idx, e.target.value)}
+                            className="h-7 w-[150px] text-xs"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                      </div>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => removeAction(idx)} type="button">
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
@@ -713,6 +799,15 @@ function MeetingDetail({
             className="text-sm"
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAction(); } }}
           />
+          <select
+            value={newActionOwner}
+            onChange={(e) => setNewActionOwner(e.target.value)}
+            className="h-9 rounded-md border bg-background px-2 text-sm"
+          >
+            {ownerOptions.map((owner) => (
+              <option key={`new-${owner}`} value={owner}>{owner}</option>
+            ))}
+          </select>
           <Button variant="outline" size="sm" onClick={addAction} type="button">
             <Plus className="h-4 w-4" />
           </Button>
@@ -836,7 +931,9 @@ export function MeetingsClient({
                               }`}>
                                 {a.done && <Check className="h-2 w-2" />}
                               </div>
-                              <span className={a.done ? "line-through text-muted-foreground" : ""}>{a.text}</span>
+                              <span className={a.done ? "line-through text-muted-foreground" : ""}>
+                                {a.owner ? `${a.owner}: ` : ""}{a.text}
+                              </span>
                             </div>
                           ))}
                           {actionCount > 3 && (

@@ -5,10 +5,19 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
+const PI_SHARED_TASK_TAG = "shared_with_pi";
+
+function withPiShareTag(tags: string[], enabled: boolean) {
+  const next = tags.filter((tag) => tag !== PI_SHARED_TASK_TAG);
+  if (enabled) next.push(PI_SHARED_TASK_TAG);
+  return next;
+}
+
 export async function createTask(formData: FormData) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
+  const showOnPi = formData.get("show_on_pi") === "true";
 
   const { error } = await supabase.from("tasks").insert({
     user_id: user.id,
@@ -20,7 +29,7 @@ export async function createTask(formData: FormData) {
     source_type: (formData.get("source_type") as string) || "manual",
     source_id: (formData.get("source_id") as string) || null,
     source_label: (formData.get("source_label") as string) || null,
-    tags: [],
+    tags: withPiShareTag([], showOnPi),
   });
   if (error) return { error: error.message };
   revalidatePath("/tasks");
@@ -34,6 +43,7 @@ export async function updateTask(id: string, formData: FormData) {
   if (!user) redirect("/auth/login");
 
   const update: Record<string, unknown> = {};
+  let existingTags: string[] | null = null;
   if (formData.has("title")) update.title = formData.get("title");
   if (formData.has("description")) update.description = formData.get("description") || null;
   if (formData.has("due_date")) update.due_date = formData.get("due_date") || null;
@@ -46,6 +56,16 @@ export async function updateTask(id: string, formData: FormData) {
     }
   }
   if (formData.has("notes")) update.notes = formData.get("notes") || null;
+  if (formData.has("show_on_pi_enabled")) {
+    const { data: task } = await supabase
+      .from("tasks")
+      .select("tags")
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .single();
+    existingTags = Array.isArray(task?.tags) ? task.tags : [];
+    update.tags = withPiShareTag(existingTags, formData.get("show_on_pi") === "true");
+  }
 
   const { error } = await supabase.from("tasks").update(update).eq("id", id).eq("user_id", user.id);
   if (error) return { error: error.message };
@@ -83,8 +103,18 @@ export async function deleteTask(id: string) {
   return { success: true };
 }
 
+function ownerTag(owner?: string) {
+  const normalized = String(owner || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return `owner:${normalized.replace(/[^a-z0-9]+/g, "_")}`;
+}
+
 /** Sync meeting action items to the tasks table */
-export async function syncMeetingActionsToTasks(meetingId: string, meetingTitle: string, actionItems: { text: string; done: boolean; due_date?: string }[]) {
+export async function syncMeetingActionsToTasks(
+  meetingId: string,
+  meetingTitle: string,
+  actionItems: { text: string; done: boolean; due_date?: string; owner?: string }[]
+) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
@@ -103,17 +133,22 @@ export async function syncMeetingActionsToTasks(meetingId: string, meetingTitle:
   // Create tasks for new action items
   const newTasks = actionItems
     .filter((a) => !existingTitles.has(a.text.toLowerCase().trim()))
-    .map((a) => ({
-      user_id: user.id,
-      title: a.text,
-      due_date: a.due_date || null,
-      priority: "medium" as const,
-      status: a.done ? "completed" as const : "pending" as const,
-      completed_at: a.done ? new Date().toISOString() : null,
-      source_type: "meeting_action" as const,
-      source_id: meetingId,
-      source_label: `Meeting: ${meetingTitle}`,
-    }));
+    .map((a) => {
+      const normalizedOwner = String(a.owner || "").trim();
+      const ownerKey = ownerTag(normalizedOwner);
+      return {
+        user_id: user.id,
+        title: a.text,
+        due_date: a.due_date || null,
+        priority: "medium" as const,
+        status: a.done ? "completed" as const : "pending" as const,
+        completed_at: a.done ? new Date().toISOString() : null,
+        source_type: "meeting_action" as const,
+        source_id: meetingId,
+        source_label: normalizedOwner ? `Meeting: ${meetingTitle} (${normalizedOwner})` : `Meeting: ${meetingTitle}`,
+        tags: ownerKey ? ["meeting_action", ownerKey] : ["meeting_action"],
+      };
+    });
 
   if (newTasks.length > 0) {
     const { error } = await supabase.from("tasks").insert(newTasks);
@@ -160,10 +195,20 @@ export async function syncMeetingActionsToTasks(meetingId: string, meetingTitle:
     const match = (existing || []).find((t) => t.title.toLowerCase().trim() === a.text.toLowerCase().trim());
     if (match) {
       const newStatus = a.done ? "completed" : "pending";
+      const preservedTags = Array.isArray(match.tags)
+        ? match.tags.filter((tag: string) => tag === PI_SHARED_TASK_TAG || tag.startsWith("owner:"))
+        : [];
+      const nextOwnerTag = ownerTag(a.owner);
       await supabase.from("tasks").update({
         status: newStatus,
         due_date: a.due_date || null,
         completed_at: a.done ? new Date().toISOString() : null,
+        source_label: a.owner ? `Meeting: ${meetingTitle} (${a.owner})` : `Meeting: ${meetingTitle}`,
+        tags: [
+          "meeting_action",
+          ...preservedTags.filter((tag: string) => tag === PI_SHARED_TASK_TAG),
+          ...(nextOwnerTag ? [nextOwnerTag] : []),
+        ],
       }).eq("id", match.id);
     }
   }

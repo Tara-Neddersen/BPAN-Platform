@@ -382,14 +382,29 @@ Highlighted text to extract methods from: "${highlight}"`;
 
 // ─── Extract Action Items from Meeting Notes ────────────────────────────────
 
-export async function extractActionItems(notes: string, researchContext?: string): Promise<string[]> {
+export async function extractActionItems(
+  notes: string,
+  researchContext?: string
+): Promise<Array<{ text: string; owner?: string }>> {
   const systemInstruction = researchContext
     ? `You are a research assistant helping a biomedical PhD student extract action items from advisor meeting notes.\n\nStudent's research context:\n${researchContext}\n\nUse this context to better understand abbreviations and project-specific terms in the notes.`
     : "You are a research assistant helping a biomedical PhD student extract action items from advisor meeting notes.";
 
   const prompt = `Read the following meeting notes and extract ALL action items, tasks, to-dos, follow-ups, and things that need to be done. Each action item should be a short, clear, actionable sentence.
 
-Return ONLY a JSON array of strings, nothing else. Example: ["Order more antibodies", "Email Dr. Smith about timeline", "Run Western blot on sample 3"]
+Return ONLY a JSON array of objects, nothing else.
+
+Each object must use this shape:
+{"text":"short actionable item","owner":"person responsible or omitted if unclear"}
+
+Rules for owner:
+- Use the person's actual name when the transcript clearly indicates who owns it.
+- If the student is the likely owner, use "Tara".
+- If the PI/advisor is the likely owner and their name is stated, use that name.
+- If ownership is unclear, omit the owner field.
+
+Example:
+[{"text":"Run Western blot on sample 3","owner":"Tara"},{"text":"Send feedback on the revised timeline","owner":"Juliet"}]
 
 If there are no action items, return an empty array: []
 
@@ -402,14 +417,30 @@ ${notes}`;
   try {
     const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
     const parsed = JSON.parse(cleaned);
-    if (Array.isArray(parsed)) return parsed.map(String);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((item) => {
+          if (typeof item === "string") return { text: item };
+          if (!item || typeof item !== "object") return null;
+          const text = "text" in item ? String(item.text || "").trim() : "";
+          if (!text) return null;
+          const owner = "owner" in item && item.owner ? String(item.owner).trim() : undefined;
+          return { text, ...(owner ? { owner } : {}) };
+        })
+        .filter((item): item is { text: string; owner?: string } => Boolean(item));
+    }
   } catch {
     return raw
       .split("\n")
       .map((l) => l.replace(/^[-•*\d.)\]]+\s*/, "").trim())
-      .filter((l) => l.length > 3);
+      .filter((l) => l.length > 3)
+      .map((text) => ({ text }));
   }
-  return [];
+  return raw
+    .split("\n")
+    .map((l) => l.replace(/^[-•*\d.)\]]+\s*/, "").trim())
+    .filter((l) => l.length > 3)
+    .map((text) => ({ text }));
 }
 
 // ─── Meeting Notes Summary ──────────────────────────────────────────────────
@@ -507,4 +538,3 @@ Abstract: ${abstract || "No abstract available."}`;
     };
   }
 }
-

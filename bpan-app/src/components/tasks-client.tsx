@@ -19,7 +19,6 @@ import { Badge } from "@/components/ui/badge";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import type { Task } from "@/types";
 
@@ -88,16 +87,18 @@ const EXP_TYPE_LABELS: Record<string, string> = {
   eeg_implant: "EEG Implant", eeg_recording: "EEG Recording",
 };
 
+const PI_SHARED_TASK_TAG = "shared_with_pi";
+
+function isTaskSharedWithPi(task: Task) {
+  return Array.isArray(task.tags) && task.tags.includes(PI_SHARED_TASK_TAG);
+}
+
 interface TasksClientProps {
   tasks: Task[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  upcomingExperiments: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  cohorts: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  upcomingCageChanges: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  recentMeetings: any[];
+  upcomingExperiments: UpcomingExperimentLite[];
+  cohorts: CohortLite[];
+  upcomingCageChanges: CageChangeLite[];
+  recentMeetings: RecentMeetingLite[];
   actions: {
     createTask: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateTask: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -109,6 +110,32 @@ interface TasksClientProps {
 type ViewFilter = "all" | "today" | "upcoming" | "overdue" | "completed";
 type SourceFilter = "all" | "meeting_action" | "manual" | "experiment" | "cage_change";
 
+interface UpcomingExperimentLite {
+  scheduled_date: string;
+  experiment_type: string;
+  timepoint_age_days: number | null;
+  animals?: {
+    identifier?: string | null;
+    cohort_id?: string | null;
+  } | null;
+}
+
+interface CohortLite {
+  id: string;
+  name: string;
+}
+
+interface CageChangeLite {
+  id: string;
+  scheduled_date: string;
+}
+
+interface RecentMeetingLite {
+  id: string;
+  title: string;
+  action_items?: Array<{ done: boolean }> | null;
+}
+
 // ─── Mini Week Calendar ──────────────────────────────────────────────────
 
 function WeekCalendar({
@@ -117,8 +144,8 @@ function WeekCalendar({
   cohorts,
 }: {
   tasks: Task[];
-  upcomingExperiments: any[];
-  cohorts: any[];
+  upcomingExperiments: UpcomingExperimentLite[];
+  cohorts: CohortLite[];
 }) {
   const todayStr = toDateStr();
   const [ty, tm, td] = todayStr.split("-").map(Number);
@@ -306,7 +333,7 @@ export function TasksClient({
   recentMeetings,
   actions,
 }: TasksClientProps) {
-  const [tasks, setTasks] = useState(initTasks);
+  const tasks = initTasks;
   const [view, setView] = useState<ViewFilter>("all");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [showAddTask, setShowAddTask] = useState(false);
@@ -628,6 +655,11 @@ export function TasksClient({
                             {task.source_label || task.source_type}
                           </Badge>
                         )}
+                        {isTaskSharedWithPi(task) && (
+                          <Badge variant="outline" className="text-[10px]">
+                            Visible in PI
+                          </Badge>
+                        )}
                         {task.source_type === "meeting_action" && task.source_id && (
                           <Link
                             href={`/meetings?meeting=${encodeURIComponent(task.source_id)}`}
@@ -692,6 +724,10 @@ export function TasksClient({
               <Label className="text-xs">Description</Label>
               <Textarea name="description" placeholder="Optional details..." rows={2} />
             </div>
+            <div className="flex items-center gap-2 rounded-md border p-2">
+              <input type="checkbox" id="new-show-on-pi" name="show_on_pi" value="true" className="h-4 w-4" />
+              <Label htmlFor="new-show-on-pi" className="text-xs cursor-pointer">Show this task on the PI platform</Label>
+            </div>
             <DialogFooter>
               <Button variant="outline" type="button" onClick={() => setShowAddTask(false)}>Cancel</Button>
               <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}Add Task</Button>
@@ -706,6 +742,7 @@ export function TasksClient({
           <DialogHeader><DialogTitle>Edit Task</DialogTitle></DialogHeader>
           {editingTask && (
             <form onSubmit={(e) => handleFormAction((fd) => actions.updateTask(editingTask.id, fd), e, () => setEditingTask(null))} className="space-y-3">
+              <input type="hidden" name="show_on_pi_enabled" value="true" />
               <div>
                 <Label className="text-xs">Task *</Label>
                 <Input name="title" required defaultValue={editingTask.title} />
@@ -747,6 +784,17 @@ export function TasksClient({
               <div>
                 <Label className="text-xs">Notes</Label>
                 <Textarea name="notes" defaultValue={editingTask.notes || ""} rows={2} />
+              </div>
+              <div className="flex items-center gap-2 rounded-md border p-2">
+                <input
+                  type="checkbox"
+                  id="edit-show-on-pi"
+                  name="show_on_pi"
+                  value="true"
+                  defaultChecked={isTaskSharedWithPi(editingTask)}
+                  className="h-4 w-4"
+                />
+                <Label htmlFor="edit-show-on-pi" className="text-xs cursor-pointer">Show this task on the PI platform</Label>
               </div>
               {editingTask.source_label && (
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">

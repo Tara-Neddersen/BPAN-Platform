@@ -444,6 +444,7 @@ export interface ActionItem {
   text: string;
   done: boolean;
   due_date?: string;
+  owner?: string;
 }
 
 export interface MeetingNote {

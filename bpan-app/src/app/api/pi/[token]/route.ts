@@ -81,6 +81,8 @@ export async function GET(
     let cohorts: unknown[] = [];
     let timepoints: unknown[] = [];
     let calendarEvents: unknown[] = [];
+    let meetingActions: unknown[] = [];
+    let sharedTasks: unknown[] = [];
 
     // Always fetch full animals if any animal-related permission is set
     const needsAnimals = canSee.includes("animals") || canSee.includes("experiments") || canSee.includes("timeline") || canSee.includes("colony_results");
@@ -200,6 +202,51 @@ export async function GET(
       }));
     }
 
+    const { data: meetingNotes } = await supabase
+      .from("meeting_notes")
+      .select("id,title,meeting_date,action_items")
+      .eq("user_id", userId)
+      .order("meeting_date", { ascending: false })
+      .limit(12);
+
+    meetingActions = (meetingNotes || []).flatMap((meeting) => {
+      const items = Array.isArray(meeting.action_items) ? meeting.action_items : [];
+      return items
+        .filter((item) => item && typeof item === "object" && "text" in item)
+        .map((item) => {
+          const text = String(item.text || "").trim();
+          if (!text) return null;
+          return {
+            meeting_id: meeting.id,
+            meeting_title: meeting.title,
+            meeting_date: meeting.meeting_date,
+            text,
+            done: Boolean(item.done),
+            due_date: item.due_date ? String(item.due_date) : null,
+            owner: item.owner ? String(item.owner) : null,
+          };
+        })
+        .filter(Boolean);
+    });
+
+    const { data: sharedTaskRows } = await supabase
+      .from("tasks")
+      .select("id,title,description,due_date,status,priority,source_label,tags")
+      .eq("user_id", userId)
+      .contains("tags", ["shared_with_pi"])
+      .order("due_date", { ascending: true, nullsFirst: false })
+      .limit(40);
+
+    sharedTasks = (sharedTaskRows || []).map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      due_date: task.due_date,
+      status: task.status,
+      priority: task.priority,
+      source_label: task.source_label,
+    }));
+
     // Fetch photos for gallery (always included if they exist)
     const { data: photosData } = await supabase
       .from("colony_photos")
@@ -233,6 +280,8 @@ export async function GET(
       cohorts,
       timepoints,
       calendar_events: calendarEvents,
+      meeting_actions: meetingActions,
+      shared_tasks: sharedTasks,
       photos,
       stats: {
         total_animals: totalAnimals,
