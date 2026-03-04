@@ -1864,6 +1864,8 @@ function GanttView({
         return !isSyntheticCompletedFromResults;
       })
       .reduce((groups, ae) => {
+        const scheduledDate = ae.scheduled_date;
+        if (!scheduledDate) return groups;
         const animal = animalMap.get(ae.animal_id);
         const cohortName = animal ? (cohortMap.get(animal.cohort_id)?.name || "Unknown Cohort") : "Unknown Cohort";
         const timepointLabel = ae.timepoint_age_days != null ? `${ae.timepoint_age_days}d` : "Ad hoc";
@@ -1871,12 +1873,12 @@ function GanttView({
           animal?.cohort_id || "unknown",
           ae.timepoint_age_days ?? "adhoc",
           ae.experiment_type,
-          ae.scheduled_date,
+          scheduledDate,
           ae.status,
         ].join("::");
         const existing = groups.get(key);
         const spanDays = COLONY_MULTI_DAY_SPANS[ae.experiment_type] ?? 1;
-        const endDate = new Date(`${ae.scheduled_date}T12:00:00`);
+        const endDate = new Date(`${scheduledDate}T12:00:00`);
         endDate.setDate(endDate.getDate() + spanDays - 1);
 
         if (existing) {
@@ -1890,7 +1892,7 @@ function GanttView({
           timepointLabel,
           typeLabel: COLONY_EXP_LABELS[ae.experiment_type] || ae.experiment_type,
           status: ae.status,
-          startDate: ae.scheduled_date,
+          startDate: scheduledDate,
           endDate: formatDateInLA(endDate),
           count: 1,
         });
