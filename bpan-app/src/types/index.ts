@@ -287,6 +287,27 @@ export interface Figure {
   updated_at: string;
 }
 
+export type PaperOutlineSectionKind = "text" | "figure";
+
+export interface PaperOutlineSection {
+  id: string;
+  kind: PaperOutlineSectionKind;
+  heading: string;
+  notes: string;
+  linkedFigureId: string | null;
+  plotRequest: string;
+}
+
+export interface PaperOutline {
+  id: string;
+  user_id: string;
+  title: string;
+  framing: string | null;
+  sections: PaperOutlineSection[];
+  created_at: string;
+  updated_at: string;
+}
+
 // ─── Mouse Colony Manager ────────────────────────────────────────────────────
 
 export interface BreederCage {

@@ -5,7 +5,15 @@ import type { Dataset, Analysis, Figure, Experiment } from "@/types";
 export default async function ResultsPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ dataset?: string; tab?: string; analysis?: string; figure?: string }>;
+  searchParams?: Promise<{
+    dataset?: string;
+    tab?: string;
+    analysis?: string;
+    figure?: string;
+    prefill_title?: string;
+    prefill_chart?: string;
+    prefill_prompt?: string;
+  }>;
 }) {
   const params = searchParams ? await searchParams : undefined;
   const supabase = await createClient();
@@ -53,6 +61,9 @@ export default async function ResultsPage({
       initialTab={(params?.tab as "data" | "analyze" | "visualize" | undefined) ?? undefined}
       initialAnalysisId={params?.analysis ?? null}
       initialFigureId={params?.figure ?? null}
+      initialPrefillTitle={params?.prefill_title ?? null}
+      initialPrefillChartType={params?.prefill_chart ?? null}
+      initialPrefillPrompt={params?.prefill_prompt ?? null}
     />
   );
 }

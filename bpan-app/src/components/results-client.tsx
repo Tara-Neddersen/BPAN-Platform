@@ -11,9 +11,9 @@ import {
   BarChart3,
   FlaskConical,
   Brain,
+  Copy,
   Download,
   Loader2,
-  Plus,
   Table as TableIcon,
   ChevronDown,
   ChevronRight,
@@ -21,7 +21,6 @@ import {
   FileSpreadsheet,
   Info,
   Sparkles,
-  X,
   Save,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -50,8 +49,6 @@ import {
   deleteDataset,
   saveAnalysis,
   deleteAnalysis,
-  saveFigure,
-  deleteFigure,
 } from "@/app/(protected)/results/actions";
 import type { Dataset, DatasetColumn, Analysis, Figure, Experiment } from "@/types";
 
@@ -116,6 +113,8 @@ const COLORS = [
   "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6",
 ];
 
+const VISUALIZE_CHART_TYPES = new Set(["bar", "scatter", "box", "histogram", "line", "violin"]);
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 interface Props {
@@ -127,6 +126,9 @@ interface Props {
   initialTab?: "data" | "analyze" | "visualize";
   initialAnalysisId?: string | null;
   initialFigureId?: string | null;
+  initialPrefillTitle?: string | null;
+  initialPrefillChartType?: string | null;
+  initialPrefillPrompt?: string | null;
 }
 
 export function ResultsClient({
@@ -138,6 +140,9 @@ export function ResultsClient({
   initialTab = "data",
   initialAnalysisId = null,
   initialFigureId = null,
+  initialPrefillTitle = null,
+  initialPrefillChartType = null,
+  initialPrefillPrompt = null,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -295,6 +300,9 @@ export function ResultsClient({
               dataset={selectedDataset}
               figures={figures.filter((f) => f.dataset_id === selectedDatasetId)}
               highlightedFigureId={highlightedFigureId}
+              initialPrefillTitle={initialPrefillTitle}
+              initialPrefillChartType={initialPrefillChartType}
+              initialPrefillPrompt={initialPrefillPrompt}
             />
           </TabsContent>
         </Tabs>
@@ -847,16 +855,26 @@ function VisualizePanel({
   dataset,
   figures,
   highlightedFigureId,
+  initialPrefillTitle,
+  initialPrefillChartType,
+  initialPrefillPrompt,
 }: {
   dataset: Dataset;
   figures: Figure[];
   highlightedFigureId?: string | null;
+  initialPrefillTitle?: string | null;
+  initialPrefillChartType?: string | null;
+  initialPrefillPrompt?: string | null;
 }) {
-  const [chartType, setChartType] = useState("bar");
+  const [chartType, setChartType] = useState(
+    initialPrefillChartType && VISUALIZE_CHART_TYPES.has(initialPrefillChartType)
+      ? initialPrefillChartType
+      : "bar"
+  );
   const [xCol, setXCol] = useState("");
   const [yCol, setYCol] = useState("");
-  const [groupCol, setGroupCol] = useState("");
-  const [title, setTitle] = useState("");
+  const [groupCol, setGroupCol] = useState("__none__");
+  const [title, setTitle] = useState(initialPrefillTitle || "");
   const plotRef = useRef<HTMLDivElement>(null);
 
   const numericCols = getNumericColumns(dataset.columns);
@@ -870,6 +888,8 @@ function VisualizePanel({
     { value: "line", label: "Line Chart" },
     { value: "violin", label: "Violin Plot" },
   ];
+
+  const normalizedGroupCol = groupCol === "__none__" ? "" : groupCol;
 
   const plotData = useMemo(() => {
     if (!xCol) return null;
@@ -925,8 +945,8 @@ function VisualizePanel({
       case "bar":
       case "box":
       case "violin": {
-        if (groupCol) {
-          const { labels, groups } = groupByColumn(dataset.data, groupCol, xCol);
+        if (normalizedGroupCol) {
+          const { labels, groups } = groupByColumn(dataset.data, normalizedGroupCol, xCol);
           const traces = labels.map((label, i) => ({
             y: groups[i],
             x: chartType === "bar" ? [label] : groups[i].map(() => label),
@@ -939,7 +959,7 @@ function VisualizePanel({
             data: traces,
             layout: {
               title: { text: chartTitle, font: { size: 14 } },
-              xaxis: { title: { text: groupCol } },
+              xaxis: { title: { text: normalizedGroupCol } },
               yaxis: { title: { text: xCol } },
               paper_bgcolor: "transparent",
               plot_bgcolor: "transparent",
@@ -1012,7 +1032,7 @@ function VisualizePanel({
       default:
         return null;
     }
-  }, [chartType, xCol, yCol, groupCol, dataset.data, dataset.columns, title]);
+  }, [chartType, xCol, yCol, normalizedGroupCol, dataset.data, title]);
 
   const handleExport = useCallback(
     async (format: "svg" | "png") => {
@@ -1032,6 +1052,27 @@ function VisualizePanel({
 
   return (
     <div className="space-y-4">
+      {initialPrefillPrompt && (
+        <Card className="border-cyan-200 bg-cyan-50/70">
+          <CardContent className="pt-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-cyan-900">Figure placeholder request</p>
+                <p className="mt-1 text-xs text-cyan-900/80 whitespace-pre-wrap">{initialPrefillPrompt}</p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1 text-xs bg-white"
+                onClick={() => navigator.clipboard.writeText(initialPrefillPrompt)}
+              >
+                <Copy className="h-3 w-3" /> Copy
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardContent className="pt-4 space-y-3">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
