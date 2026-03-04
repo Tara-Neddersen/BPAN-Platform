@@ -13,6 +13,15 @@ function parseFileLinks(formData: FormData) {
     .filter((s, i, arr) => arr.indexOf(s) === i);
 }
 
+function parseFigureLinks(formData: FormData) {
+  const raw = (formData.get("figure_links") as string) || "";
+  return raw
+    .split(/\r?\n|,/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s, i, arr) => arr.indexOf(s) === i);
+}
+
 // ─── Experiments ─────────────────────────────────────────────────────────────
 
 export async function createExperiment(formData: FormData) {
@@ -223,6 +232,7 @@ export async function createProtocol(formData: FormData) {
   const description = (formData.get("description") as string) || null;
   const category = (formData.get("category") as string) || null;
   const stepsJson = (formData.get("steps") as string) || "[]";
+  const figureLinks = parseFigureLinks(formData);
   const fileLinks = parseFileLinks(formData);
 
   let steps;
@@ -238,6 +248,7 @@ export async function createProtocol(formData: FormData) {
     description,
     category,
     steps,
+    figure_links: figureLinks,
     file_links: fileLinks,
   });
 
@@ -258,6 +269,7 @@ export async function updateProtocol(formData: FormData) {
   const description = (formData.get("description") as string) || null;
   const category = (formData.get("category") as string) || null;
   const stepsJson = (formData.get("steps") as string) || "[]";
+  const figureLinks = parseFigureLinks(formData);
   const fileLinks = parseFileLinks(formData);
 
   let steps;
@@ -269,7 +281,7 @@ export async function updateProtocol(formData: FormData) {
 
   const { error } = await supabase
     .from("protocols")
-    .update({ title, description, category, steps, file_links: fileLinks })
+    .update({ title, description, category, steps, figure_links: figureLinks, file_links: fileLinks })
     .eq("id", id)
     .eq("user_id", user.id);
 

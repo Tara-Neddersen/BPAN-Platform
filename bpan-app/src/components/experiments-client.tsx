@@ -115,6 +115,19 @@ function formatDateInLA(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeDriveImageUrl(url: string): string {
+  const fileMatch = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
+  if (fileMatch) return `https://lh3.googleusercontent.com/d/${fileMatch[1]}`;
+  const openMatch = url.match(/[?&]id=([^&]+)/);
+  if (openMatch && url.includes("drive.google.com")) return `https://lh3.googleusercontent.com/d/${openMatch[1]}`;
+  return url;
+}
+
+function getProtocolFigureLinks(protocol: Protocol): string[] {
+  const raw = (protocol as Protocol & { figure_links?: unknown }).figure_links;
+  return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 interface Props {
@@ -2181,13 +2194,17 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
   const [editing, setEditing] = useState<Protocol | null>(null);
   const [steps, setSteps] = useState<ProtocolStep[]>([]);
   const [pending, setPending] = useState(false);
+  const [protocolFigureLinksText, setProtocolFigureLinksText] = useState("");
+  const [protocolFigureUploadBusy, setProtocolFigureUploadBusy] = useState(false);
   const [protocolFileLinksText, setProtocolFileLinksText] = useState("");
   const [protocolUploadBusy, setProtocolUploadBusy] = useState(false);
+  const protocolFigureUploadInputRef = useRef<HTMLInputElement | null>(null);
   const protocolUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   function startNew() {
     setEditing(null);
     setSteps([{ id: crypto.randomUUID(), text: "", duration: "" }]);
+    setProtocolFigureLinksText("");
     setProtocolFileLinksText("");
     setShowForm(true);
   }
@@ -2195,8 +2212,38 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
   function startEdit(p: Protocol) {
     setEditing(p);
     setSteps(p.steps.length > 0 ? p.steps : [{ id: crypto.randomUUID(), text: "", duration: "" }]);
+    setProtocolFigureLinksText(getProtocolFigureLinks(p).join("\n"));
     setProtocolFileLinksText((p.file_links || []).join("\n"));
     setShowForm(true);
+  }
+
+  async function uploadProtocolFigureToDrive(file: File) {
+    setProtocolFigureUploadBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("cohort_name", "Protocols");
+      fd.append("animal_identifier", "Protocol Figures");
+      fd.append("experiment_type", "protocol_figure");
+
+      const res = await fetch("/api/gdrive/upload", {
+        method: "POST",
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        toast.error(data.error || "Upload failed — is Google Drive connected?");
+        return;
+      }
+      const url = String(data.url || "");
+      setProtocolFigureLinksText((prev) => (prev.trim() ? `${prev.trim()}\n${url}` : url));
+      toast.success("Figure uploaded and linked");
+    } catch {
+      toast.error("Figure upload failed");
+    } finally {
+      setProtocolFigureUploadBusy(false);
+      if (protocolFigureUploadInputRef.current) protocolFigureUploadInputRef.current.value = "";
+    }
   }
 
   async function uploadProtocolFileToDrive(file: File) {
@@ -2231,6 +2278,7 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
   async function handleSubmit(formData: FormData) {
     setPending(true);
     formData.set("steps", JSON.stringify(steps.filter((s) => s.text.trim())));
+    formData.set("figure_links", protocolFigureLinksText);
     formData.set("file_links", protocolFileLinksText);
     try {
       if (editing) {
@@ -2241,6 +2289,7 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
       }
       setShowForm(false);
       setEditing(null);
+      setProtocolFigureLinksText("");
       setProtocolFileLinksText("");
     } catch (err) {
       console.error(err);
@@ -2282,6 +2331,45 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                 />
               </div>
               <div>
+                <label className="text-xs font-medium mb-1 block">Protocol Figures (image URLs)</label>
+                <input
+                  ref={protocolFigureUploadInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files || []);
+                    if (files.length === 0) return;
+                    for (const file of files) {
+                      await uploadProtocolFigureToDrive(file);
+                    }
+                  }}
+                />
+                <textarea
+                  name="figure_links"
+                  value={protocolFigureLinksText}
+                  onChange={(e) => setProtocolFigureLinksText(e.target.value)}
+                  placeholder={"Paste one image URL per line\nhttps://drive.google.com/file/d/..."}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none h-24"
+                />
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={protocolFigureUploadBusy}
+                    onClick={() => protocolFigureUploadInputRef.current?.click()}
+                  >
+                    {protocolFigureUploadBusy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />}
+                    Upload figure
+                  </Button>
+                  <span className="text-[11px] text-muted-foreground">
+                    These render as large, scrollable protocol figures by default.
+                  </span>
+                </div>
+              </div>
+              <div>
                 <label className="text-xs font-medium mb-1 block">Cloud File Links (Google Drive, etc.)</label>
                 <input
                   ref={protocolUploadInputRef}
@@ -2292,7 +2380,6 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                     const files = Array.from(e.target.files || []);
                     if (files.length === 0) return;
                     for (const file of files) {
-                      // eslint-disable-next-line no-await-in-loop
                       await uploadProtocolFileToDrive(file);
                     }
                   }}
@@ -2384,10 +2471,13 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
           <p className="text-muted-foreground">No protocols yet. Create reusable templates for your experiments.</p>
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-4">
           {protocols.map((p) => (
             <Card key={p.id} className="group">
-              <CardContent className="pt-4 space-y-2">
+              {(() => {
+                const figureLinks = getProtocolFigureLinks(p);
+                return (
+              <CardContent className="pt-4 space-y-4">
                 <div className="flex items-start justify-between">
                   <div>
                     <h4 className="font-medium text-sm">{p.title}</h4>
@@ -2404,6 +2494,30 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                     </Button>
                   </div>
                 </div>
+                {figureLinks.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Protocol Figures</p>
+                    <div className="max-h-[38rem] space-y-3 overflow-y-auto rounded-xl border border-slate-200/80 bg-slate-50/50 p-3">
+                      {figureLinks.map((url, i) => (
+                        <a
+                          key={`${p.id}-figure-${i}`}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={normalizeDriveImageUrl(url)}
+                            alt={`${p.title} figure ${i + 1}`}
+                            className="h-auto max-h-none w-full object-contain bg-white"
+                            referrerPolicy="no-referrer"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {p.description && <p className="text-xs text-muted-foreground">{p.description}</p>}
                 {(p.file_links || []).length > 0 && (
                   <div className="space-y-1">
@@ -2440,6 +2554,8 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                 )}
                 <p className="text-xs text-muted-foreground">v{p.version} — {new Date(p.updated_at).toLocaleDateString()}</p>
               </CardContent>
+                );
+              })()}
             </Card>
           ))}
         </div>
