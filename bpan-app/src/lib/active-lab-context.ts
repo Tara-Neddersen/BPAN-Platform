@@ -20,10 +20,12 @@ export function resolveActiveLabContext(
   summary: Pick<LabShellSummary, "memberships">,
   requestedLabId: string | null,
 ): ActiveLabContext {
+  const fallbackMembership = summary.memberships[0] ?? null;
+
   if (!requestedLabId) {
     return {
       requestedLabId: null,
-      activeMembership: null,
+      activeMembership: fallbackMembership,
       hasInvalidSelection: false,
     };
   }
@@ -34,7 +36,7 @@ export function resolveActiveLabContext(
 
   return {
     requestedLabId,
-    activeMembership,
+    activeMembership: activeMembership ?? fallbackMembership,
     hasInvalidSelection: Boolean(requestedLabId && !activeMembership),
   };
 }

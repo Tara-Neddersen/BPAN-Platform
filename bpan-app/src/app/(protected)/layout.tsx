@@ -1,6 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
 import { Nav } from "@/components/nav";
-import { LabShell } from "@/components/lab-shell";
 import { AdvisorSidebar } from "@/components/advisor-sidebar";
 import { UnifiedSearch } from "@/components/unified-search";
 import { fetchLabShellSummary } from "@/lib/labs";
@@ -48,14 +47,7 @@ export default async function ProtectedLayout({
         activeLabId={activeLabContext?.activeMembership?.lab.id ?? null}
         unreadNotificationCount={unreadNotificationCount}
       />
-      <main className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 sm:py-8 min-h-[calc(100vh-3.5rem)]">
-        {user ? (
-          <LabShell
-            summary={labSummary}
-            activeLab={activeLabContext?.activeMembership ?? null}
-            hasInvalidSelection={activeLabContext?.hasInvalidSelection ?? false}
-          />
-        ) : null}
+      <main className="mx-auto min-h-[calc(100vh-3.5rem)] max-w-[1400px] px-2.5 py-3 pb-20 sm:px-6 sm:py-8 sm:pb-8">
         {children}
       </main>
       {user && <AdvisorSidebar />}

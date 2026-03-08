@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Building2, LockKeyhole, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { LabMembershipWithLab, LabShellSummary } from "@/lib/labs";
@@ -10,6 +13,15 @@ interface LabShellProps {
 }
 
 export function LabShell({ summary, activeLab, hasInvalidSelection }: LabShellProps) {
+  const pathname = usePathname();
+  const hideOnResultsPages =
+    pathname === "/colony/tracker" ||
+    pathname === "/colony/results" ||
+    pathname === "/results" ||
+    pathname === "/colony/analysis" ||
+    pathname === "/colony/pi-access";
+  if (hideOnResultsPages) return null;
+
   const memberships = summary?.memberships ?? [];
   const warning = summary?.warning ?? null;
 

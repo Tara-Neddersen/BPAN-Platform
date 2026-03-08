@@ -201,7 +201,39 @@ export async function uploadFile(
   };
 }
 
+/** Make a Drive file publicly readable (anyone with link). */
+export async function makeFilePublic(accessToken: string, fileId: string): Promise<void> {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      role: "reader",
+      type: "anyone",
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to make file public: ${text}`);
+  }
+}
+
+/** Extract Drive file ID from common URL formats. */
+export function extractDriveFileId(url: string): string | null {
+  const filePathMatch = url.match(/drive\.google\.com\/file\/d\/([^/?]+)/);
+  if (filePathMatch) return filePathMatch[1];
+
+  const idMatch = url.match(/[?&]id=([^&]+)/);
+  if ((/drive\.google\.com\/open/.test(url) || /drive\.google\.com\/uc/.test(url) || /drive\.google\.com\/thumbnail/.test(url)) && idMatch) {
+    return idMatch[1];
+  }
+
+  return null;
+}
+
 export function isDriveConfigured(): boolean {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 }
-

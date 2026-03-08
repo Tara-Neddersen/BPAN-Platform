@@ -250,12 +250,13 @@ export async function GET(
     // Fetch photos for gallery (always included if they exist)
     const { data: photosData } = await supabase
       .from("colony_photos")
-      .select("image_url, caption, experiment_type, taken_date")
+      .select("id,image_url,caption,experiment_type,taken_date")
       .eq("user_id", userId)
       .eq("show_in_portal", true)
       .order("sort_order");
 
     photos = (photosData || []).map((p: Record<string, unknown>) => ({
+      id: p.id,
       image_url: p.image_url,
       caption: p.caption,
       experiment_type: p.experiment_type,

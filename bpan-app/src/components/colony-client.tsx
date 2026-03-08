@@ -34,6 +34,7 @@ import { ColonyResultsTab } from "@/components/colony-results-tab";
 import { ColonyAnalysisPanel } from "@/components/colony-analysis-panel";
 import { ExperimentTrackerMatrix } from "@/components/experiment-tracker-matrix";
 import { EarTagSelector, MiniEarTag, parseEarTag } from "@/components/ear-tag-selector";
+import { HelpHint } from "@/components/ui/help-hint";
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -150,6 +151,7 @@ function timepointProtocolPreview(tp: ColonyTimepoint) {
 
 interface ColonyClientProps {
   defaultTab?: string;
+  showTabList?: boolean;
   breederCages: BreederCage[];
   cohorts: Cohort[];
   animals: Animal[];
@@ -247,19 +249,22 @@ function breederGenotypeLabel(slotLabel: string, genotype?: string | null, birth
 
 /** Convert Google Drive share links to direct image URLs */
 function convertDriveUrl(url: string): string {
-  // https://drive.google.com/file/d/FILE_ID/view...
-  const match = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
-  if (match) return `https://lh3.googleusercontent.com/d/${match[1]}`;
-  // https://drive.google.com/open?id=FILE_ID
-  const match2 = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
-  if (match2) return `https://lh3.googleusercontent.com/d/${match2[1]}`;
-  return url; // already a direct URL
+  const matchFilePath = url.match(/drive\.google\.com\/file\/d\/([^/?]+)/);
+  if (matchFilePath) return `https://drive.google.com/uc?export=view&id=${matchFilePath[1]}`;
+
+  const matchOpen = url.match(/[?&]id=([^&]+)/);
+  if ((/drive\.google\.com\/open/.test(url) || /drive\.google\.com\/uc/.test(url) || /drive\.google\.com\/thumbnail/.test(url)) && matchOpen) {
+    return `https://drive.google.com/uc?export=view&id=${matchOpen[1]}`;
+  }
+
+  return url;
 }
 
 // ─── Main Component ─────────────────────────────────────────────────────
 
 export function ColonyClient({
   defaultTab = "animals",
+  showTabList = true,
   breederCages: initCages,
   cohorts: initCohorts,
   animals: initAnimals,
@@ -430,6 +435,7 @@ export function ColonyClient({
   const [deleteStatusFilter, setDeleteStatusFilter] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [openRecentPortalId, setOpenRecentPortalId] = useState<string | null>(null);
   const [showAddPhoto, setShowAddPhoto] = useState(false);
   const [photoUrlInput, setPhotoUrlInput] = useState("");
   const [photoUploading, setPhotoUploading] = useState(false);
@@ -812,31 +818,85 @@ export function ColonyClient({
       return !cohorts.some((co) => co.breeder_cage_id === c.id && co.birth_date === c.pup_birth_date);
     });
   }, [cages, cohorts]);
+  const hideDriveStatusForFocusedViews = activeTab === "pi" || activeTab === "analysis";
+  const hideStatsForFocusedViews = activeTab === "pi";
+  const hideAlertsForFocusedViews = activeTab === "pi" || activeTab === "analysis";
 
   return (
     <>
+      {/* Google Drive Connection */}
+      {!hideDriveStatusForFocusedViews ? (
+        <div className="flex justify-end">
+          <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 shadow-sm">
+            <div className="flex min-w-0 items-center gap-2">
+              {driveStatus.connected ? (
+                <Cloud className="h-4 w-4 shrink-0 text-green-500" />
+              ) : (
+                <CloudOff className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+              <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium">
+                <span className="truncate">
+                  {driveStatus.connected
+                    ? `Google Drive connected${driveStatus.email ? ` (${driveStatus.email})` : ""}`
+                    : "Google Drive not connected"}
+                </span>
+                <HelpHint
+                  className="shrink-0"
+                  panelClassName="left-auto right-0 -translate-x-0"
+                  text={
+                    driveStatus.connected
+                      ? "Experiment results are uploaded to Google Drive automatically and organized as BPAN Platform / Cohort / Animal."
+                      : driveStatus.configured
+                        ? "Connect Google Drive to auto-upload experiment result files."
+                        : "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment to enable Drive integration."
+                  }
+                  ariaLabel="Google Drive details"
+                />
+              </div>
+            </div>
+            {driveStatus.configured && (
+              driveStatus.connected ? (
+                <Button variant="outline" size="sm" className="h-7 shrink-0 text-xs" onClick={disconnectGoogleDrive} disabled={driveLoading}>
+                  {driveLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Disconnect"}
+                </Button>
+              ) : (
+                <Button size="sm" className="h-7 shrink-0 text-xs" onClick={connectGoogleDrive} disabled={driveLoading}>
+                  {driveLoading ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Cloud className="mr-1 h-3.5 w-3.5" />}
+                  Connect Drive
+                </Button>
+              )
+            )}
+          </div>
+        </div>
+      ) : null}
+
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #ede9fe, #ddd6fe)" }}>
-          <div className="text-2xl font-bold tracking-tight text-violet-700">{activeCount}</div>
-          <p className="text-xs text-violet-700 font-semibold mt-0.5">Active Animals</p>
+      {!hideStatsForFocusedViews ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #ede9fe, #ddd6fe)" }}>
+            <div className="text-2xl font-bold tracking-tight text-violet-700">{activeCount}</div>
+            <p className="text-xs text-violet-700 font-semibold mt-0.5">Active Animals</p>
+          </div>
+          <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #e0f2fe, #bae6fd)" }}>
+            <div className="text-2xl font-bold tracking-tight text-sky-700">{cohorts.length}</div>
+            <p className="text-xs text-sky-700 font-semibold mt-0.5">Cohorts</p>
+          </div>
+          <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)" }}>
+            <div className="text-2xl font-bold tracking-tight text-amber-700">{pendingExps}</div>
+            <p className="text-xs text-amber-700 font-semibold mt-0.5">Scheduled</p>
+          </div>
+          <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)" }}>
+            <div className="text-2xl font-bold tracking-tight text-emerald-700">{completedExps}</div>
+            <p className="text-xs text-emerald-700 font-semibold mt-0.5">Completed ✓</p>
+          </div>
         </div>
-        <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #e0f2fe, #bae6fd)" }}>
-          <div className="text-2xl font-bold tracking-tight text-sky-700">{cohorts.length}</div>
-          <p className="text-xs text-sky-700 font-semibold mt-0.5">Cohorts</p>
-        </div>
-        <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #fef3c7, #fde68a)" }}>
-          <div className="text-2xl font-bold tracking-tight text-amber-700">{pendingExps}</div>
-          <p className="text-xs text-amber-700 font-semibold mt-0.5">Scheduled</p>
-        </div>
-        <div className="rounded-xl p-4 text-center shadow-sm" style={{ background: "linear-gradient(135deg, #d1fae5, #a7f3d0)" }}>
-          <div className="text-2xl font-bold tracking-tight text-emerald-700">{completedExps}</div>
-          <p className="text-xs text-emerald-700 font-semibold mt-0.5">Completed ✓</p>
-        </div>
-      </div>
+      ) : null}
 
       {/* Upcoming alerts — next 7 days + overdue summary */}
-      {(upcoming.length > 0 || upcomingCageChanges.length > 0 || breederReminders.length > 0 || weanReminders.length > 0 || overdueExps.length > 0) && (
+      {!hideAlertsForFocusedViews &&
+        activeTab !== "results" &&
+        activeTab !== "analysis" &&
+        (upcoming.length > 0 || upcomingCageChanges.length > 0 || breederReminders.length > 0 || weanReminders.length > 0 || overdueExps.length > 0) && (
         <Card className="border-yellow-200 dark:border-yellow-800">
           <CardHeader className="py-3 px-4">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -1075,57 +1135,16 @@ export function ColonyClient({
         </Card>
       )}
 
-      {/* Google Drive Connection */}
-      <Card className={driveStatus.connected ? "border-green-200 dark:border-green-800" : "border-dashed"}>
-        <CardContent className="py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {driveStatus.connected ? (
-              <Cloud className="h-5 w-5 text-green-500" />
-            ) : (
-              <CloudOff className="h-5 w-5 text-muted-foreground" />
-            )}
-            <div>
-              <div className="text-sm font-medium">
-                {driveStatus.connected
-                  ? `Google Drive connected${driveStatus.email ? ` (${driveStatus.email})` : ""}`
-                  : "Google Drive not connected"}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {driveStatus.connected
-                  ? "Experiment results will be uploaded to your Drive automatically. Files are organized in BPAN Platform / Cohort / Animal."
-                  : driveStatus.configured
-                    ? "Connect your Google Drive to auto-upload experiment results."
-                    : "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment to enable Drive integration."}
-              </p>
-            </div>
-          </div>
-          {driveStatus.configured && (
-            driveStatus.connected ? (
-              <Button variant="outline" size="sm" onClick={disconnectGoogleDrive} disabled={driveLoading}>
-                {driveLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Disconnect"}
-              </Button>
-            ) : (
-              <Button size="sm" onClick={connectGoogleDrive} disabled={driveLoading}>
-                {driveLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Cloud className="h-4 w-4 mr-1" />}
-                Connect Drive
-              </Button>
-            )
-          )}
-        </CardContent>
-      </Card>
-
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList className="w-full flex flex-wrap gap-1 p-1.5 rounded-2xl" style={{ background: "rgba(255,255,255,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(99,102,241,0.15)", height: "auto" }}>
-          <TabsTrigger value="animals" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Animals</TabsTrigger>
-          <TabsTrigger value="cohorts" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cohorts</TabsTrigger>
-          <TabsTrigger value="breeders" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Breeders</TabsTrigger>
-          <TabsTrigger value="tracker" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">📋 Tracker</TabsTrigger>
-          <TabsTrigger value="results" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">📊 Results</TabsTrigger>
-          <TabsTrigger value="analysis" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">📈 Analysis</TabsTrigger>
-          <TabsTrigger value="housing" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Housing</TabsTrigger>
-          <TabsTrigger value="cages" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cage Changes</TabsTrigger>
-          <TabsTrigger value="pi" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">PI Access</TabsTrigger>
-        </TabsList>
+        {showTabList ? (
+          <TabsList className="w-full flex flex-wrap gap-1 p-1.5 rounded-2xl" style={{ background: "rgba(255,255,255,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(99,102,241,0.15)", height: "auto" }}>
+            <TabsTrigger value="animals" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Animals</TabsTrigger>
+            <TabsTrigger value="cohorts" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cohorts</TabsTrigger>
+            <TabsTrigger value="breeders" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Breeders</TabsTrigger>
+            <TabsTrigger value="housing" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Housing</TabsTrigger>
+            <TabsTrigger value="cages" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cage Changes</TabsTrigger>
+          </TabsList>
+        ) : null}
 
         {/* ─── Animals Tab ──────────────────────────────────────── */}
         <TabsContent value="animals" className="space-y-4">
@@ -1808,101 +1827,130 @@ export function ColonyClient({
 
         {/* ─── PI Access Tab ────────────────────────────────────── */}
         <TabsContent value="pi" className="space-y-4">
-          <div className="flex justify-between items-center">
-            <p className="text-sm text-muted-foreground">
-              Give your PI a live, read-only view of your colony progress. They don&apos;t need an account.
-            </p>
-            <Button onClick={() => setShowAddPI(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add PI Access</Button>
+          <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">PI Access</p>
+              <p className="text-sm text-slate-600">Share read-only PI/advisor links for colony updates.</p>
+            </div>
+            <Button onClick={() => setShowAddPI(true)} size="sm">
+              <Plus className="h-4 w-4 mr-1" /> Add PI Access
+            </Button>
           </div>
           {portals.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <p>No advisor access configured.</p>
-            </div>
+            <Card className="border-dashed border-slate-300 bg-white/70">
+              <CardContent className="py-12 text-center text-muted-foreground">
+                <p>No advisor access configured.</p>
+              </CardContent>
+            </Card>
           ) : (
-            <div className="space-y-2">
-              {portals.map((p) => (
-                <Card key={p.id}>
-                  <CardContent className="py-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-semibold text-sm">{p.advisor_name}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {p.advisor_email || "No email"}
-                          {p.last_viewed_at ? ` · Last viewed: ${new Date(p.last_viewed_at).toLocaleString()}` : " · Not viewed yet"}
+            <div className="space-y-3">
+              {portals.map((p) => {
+                const recentAccessLogs = (portalAccessByPortalId.get(p.id) || []).slice(0, 3);
+                return (
+                  <Card key={p.id} className="border-slate-200 bg-white">
+                    <CardContent className="py-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-sm text-slate-900">{p.advisor_name}</div>
+                          <div className="text-xs text-slate-600">
+                            {p.advisor_email || "No email"}
+                            {p.last_viewed_at ? ` · Last viewed: ${new Date(p.last_viewed_at).toLocaleString()}` : " · Not viewed yet"}
+                          </div>
+                          <div className="mt-2">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs text-slate-600 hover:text-slate-900"
+                              onClick={() => setOpenRecentPortalId((current) => (current === p.id ? null : p.id))}
+                            >
+                              Recent access (last 3)
+                              {openRecentPortalId === p.id ? <ChevronUp className="ml-1 h-3.5 w-3.5" /> : <ChevronDown className="ml-1 h-3.5 w-3.5" />}
+                            </Button>
+                            {openRecentPortalId === p.id ? (
+                              <div className="mt-1 space-y-1 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-600">
+                                {recentAccessLogs.length > 0 ? (
+                                  recentAccessLogs.map((log) => (
+                                    <div key={log.id} className="leading-tight">
+                                      Accessed: {new Date(log.viewed_at).toLocaleString()}
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div>No access history yet</div>
+                                )}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {p.can_see.map((s) => (
+                              <Badge key={s} variant="outline" className="text-[11px] text-slate-600">
+                                {s}
+                              </Badge>
+                            ))}
+                          </div>
                         </div>
-                        <div className="flex gap-1 mt-1">
-                          {p.can_see.map((s) => (
-                            <Badge key={s} variant="secondary" className="text-xs">{s}</Badge>
-                          ))}
-                        </div>
-                        <div className="mt-2 text-xs text-muted-foreground space-y-1">
-                          {(portalAccessByPortalId.get(p.id) || []).slice(0, 5).map((log) => (
-                            <div key={log.id} className="leading-tight">
-                              Accessed: {new Date(log.viewed_at).toLocaleString()}
-                            </div>
-                          ))}
-                          {(portalAccessByPortalId.get(p.id) || []).length === 0 && (
-                            <div>No access history yet</div>
-                          )}
+                        <div className="flex shrink-0 gap-1 self-end sm:self-start">
+                          <Button variant="outline" size="sm" className="gap-1 text-xs" onClick={() => copyPILink(p.token)}>
+                            {copiedToken === p.token ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
+                            {copiedToken === p.token ? "Copied!" : "Copy Link"}
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => act(actions.deleteAdvisorAccess(p.id))}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
                         </div>
                       </div>
-                      <div className="flex gap-1">
-                        <Button variant="outline" size="sm" className="gap-1 text-xs" onClick={() => copyPILink(p.token)}>
-                          {copiedToken === p.token ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-                          {copiedToken === p.token ? "Copied!" : "Copy Link"}
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteAdvisorAccess(p.id))}>
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
 
           {/* ─── Lab Gallery ──────────────────────────────────── */}
-          <div className="mt-6 space-y-3">
+          <div className="mt-6 space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex justify-between items-center">
-              <h3 className="text-sm font-semibold flex items-center gap-2">
+              <h3 className="text-sm font-semibold flex items-center gap-2 text-slate-900">
                 <ImageIcon className="h-4 w-4" /> Lab Gallery
-                <span className="text-xs text-muted-foreground font-normal">— auto-rotates on PI portal</span>
+                <span className="text-xs text-slate-500 font-normal">auto-rotates on PI portal</span>
               </h3>
               <Button size="sm" variant="outline" onClick={() => setShowAddPhoto(true)}>
                 <Plus className="h-4 w-4 mr-1" /> Add Photo
               </Button>
             </div>
             {photos.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-2">
+              <p className="text-xs text-slate-500 py-2">
                 No photos yet. Add image URLs (e.g. Google Drive share links) to show a looping gallery on the PI portal.
               </p>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {photos.map((p) => (
-                  <div key={p.id} className="relative group rounded-md overflow-hidden border bg-muted h-36 sm:h-40 lg:h-44">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={convertDriveUrl(p.image_url)}
-                      alt={p.caption || "Lab photo"}
-                      className="w-full h-full object-contain bg-white"
-                      referrerPolicy="no-referrer"
-                    />
-                    {p.caption && (
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-2 py-1">
-                        <p className="text-white text-xs truncate">{p.caption}</p>
-                      </div>
-                    )}
-                    {!p.show_in_portal && (
-                      <Badge className="absolute top-1 left-1 text-xs bg-yellow-500 text-white border-0">Hidden</Badge>
-                    )}
-                    <Button
-                      variant="destructive" size="sm"
-                      className="absolute top-1 right-1 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => act(actions.deleteColonyPhoto(p.id))}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
+                  <div key={p.id} className="group overflow-hidden rounded-lg border border-slate-200 bg-white">
+                    <div className="relative h-36 sm:h-40 lg:h-44">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={p.id ? `/api/gdrive/photo?photo_id=${encodeURIComponent(p.id)}` : convertDriveUrl(p.image_url)}
+                        alt={p.caption || "Lab photo"}
+                        className="h-full w-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                      {!p.show_in_portal && (
+                        <Badge className="absolute top-1 left-1 text-xs bg-yellow-500 text-white border-0">Hidden</Badge>
+                      )}
+                      <Button
+                        variant="destructive" size="sm"
+                        className="absolute top-1 right-1 h-6 w-6 p-0 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                        onClick={() => act(actions.deleteColonyPhoto(p.id))}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <div className="border-t border-slate-100 px-2 py-1.5">
+                      <p className="truncate text-xs text-slate-600">{p.caption || "No caption"}</p>
+                      {p.experiment_type ? (
+                        <p className="text-[11px] text-slate-500">{EXPERIMENT_LABELS[p.experiment_type] || p.experiment_type}</p>
+                      ) : null}
+                      {p.taken_date ? <p className="text-[11px] text-slate-500">{p.taken_date}</p> : null}
+                    </div>
                   </div>
                 ))}
               </div>

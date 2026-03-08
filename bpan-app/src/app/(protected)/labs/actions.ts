@@ -30,6 +30,32 @@ function normalizeOptionalString(value: FormDataEntryValue | null) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizeRequiredString(value: FormDataEntryValue | null, message: string) {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) throw new Error(message);
+  return normalized;
+}
+
+function parseMeetingCategory(value: FormDataEntryValue | null): "general" | "inspection" {
+  return value === "inspection" ? "inspection" : "general";
+}
+
+function parseMeetingStatus(value: FormDataEntryValue | null): "open" | "completed" {
+  return value === "completed" ? "completed" : "open";
+}
+
+function parseAnnouncementType(value: FormDataEntryValue | null): "general" | "inspection" {
+  return value === "inspection" ? "inspection" : "general";
+}
+
+function parseSharedTaskListType(value: FormDataEntryValue | null): "general" | "inspection" {
+  return value === "inspection" ? "inspection" : "general";
+}
+
+function parseSharedTaskDone(value: FormDataEntryValue | null) {
+  return value === "true" || value === "1" || value === "on";
+}
+
 function withLabSchemaGuidance(message: string) {
   return `${message} Labs are not fully available in this environment yet.`;
 }
@@ -407,4 +433,487 @@ export async function deactivateLabMember(formData: FormData) {
   }
 
   revalidatePath("/labs");
+}
+
+type IncomingMeetingActionItem = {
+  text?: string;
+  details?: string | null;
+  category?: "general" | "inspection";
+  status?: "open" | "completed";
+  responsibleMemberId?: string | null;
+  responsibleLabel?: string | null;
+  source?: "manual" | "ai";
+};
+
+async function assertMeetingBelongsToLab(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  meetingId: string,
+  labId: string,
+) {
+  const { data, error } = await supabase
+    .from("lab_meetings")
+    .select("id,lab_id")
+    .eq("id", meetingId)
+    .eq("lab_id", labId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message || "Unable to verify lab meeting.");
+  if (!data) throw new Error("Meeting not found in this lab.");
+}
+
+async function assertResponsibleMembersInLab(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  labId: string,
+  memberIds: string[],
+) {
+  if (memberIds.length === 0) return;
+  const { data, error } = await supabase
+    .from("lab_members")
+    .select("id")
+    .eq("lab_id", labId)
+    .eq("is_active", true)
+    .in("id", memberIds);
+
+  if (error) throw new Error(error.message || "Unable to verify responsible members.");
+  const allowed = new Set((data || []).map((row) => String(row.id)));
+  for (const memberId of memberIds) {
+    if (!allowed.has(memberId)) {
+      throw new Error("Responsible person must be an active member of this lab.");
+    }
+  }
+}
+
+export async function createLabMeeting(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  assertActiveLabContext(formData, labId);
+  await getCurrentMembershipRole(labId, user.id);
+
+  const title = normalizeRequiredString(formData.get("title"), "Meeting title is required.");
+  const meetingDate = normalizeOptionalString(formData.get("meeting_date")) ?? new Date().toISOString().slice(0, 10);
+  const attendeesRaw = normalizeOptionalString(formData.get("attendees"));
+  const content = normalizeOptionalString(formData.get("content")) ?? "";
+  const aiSummary = normalizeOptionalString(formData.get("ai_summary"));
+
+  const attendees = attendeesRaw
+    ? attendeesRaw
+        .split(/[,\n]/)
+        .map((item) => item.trim())
+        .filter((item, idx, arr) => item.length > 0 && arr.findIndex((entry) => entry.toLowerCase() === item.toLowerCase()) === idx)
+    : [];
+
+  const { data, error } = await supabase
+    .from("lab_meetings")
+    .insert({
+      lab_id: labId,
+      created_by: user.id,
+      title,
+      meeting_date: meetingDate,
+      attendees,
+      content,
+      ai_summary: aiSummary,
+    })
+    .select("id,lab_id,title,meeting_date,attendees,content,ai_summary,created_at,updated_at")
+    .single();
+
+  if (error) throw new Error(error.message || "Failed to create meeting.");
+  revalidatePath("/labs");
+  return data;
+}
+
+export async function updateLabMeeting(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  const meetingId = normalizeRequiredString(formData.get("meeting_id"), "Meeting id is required.");
+  assertActiveLabContext(formData, labId);
+  await getCurrentMembershipRole(labId, user.id);
+  await assertMeetingBelongsToLab(supabase, meetingId, labId);
+
+  const title = normalizeRequiredString(formData.get("title"), "Meeting title is required.");
+  const meetingDate = normalizeOptionalString(formData.get("meeting_date")) ?? new Date().toISOString().slice(0, 10);
+  const attendeesRaw = normalizeOptionalString(formData.get("attendees"));
+  const content = normalizeOptionalString(formData.get("content")) ?? "";
+  const aiSummary = normalizeOptionalString(formData.get("ai_summary"));
+
+  const attendees = attendeesRaw
+    ? attendeesRaw
+        .split(/[,\n]/)
+        .map((item) => item.trim())
+        .filter((item, idx, arr) => item.length > 0 && arr.findIndex((entry) => entry.toLowerCase() === item.toLowerCase()) === idx)
+    : [];
+
+  const { data, error } = await supabase
+    .from("lab_meetings")
+    .update({
+      title,
+      meeting_date: meetingDate,
+      attendees,
+      content,
+      ai_summary: aiSummary,
+    })
+    .eq("id", meetingId)
+    .eq("lab_id", labId)
+    .select("id,lab_id,title,meeting_date,attendees,content,ai_summary,created_at,updated_at")
+    .single();
+
+  if (error) throw new Error(error.message || "Failed to update meeting.");
+  revalidatePath("/labs");
+  return data;
+}
+
+export async function deleteLabMeeting(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  const meetingId = normalizeRequiredString(formData.get("meeting_id"), "Meeting id is required.");
+  assertActiveLabContext(formData, labId);
+  await getCurrentMembershipRole(labId, user.id);
+  await assertMeetingBelongsToLab(supabase, meetingId, labId);
+
+  const { error } = await supabase.from("lab_meetings").delete().eq("id", meetingId).eq("lab_id", labId);
+  if (error) throw new Error(error.message || "Failed to delete meeting.");
+  revalidatePath("/labs");
+  return { success: true };
+}
+
+export async function createLabMeetingActionItems(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  const meetingId = normalizeRequiredString(formData.get("meeting_id"), "Meeting id is required.");
+  assertActiveLabContext(formData, labId);
+  await getCurrentMembershipRole(labId, user.id);
+  await assertMeetingBelongsToLab(supabase, meetingId, labId);
+
+  const raw = normalizeRequiredString(formData.get("items_json"), "Action items payload is required.");
+  let parsed: IncomingMeetingActionItem[] = [];
+  try {
+    const value = JSON.parse(raw) as unknown;
+    parsed = Array.isArray(value) ? (value as IncomingMeetingActionItem[]) : [];
+  } catch {
+    throw new Error("Action items payload is invalid JSON.");
+  }
+
+  const items = parsed
+    .map((item) => ({
+      text: String(item.text || "").trim(),
+      details: item.details ? String(item.details).trim() : null,
+      category: item.category === "inspection" ? "inspection" as const : "general" as const,
+      status: item.status === "completed" ? "completed" as const : "open" as const,
+      responsibleMemberId: item.responsibleMemberId ? String(item.responsibleMemberId).trim() : null,
+      responsibleLabel: item.responsibleLabel ? String(item.responsibleLabel).trim() : null,
+      source: item.source === "ai" ? "ai" as const : "manual" as const,
+    }))
+    .filter((item) => item.text.length > 0);
+
+  if (items.length === 0) throw new Error("At least one non-empty action item is required.");
+  await assertResponsibleMembersInLab(
+    supabase,
+    labId,
+    items.map((item) => item.responsibleMemberId).filter((id): id is string => Boolean(id)),
+  );
+
+  const payload = items.map((item) => ({
+    lab_meeting_id: meetingId,
+    text: item.text,
+    details: item.details,
+    category: item.category,
+    status: item.status,
+    responsible_member_id: item.responsibleMemberId,
+    responsible_label: item.responsibleLabel,
+    source: item.source,
+    created_by: user.id,
+  }));
+
+  const { data, error } = await supabase
+    .from("lab_meeting_action_items")
+    .insert(payload)
+    .select("id,lab_meeting_id,text,details,category,status,responsible_member_id,responsible_label,source,created_at,updated_at");
+
+  if (error) throw new Error(error.message || "Failed to save action items.");
+  revalidatePath("/labs");
+  return data || [];
+}
+
+export async function updateLabMeetingActionItem(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  const actionItemId = normalizeRequiredString(formData.get("action_item_id"), "Action item id is required.");
+  assertActiveLabContext(formData, labId);
+  await getCurrentMembershipRole(labId, user.id);
+
+  const { data: existing, error: existingError } = await supabase
+    .from("lab_meeting_action_items")
+    .select("id,lab_meeting_id")
+    .eq("id", actionItemId)
+    .maybeSingle();
+
+  if (existingError) throw new Error(existingError.message || "Unable to load action item.");
+  if (!existing?.id || !existing.lab_meeting_id) throw new Error("Action item not found.");
+  await assertMeetingBelongsToLab(supabase, String(existing.lab_meeting_id), labId);
+
+  const responsibleMemberId = normalizeOptionalString(formData.get("responsible_member_id"));
+  await assertResponsibleMembersInLab(supabase, labId, responsibleMemberId ? [responsibleMemberId] : []);
+
+  const updatePayload = {
+    text: normalizeRequiredString(formData.get("text"), "Action item text is required."),
+    details: normalizeOptionalString(formData.get("details")),
+    category: parseMeetingCategory(formData.get("category")),
+    status: parseMeetingStatus(formData.get("status")),
+    responsible_member_id: responsibleMemberId,
+    responsible_label: normalizeOptionalString(formData.get("responsible_label")),
+  };
+
+  const { data, error } = await supabase
+    .from("lab_meeting_action_items")
+    .update(updatePayload)
+    .eq("id", actionItemId)
+    .select("id,lab_meeting_id,text,details,category,status,responsible_member_id,responsible_label,source,created_at,updated_at")
+    .single();
+
+  if (error) throw new Error(error.message || "Failed to update action item.");
+  revalidatePath("/labs");
+  return data;
+}
+
+export async function deleteLabMeetingActionItem(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  const actionItemId = normalizeRequiredString(formData.get("action_item_id"), "Action item id is required.");
+  assertActiveLabContext(formData, labId);
+  await getCurrentMembershipRole(labId, user.id);
+
+  const { data: existing, error: existingError } = await supabase
+    .from("lab_meeting_action_items")
+    .select("id,lab_meeting_id")
+    .eq("id", actionItemId)
+    .maybeSingle();
+  if (existingError) throw new Error(existingError.message || "Unable to load action item.");
+  if (!existing?.id || !existing.lab_meeting_id) throw new Error("Action item not found.");
+  await assertMeetingBelongsToLab(supabase, String(existing.lab_meeting_id), labId);
+
+  const { error } = await supabase.from("lab_meeting_action_items").delete().eq("id", actionItemId);
+  if (error) throw new Error(error.message || "Failed to delete action item.");
+  revalidatePath("/labs");
+  return { success: true };
+}
+
+export async function createLabAnnouncement(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  assertActiveLabContext(formData, labId);
+  const role = await getCurrentMembershipRole(labId, user.id);
+  if (!MANAGEABLE_MEMBER_ROLES.has(role)) {
+    throw new Error("Only managers or admins can post announcements.");
+  }
+
+  const title = normalizeRequiredString(formData.get("title"), "Announcement title is required.");
+  const body = normalizeRequiredString(formData.get("body"), "Announcement body is required.");
+  const type = parseAnnouncementType(formData.get("announcement_type"));
+
+  const { data, error } = await supabase
+    .from("lab_announcements")
+    .insert({
+      lab_id: labId,
+      type,
+      title,
+      body,
+      created_by: user.id,
+    })
+    .select("id,lab_id,type,title,body,created_by,created_at,updated_at")
+    .single();
+
+  if (error) throw new Error(error.message || "Failed to post announcement.");
+  revalidatePath("/labs");
+  return data;
+}
+
+export async function deleteLabAnnouncement(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  const announcementId = normalizeRequiredString(formData.get("announcement_id"), "Announcement id is required.");
+  assertActiveLabContext(formData, labId);
+  const role = await getCurrentMembershipRole(labId, user.id);
+  if (!MANAGEABLE_MEMBER_ROLES.has(role)) {
+    throw new Error("Only managers or admins can delete announcements.");
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("lab_announcements")
+    .select("id,lab_id")
+    .eq("id", announcementId)
+    .eq("lab_id", labId)
+    .maybeSingle();
+  if (existingError) throw new Error(existingError.message || "Unable to load announcement.");
+  if (!existing?.id) throw new Error("Announcement not found.");
+
+  const { error } = await supabase
+    .from("lab_announcements")
+    .delete()
+    .eq("id", announcementId)
+    .eq("lab_id", labId);
+  if (error) throw new Error(error.message || "Failed to delete announcement.");
+
+  revalidatePath("/labs");
+  return { success: true };
+}
+
+export async function createLabSharedTask(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  assertActiveLabContext(formData, labId);
+  const role = await getCurrentMembershipRole(labId, user.id);
+  if (!MANAGEABLE_MEMBER_ROLES.has(role)) {
+    throw new Error("Only managers or admins can create shared tasks.");
+  }
+
+  const title = normalizeRequiredString(formData.get("title"), "Task title is required.");
+  const details = normalizeOptionalString(formData.get("details")) ?? "";
+  const listType = parseSharedTaskListType(formData.get("list_type"));
+  const assigneeMemberId = normalizeOptionalString(formData.get("assignee_member_id"));
+  await assertResponsibleMembersInLab(supabase, labId, assigneeMemberId ? [assigneeMemberId] : []);
+
+  const { data, error } = await supabase
+    .from("lab_shared_tasks")
+    .insert({
+      lab_id: labId,
+      list_type: listType,
+      title,
+      details,
+      assignee_member_id: assigneeMemberId,
+      done: false,
+      completed_at: null,
+      created_by: user.id,
+    })
+    .select("id,lab_id,list_type,title,details,assignee_member_id,done,completed_at,created_by,created_at,updated_at")
+    .single();
+
+  if (error) throw new Error(error.message || "Failed to create shared task.");
+  revalidatePath("/labs");
+  return data;
+}
+
+export async function updateLabSharedTask(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  const taskId = normalizeRequiredString(formData.get("task_id"), "Task id is required.");
+  assertActiveLabContext(formData, labId);
+  const role = await getCurrentMembershipRole(labId, user.id);
+  if (!MANAGEABLE_MEMBER_ROLES.has(role)) {
+    throw new Error("Only managers or admins can update shared tasks.");
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("lab_shared_tasks")
+    .select("id,lab_id")
+    .eq("id", taskId)
+    .eq("lab_id", labId)
+    .maybeSingle();
+  if (existingError) throw new Error(existingError.message || "Unable to load task.");
+  if (!existing?.id) throw new Error("Shared task not found.");
+
+  const title = normalizeRequiredString(formData.get("title"), "Task title is required.");
+  const details = normalizeOptionalString(formData.get("details")) ?? "";
+  const listType = parseSharedTaskListType(formData.get("list_type"));
+  const assigneeMemberId = normalizeOptionalString(formData.get("assignee_member_id"));
+  await assertResponsibleMembersInLab(supabase, labId, assigneeMemberId ? [assigneeMemberId] : []);
+  const done = parseSharedTaskDone(formData.get("done"));
+
+  const { data, error } = await supabase
+    .from("lab_shared_tasks")
+    .update({
+      list_type: listType,
+      title,
+      details,
+      assignee_member_id: assigneeMemberId,
+      done,
+      completed_at: done ? new Date().toISOString() : null,
+    })
+    .eq("id", taskId)
+    .eq("lab_id", labId)
+    .select("id,lab_id,list_type,title,details,assignee_member_id,done,completed_at,created_by,created_at,updated_at")
+    .single();
+
+  if (error) throw new Error(error.message || "Failed to update shared task.");
+  revalidatePath("/labs");
+  return data;
+}
+
+export async function deleteLabSharedTask(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const labId = normalizeRequiredString(formData.get("lab_id"), "Lab id is required.");
+  const taskId = normalizeRequiredString(formData.get("task_id"), "Task id is required.");
+  assertActiveLabContext(formData, labId);
+  const role = await getCurrentMembershipRole(labId, user.id);
+  if (!MANAGEABLE_MEMBER_ROLES.has(role)) {
+    throw new Error("Only managers or admins can delete shared tasks.");
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("lab_shared_tasks")
+    .select("id,lab_id")
+    .eq("id", taskId)
+    .eq("lab_id", labId)
+    .maybeSingle();
+  if (existingError) throw new Error(existingError.message || "Unable to load task.");
+  if (!existing?.id) throw new Error("Shared task not found.");
+
+  const { error } = await supabase.from("lab_shared_tasks").delete().eq("id", taskId).eq("lab_id", labId);
+  if (error) throw new Error(error.message || "Failed to delete shared task.");
+
+  revalidatePath("/labs");
+  return { success: true };
 }

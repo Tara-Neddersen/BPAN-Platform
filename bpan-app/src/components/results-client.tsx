@@ -182,7 +182,7 @@ interface Props {
   experiments: Pick<Experiment, "id" | "title">[];
   runs: ExperimentRunOption[];
   initialDatasetId?: string | null;
-  initialTab?: "data" | "analyze" | "visualize";
+  initialTab?: "data" | "visualize";
   initialAnalysisId?: string | null;
   initialFigureId?: string | null;
   initialPrefillTitle?: string | null;
@@ -240,9 +240,9 @@ export function ResultsClient({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [datasets, setDatasets] = useState<ResultsDatasetRecord[]>(initialDatasets);
-  const [analyses, setAnalyses] = useState(initialAnalyses);
+  const [analyses] = useState(initialAnalyses);
   const [figures] = useState(initialFigures);
-  const [activeTab, setActiveTab] = useState<"data" | "analyze" | "visualize">(initialTab);
+  const [activeTab, setActiveTab] = useState<"data" | "visualize">(initialTab);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
     initialDatasets.find((d) => d.id === initialDatasetId)?.id || initialDatasets[0]?.id || null
   );
@@ -301,8 +301,6 @@ export function ResultsClient({
 
   const highlightedAnalysisId = initialAnalysisId;
   const highlightedFigureId = initialFigureId;
-  const hasDatasets = datasets.length > 0;
-
   const exportSelectedDatasetCsv = useCallback(() => {
     if (!selectedDataset) {
       toast.message("Select a dataset first.");
@@ -376,173 +374,210 @@ export function ResultsClient({
 
   return (
     <div className="page-shell">
-      <div className="page-header">
-        <div>
-          <div className="flex items-center gap-1.5">
-            <h1 className="text-2xl font-bold tracking-tight">{UI_SURFACE_TITLES.results}</h1>
-            <HelpHint text="Import data, run statistics, and build figures." />
+      <section className="results-hero section-card card-density-comfy space-y-4">
+        <div className="page-header">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold tracking-tight">{UI_SURFACE_TITLES.results}</h1>
+              <HelpHint text="Import data, run statistics, and build figures." />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Unified workspace for datasets, exports, and publication-ready figures.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary" className="gap-1">
+                <TableIcon className="h-3 w-3" /> {datasets.length} dataset{datasets.length !== 1 ? "s" : ""}
+              </Badge>
+              <Badge variant="secondary" className="gap-1">
+                <FlaskConical className="h-3 w-3" />{" "}
+                {selectedDataset ? datasetAnalyses.length : analyses.length}{" "}
+                {selectedDataset ? "selected analys" : "total analys"}
+                {(selectedDataset ? datasetAnalyses.length : analyses.length) === 1 ? "is" : "es"}
+              </Badge>
+              <Badge variant="secondary" className="gap-1">
+                <BarChart3 className="h-3 w-3" />{" "}
+                {selectedDataset ? datasetFigures.length : figures.length}{" "}
+                {selectedDataset ? "selected figure" : "total figure"}
+                {(selectedDataset ? datasetFigures.length : figures.length) === 1 ? "" : "s"}
+              </Badge>
+            </div>
           </div>
-        </div>
-        {hasDatasets ? (
-          <div className="flex flex-col items-start gap-2 sm:items-end">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             <Button onClick={() => setShowImport(true)} className="touch-target gap-2">
               <Upload className="h-4 w-4" /> Import file
             </Button>
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer list-none rounded-md px-1 py-0.5 hover:text-foreground">
-                More actions
-              </summary>
-              <div className="mt-2">
-                <Button variant="ghost" onClick={() => setShowPaste(true)} className="touch-target gap-2">
+            {datasets.length > 0 && (
+              <>
+                <Button variant="outline" onClick={() => setShowPaste(true)} className="touch-target gap-2 hidden sm:inline-flex">
                   <ClipboardPaste className="h-4 w-4" /> Paste data
                 </Button>
-                <Button variant="ghost" onClick={() => setShowSheets(true)} className="touch-target gap-2">
+                <Button variant="outline" onClick={() => setShowSheets(true)} className="touch-target gap-2 hidden sm:inline-flex">
                   <Link2 className="h-4 w-4" /> Link Google Sheet
                 </Button>
-              </div>
-            </details>
-          </div>
-        ) : null}
-      </div>
-
-      {/* Dataset selector */}
-      {datasets.length > 0 && (
-        <div className="section-card card-density-compact space-y-2">
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-1.5">
-              <Label className="text-sm font-medium">Dataset:</Label>
-              <HelpHint text="Choose the dataset to review, analyze, or chart." />
-            </div>
-            <Select
-              value={selectedDatasetId || ""}
-              onValueChange={setSelectedDatasetId}
-            >
-              <SelectTrigger className="w-full sm:w-[300px]">
-                <SelectValue placeholder="Select a dataset" />
-              </SelectTrigger>
-              <SelectContent>
-                {datasets.map((d) => (
-                  <SelectItem key={d.id} value={d.id}>
-                    {d.name} ({d.row_count} rows)
-                    {resolveDatasetRunLink(d).mode === "legacy_inferred" ? " • legacy linked" : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedDataset && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-destructive gap-1"
-                onClick={async () => {
-                  if (confirm(`Delete "${selectedDataset.name}"?`)) {
-                    await deleteDataset(selectedDataset.id);
-                    setDatasets((prev) => prev.filter((d) => d.id !== selectedDataset.id));
-                    setSelectedDatasetId(datasets.find((d) => d.id !== selectedDataset.id)?.id || null);
-                  }
-                }}
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Delete
-              </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={() => setShowPaste(true)}
+                  className="touch-target sm:hidden"
+                  aria-label="Paste data"
+                  title="Paste data"
+                >
+                  <ClipboardPaste className="h-4 w-4" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={() => setShowSheets(true)}
+                  className="touch-target sm:hidden"
+                  aria-label="Link Google Sheet"
+                  title="Link Google Sheet"
+                >
+                  <Link2 className="h-4 w-4" />
+                </Button>
+              </>
             )}
           </div>
+        </div>
 
-          {selectedDataset && (selectedRun || selectedDataset.experiment_id) && (
-            <div className="flex flex-wrap gap-2">
-              {selectedRun && (
-                <Badge variant="outline" className="gap-1">
-                  <FlaskConical className="h-3 w-3" />
-                  From run: {selectedRun.name}{selectedRun.status ? ` (${selectedRun.status})` : ""}
-                </Badge>
-              )}
-              {selectedRunResolution.mode === "legacy_inferred" && (
-                <Badge variant="outline">
-                  Legacy linked (inferred)
-                </Badge>
-              )}
-              {selectedDataset.experiment_id && (
-                <Badge variant="secondary">
-                  Experiment: linked
-                </Badge>
-              )}
-              {normalizeSchemaSnapshot(selectedDataset.schema_snapshot).length > 0 && (
-                <Badge variant="outline">
-                  Schema applied
-                </Badge>
+        {datasets.length > 0 && (
+          <div className="results-hero-inner space-y-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <Label className="text-sm font-medium">Dataset:</Label>
+                <HelpHint text="Choose the dataset to review, analyze, or chart." />
+              </div>
+              <Select
+                value={selectedDatasetId || ""}
+                onValueChange={setSelectedDatasetId}
+              >
+                <SelectTrigger className="w-full sm:w-[320px]">
+                  <SelectValue placeholder="Select a dataset" />
+                </SelectTrigger>
+                <SelectContent>
+                  {datasets.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name} ({d.row_count} rows)
+                      {resolveDatasetRunLink(d).mode === "legacy_inferred" ? " • legacy linked" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedDataset && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive gap-1"
+                  onClick={async () => {
+                    if (confirm(`Delete "${selectedDataset.name}"?`)) {
+                      await deleteDataset(selectedDataset.id);
+                      setDatasets((prev) => prev.filter((d) => d.id !== selectedDataset.id));
+                      setSelectedDatasetId(datasets.find((d) => d.id !== selectedDataset.id)?.id || null);
+                    }
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Delete
+                </Button>
               )}
             </div>
-          )}
-          {selectedDataset && (
-            <div className="rounded-lg border bg-muted/20 px-3 py-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-xs text-muted-foreground">
-                  {datasetAnalyses.length} analyses • {datasetFigures.length} figures • {selectedDataset.columns.length} columns • {selectedDataset.row_count} rows
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setActiveTab("analyze")}>
-                    Open Analyze
-                  </Button>
-                  <details className="text-xs">
-                    <summary className="cursor-pointer list-none rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:bg-slate-50">
-                      More
-                    </summary>
-                    <div className="mt-2 flex flex-wrap justify-end gap-2">
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={exportSelectedDatasetCsv}>
-                        Export CSV
-                      </Button>
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={exportSelectedReportPack}>
-                        Report Pack
-                      </Button>
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setActiveTab("visualize")}>
-                        Open Visualize
-                      </Button>
-                    </div>
-                  </details>
+
+            {selectedDataset && (selectedRun || selectedDataset.experiment_id) && (
+              <div className="flex flex-wrap gap-2">
+                {selectedRun && (
+                  <Badge variant="outline" className="gap-1">
+                    <FlaskConical className="h-3 w-3" />
+                    From run: {selectedRun.name}{selectedRun.status ? ` (${selectedRun.status})` : ""}
+                  </Badge>
+                )}
+                {selectedRunResolution.mode === "legacy_inferred" && (
+                  <Badge variant="outline">
+                    Legacy linked (inferred)
+                  </Badge>
+                )}
+                {selectedDataset.experiment_id && (
+                  <Badge variant="secondary">
+                    Experiment: linked
+                  </Badge>
+                )}
+                {normalizeSchemaSnapshot(selectedDataset.schema_snapshot).length > 0 && (
+                  <Badge variant="outline">
+                    Schema applied
+                  </Badge>
+                )}
+              </div>
+            )}
+            {selectedDataset && (
+              <div className="rounded-xl border bg-background/85 px-3 py-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs text-muted-foreground">
+                    {datasetAnalyses.length} analyses • {datasetFigures.length} figures • {selectedDataset.columns.length} columns • {selectedDataset.row_count} rows
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => router.push("/colony/analysis")}>
+                      Open Analysis
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setActiveTab("visualize")}>
+                      Open Visualize
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs hidden sm:inline-flex" onClick={exportSelectedDatasetCsv}>
+                      Export CSV
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs hidden sm:inline-flex" onClick={exportSelectedReportPack}>
+                      Report Pack
+                    </Button>
+                    <details className="sm:hidden text-xs">
+                      <summary className="cursor-pointer list-none rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:bg-slate-50">
+                        Exports
+                      </summary>
+                      <div className="mt-2 flex flex-wrap justify-end gap-2">
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={exportSelectedDatasetCsv}>
+                          Export CSV
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={exportSelectedReportPack}>
+                          Report Pack
+                        </Button>
+                      </div>
+                    </details>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Main content */}
       {!selectedDataset ? (
-        <div className="rounded-lg border border-dashed p-16 text-center">
-          <BarChart3 className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
+        <div className="rounded-2xl border border-dashed bg-gradient-to-b from-white to-slate-50/80 p-8 text-center sm:p-12">
+          <div className="mb-4 inline-flex rounded-2xl border border-primary/20 bg-primary/5 p-3">
+            <BarChart3 className="h-8 w-8 text-primary" />
+          </div>
           <div className="mb-4 flex items-center justify-center gap-1.5">
             <h3 className="font-medium text-lg">No data yet</h3>
             <HelpHint text="Upload a CSV or Excel file, or paste table data to create your first dataset." />
           </div>
-          <p className="mb-5 text-xs text-muted-foreground">
+          <p className="mx-auto mb-5 max-w-xl text-sm text-muted-foreground">
             For run-linked capture, use <span className="font-medium">Create Dataset from Run</span> on the run screen.
           </p>
-          <div className="flex flex-wrap gap-3 justify-center">
-            <Button onClick={() => setShowImport(true)} className="touch-target gap-2">
-              <Upload className="h-4 w-4" /> Import file
-            </Button>
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer list-none rounded-md px-2 py-1 hover:text-foreground">
-                More actions
-              </summary>
-              <div className="mt-2">
-                <Button variant="ghost" onClick={() => setShowPaste(true)} className="touch-target gap-2">
-                  <ClipboardPaste className="h-4 w-4" /> Paste data
-                </Button>
-                <Button variant="ghost" onClick={() => setShowSheets(true)} className="touch-target gap-2">
-                  <Link2 className="h-4 w-4" /> Link Google Sheet
-                </Button>
-              </div>
-            </details>
+          <div className="mx-auto mb-6 grid max-w-lg grid-cols-1 gap-2 text-left text-xs text-muted-foreground sm:grid-cols-3">
+            <div className="rounded-lg border bg-background/80 px-3 py-2">
+              <span className="font-medium text-foreground">1.</span> Import or paste raw values
+            </div>
+            <div className="rounded-lg border bg-background/80 px-3 py-2">
+              <span className="font-medium text-foreground">2.</span> Run analyses and compare outcomes
+            </div>
+            <div className="rounded-lg border bg-background/80 px-3 py-2">
+              <span className="font-medium text-foreground">3.</span> Export figures and report packs
+            </div>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Use the <span className="font-medium">Import file</span> button in the header to get started.
+          </p>
         </div>
       ) : (
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "data" | "analyze" | "visualize")} className="space-y-4">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "data" | "visualize")} className="space-y-4">
           <TabsList className="sticky-section-switcher h-auto w-full justify-start gap-1 px-1 py-1">
             <TabsTrigger value="data" className="touch-target gap-1.5">
               <TableIcon className="h-3.5 w-3.5" /> Data
-            </TabsTrigger>
-            <TabsTrigger value="analyze" className="touch-target gap-1.5">
-              <FlaskConical className="h-3.5 w-3.5" /> Analyze
             </TabsTrigger>
             <TabsTrigger value="visualize" className="touch-target gap-1.5">
               <BarChart3 className="h-3.5 w-3.5" /> Visualize
@@ -552,21 +587,6 @@ export function ResultsClient({
           {/* ─── DATA TAB ─── */}
           <TabsContent value="data">
             <DataTable dataset={selectedDataset} />
-          </TabsContent>
-
-          {/* ─── ANALYZE TAB ─── */}
-          <TabsContent value="analyze">
-            <AnalyzePanel
-              dataset={selectedDataset}
-              analyses={datasetAnalyses}
-              allAnalyses={analyses}
-              highlightedAnalysisId={highlightedAnalysisId}
-              prefillStarterAnalyses={initialPrefillStarterAnalyses}
-              onNewAnalysis={(a) => setAnalyses((prev) => [a, ...prev])}
-              onDeleteAnalysis={(id) =>
-                setAnalyses((prev) => prev.filter((a) => a.id !== id))
-              }
-            />
           </TabsContent>
 
           {/* ─── VISUALIZE TAB ─── */}
@@ -596,7 +616,7 @@ export function ResultsClient({
           onImported={(ds) => {
             setDatasets((prev) => [ds, ...prev]);
             setSelectedDatasetId(ds.id);
-            if (initialPrefillStarterAnalyses) setActiveTab("analyze");
+            if (initialPrefillStarterAnalyses) router.push("/colony/analysis");
             setShowImport(false);
           }}
         />
@@ -615,7 +635,7 @@ export function ResultsClient({
           onImported={(ds) => {
             setDatasets((prev) => [ds, ...prev]);
             setSelectedDatasetId(ds.id);
-            if (initialPrefillStarterAnalyses) setActiveTab("analyze");
+            if (initialPrefillStarterAnalyses) router.push("/colony/analysis");
             setShowPaste(false);
           }}
         />
@@ -733,6 +753,8 @@ function DataTable({ dataset }: { dataset: Dataset }) {
 
 // ─── Analyze Panel ───────────────────────────────────────────────────────────
 
+// Analysis stays in this file for reuse, but is currently mounted from the dedicated Analysis surface.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function AnalyzePanel({
   dataset,
   analyses,

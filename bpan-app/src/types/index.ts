@@ -938,6 +938,8 @@ export interface LabReagentStockEvent {
   unit: string | null;
   vendor: string | null;
   reference_number: string | null;
+  purchase_order_number: string | null;
+  expected_arrival_at: string | null;
   notes: string | null;
   created_by: string | null;
   created_at: string;
@@ -967,6 +969,38 @@ export interface LabEquipmentBooking {
   starts_at: string;
   ends_at: string;
   status: PlatformBookingStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LabMeeting {
+  id: string;
+  lab_id: string;
+  created_by: string | null;
+  title: string;
+  meeting_date: string;
+  attendees: string[];
+  content: string;
+  ai_summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type LabMeetingActionCategory = "general" | "inspection";
+export type LabMeetingActionStatus = "open" | "completed";
+export type LabMeetingActionSource = "manual" | "ai";
+
+export interface LabMeetingActionItem {
+  id: string;
+  lab_meeting_id: string;
+  text: string;
+  details: string | null;
+  category: LabMeetingActionCategory;
+  status: LabMeetingActionStatus;
+  responsible_member_id: string | null;
+  responsible_label: string | null;
+  source: LabMeetingActionSource;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
 }

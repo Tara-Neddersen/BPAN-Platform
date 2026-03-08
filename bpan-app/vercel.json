@@ -12,6 +12,10 @@
     {
       "path": "/api/sheets/google/auto-sync",
       "schedule": "30 10 * * *"
+    },
+    {
+      "path": "/api/quartzy/auto-sync",
+      "schedule": "45 11 * * *"
     }
   ]
 }

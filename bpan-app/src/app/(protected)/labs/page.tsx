@@ -5,6 +5,8 @@ import { fetchLabRoster, fetchLabShellSummary } from "@/lib/labs";
 import { LabsClient } from "@/components/labs-client";
 import { LabOperationsClient } from "@/components/lab-operations-client";
 import { LabsChatClient, type ChatMessageItem, type ChatThreadItem } from "@/components/labs-chat-client";
+import { LabsAssistantClient } from "@/components/labs-assistant-client";
+import { LabMeetingsClient } from "@/components/lab-meetings-client";
 import { getRequestedActiveLabId, resolveActiveLabContext } from "@/lib/active-lab-context";
 import type {
   LabEquipment,
@@ -33,6 +35,13 @@ import {
   updateLabReagent,
 } from "@/app/(protected)/operations/actions";
 import {
+  createLabAnnouncement as createLabAnnouncementAction,
+  createLabSharedTask as createLabSharedTaskAction,
+  deleteLabAnnouncement as deleteLabAnnouncementAction,
+  deleteLabSharedTask as deleteLabSharedTaskAction,
+  updateLabSharedTask as updateLabSharedTaskAction,
+} from "@/app/(protected)/labs/actions";
+import {
   createLabChatThread,
   editLabChatMessage,
   markLabChatThreadRead,
@@ -60,6 +69,62 @@ type InventorySyncStatus = {
   inserted: number | null;
   source: "quartzy_stock_events" | "placeholder";
   hint: string;
+};
+
+type LabMeetingRecord = {
+  id: string;
+  lab_id: string;
+  title: string;
+  meeting_date: string;
+  attendees: string[];
+  content: string;
+  ai_summary: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type LabMeetingActionItemRecord = {
+  id: string;
+  lab_meeting_id: string;
+  text: string;
+  details: string | null;
+  category: "general" | "inspection";
+  status: "open" | "completed";
+  responsible_member_id: string | null;
+  responsible_label: string | null;
+  source: "manual" | "ai";
+  created_at: string;
+  updated_at: string;
+};
+
+type LabMeetingMemberOption = {
+  memberId: string;
+  label: string;
+};
+
+type LabAnnouncementRecord = {
+  id: string;
+  lab_id: string;
+  type: "inspection" | "general";
+  title: string;
+  body: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type LabSharedTaskRecord = {
+  id: string;
+  lab_id: string;
+  list_type: "inspection" | "general";
+  title: string;
+  details: string;
+  assignee_member_id: string | null;
+  done: boolean;
+  completed_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 function normalizeSubject(subject: string | null) {
@@ -587,7 +652,7 @@ async function loadInventorySyncStatusByLab(
     .from("lab_reagent_stock_events")
     .select("lab_reagent_id,created_at,reference_number")
     .in("lab_reagent_id", reagentIds)
-    .ilike("reference_number", "quartzy:%")
+    .or("reference_number.ilike.quartzy:%,reference_number.ilike.quartzy_item:%")
     .order("created_at", { ascending: false });
 
   for (const event of syncEvents ?? []) {
@@ -607,6 +672,73 @@ async function loadInventorySyncStatusByLab(
   }
 
   return statusByLab;
+}
+
+async function loadLabMeetingsPanelData({
+  supabase,
+  serviceSupabase,
+  activeLabId,
+}: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  serviceSupabase: ReturnType<typeof createServiceClient>;
+  activeLabId: string;
+}) {
+  const { data: meetingRows } = await supabase
+    .from("lab_meetings")
+    .select("id,lab_id,title,meeting_date,attendees,content,ai_summary,created_at,updated_at")
+    .eq("lab_id", activeLabId)
+    .order("meeting_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  const meetings = (meetingRows ?? []) as LabMeetingRecord[];
+  const meetingIds = meetings.map((meeting) => meeting.id);
+
+  const { data: actionRows } = meetingIds.length
+    ? await supabase
+        .from("lab_meeting_action_items")
+        .select("id,lab_meeting_id,text,details,category,status,responsible_member_id,responsible_label,source,created_at,updated_at")
+        .in("lab_meeting_id", meetingIds)
+        .order("created_at", { ascending: false })
+    : { data: [] as LabMeetingActionItemRecord[] };
+
+  const { data: memberRows } = await supabase
+    .from("lab_members")
+    .select("id,user_id,display_title")
+    .eq("lab_id", activeLabId)
+    .eq("is_active", true);
+
+  const userIds = (memberRows ?? []).map((row) => String(row.user_id)).filter(Boolean);
+  const { data: profileRows } = userIds.length
+    ? await serviceSupabase.from("profiles").select("id,display_name,email").in("id", userIds)
+    : { data: [] as Array<{ id: string; display_name: string | null; email: string | null }> };
+
+  const profileById = new Map<string, { displayName: string | null; email: string | null }>();
+  for (const row of profileRows ?? []) {
+    profileById.set(String(row.id), {
+      displayName: typeof row.display_name === "string" ? row.display_name : null,
+      email: typeof row.email === "string" ? row.email : null,
+    });
+  }
+
+  const memberOptions: LabMeetingMemberOption[] = (memberRows ?? []).map((member) => {
+    const profile = profileById.get(String(member.user_id));
+    const label =
+      (typeof member.display_title === "string" && member.display_title.trim().length > 0
+        ? member.display_title.trim()
+        : profile?.displayName?.trim()) ||
+      profile?.email ||
+      "Lab member";
+    return {
+      memberId: String(member.id),
+      label,
+    };
+  });
+
+  return {
+    meetings,
+    actionItems: (actionRows ?? []) as LabMeetingActionItemRecord[],
+    memberOptions,
+  };
 }
 
 export default async function LabsPage({
@@ -647,7 +779,9 @@ export default async function LabsPage({
 
   let operationsReagentsPanel: ReactNode = null;
   let operationsEquipmentPanel: ReactNode = null;
+  let labsAssistantPanel: ReactNode = null;
   let labChatPanel: ReactNode = null;
+  let labMeetingsPanel: ReactNode = null;
 
   if (activeLabContext.activeMembership) {
     const operationsPanelData = await loadOperationsPanelData({
@@ -707,8 +841,32 @@ export default async function LabsPage({
       activeLabId: activeLabContext.activeMembership.lab.id,
     });
 
+    labsAssistantPanel = (
+      <LabsAssistantClient
+        key={`labs-assistant-${activeLabContext.activeMembership.lab.id}`}
+        activeLabId={activeLabContext.activeMembership.lab.id}
+      />
+    );
+
+    const meetingsPanelData = await loadLabMeetingsPanelData({
+      supabase,
+      serviceSupabase,
+      activeLabId: activeLabContext.activeMembership.lab.id,
+    });
+
+    labMeetingsPanel = (
+      <LabMeetingsClient
+        key={`labs-meetings-${activeLabContext.activeMembership.lab.id}`}
+        activeLabId={activeLabContext.activeMembership.lab.id}
+        meetings={meetingsPanelData.meetings}
+        actionItems={meetingsPanelData.actionItems}
+        memberOptions={meetingsPanelData.memberOptions}
+      />
+    );
+
     labChatPanel = (
       <LabsChatClient
+        key={`labs-chat-${activeLabContext.activeMembership.lab.id}`}
         activeLabId={activeLabContext.activeMembership.lab.id}
         activeLabName={activeLabContext.activeMembership.lab.name}
         currentUserId={user.id}
@@ -761,6 +919,45 @@ export default async function LabsPage({
     }),
   );
 
+  const labIds = shellSummary.memberships.map((membership) => membership.lab.id);
+  const { data: announcementRows } = labIds.length
+    ? await supabase
+        .from("lab_announcements")
+        .select("id,lab_id,type,title,body,created_by,created_at,updated_at")
+        .in("lab_id", labIds)
+        .order("created_at", { ascending: false })
+    : { data: [] as LabAnnouncementRecord[] };
+
+  const { data: sharedTaskRows } = labIds.length
+    ? await supabase
+        .from("lab_shared_tasks")
+        .select("id,lab_id,list_type,title,details,assignee_member_id,done,completed_at,created_by,created_at,updated_at")
+        .in("lab_id", labIds)
+        .order("created_at", { ascending: false })
+    : { data: [] as LabSharedTaskRecord[] };
+
+  const initialAnnouncementsByLab = (announcementRows ?? []).reduce<Record<string, LabAnnouncementRecord[]>>(
+    (acc, row) => {
+      const key = String(row.lab_id);
+      const list = acc[key] ?? [];
+      list.push(row as LabAnnouncementRecord);
+      acc[key] = list;
+      return acc;
+    },
+    {},
+  );
+
+  const initialSharedTasksByLab = (sharedTaskRows ?? []).reduce<Record<string, LabSharedTaskRecord[]>>(
+    (acc, row) => {
+      const key = String(row.lab_id);
+      const list = acc[key] ?? [];
+      list.push(row as LabSharedTaskRecord);
+      acc[key] = list;
+      return acc;
+    },
+    {},
+  );
+
   return (
     <LabsClient
       currentUserId={user.id}
@@ -772,7 +969,20 @@ export default async function LabsPage({
       initialPanel={params?.panel ?? null}
       operationsReagentsPanel={operationsReagentsPanel}
       operationsEquipmentPanel={operationsEquipmentPanel}
+      labsAssistantPanel={labsAssistantPanel}
       labChatPanel={labChatPanel}
+      labMeetingsPanel={labMeetingsPanel}
+      initialAnnouncementsByLab={initialAnnouncementsByLab}
+      initialSharedTasksByLab={initialSharedTasksByLab}
+      announcementActions={{
+        createAnnouncement: createLabAnnouncementAction,
+        deleteAnnouncement: deleteLabAnnouncementAction,
+      }}
+      sharedTaskActions={{
+        createTask: createLabSharedTaskAction,
+        updateTask: updateLabSharedTaskAction,
+        deleteTask: deleteLabSharedTaskAction,
+      }}
       syncStatusByLab={syncStatusByLab}
       workspaces={rosters}
     />

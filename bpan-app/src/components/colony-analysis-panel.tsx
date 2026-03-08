@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
 import Papa from "papaparse";
 import {
@@ -32,7 +32,6 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 
@@ -55,17 +54,23 @@ const EXPERIMENT_LABELS: Record<string, string> = {
 };
 
 const GROUP_COLORS: Record<string, string> = {
-  "Hemi Male": "#ef4444",
-  "WT Male": "#3b82f6",
-  "Het Female": "#f97316",
-  "WT Female": "#8b5cf6",
+  "Hemi Male": "#c2410c",
+  "WT Male": "#0f766e",
+  "Het Female": "#b45309",
+  "WT Female": "#7c3aed",
 };
 
 const GROUP_ORDER = ["Hemi Male", "WT Male", "Het Female", "WT Female"];
+const GROUP_SURFACE_CLASSES: Record<string, string> = {
+  "Hemi Male": "border-orange-200 bg-gradient-to-br from-orange-50 to-rose-50 text-orange-900",
+  "WT Male": "border-teal-200 bg-gradient-to-br from-teal-50 to-cyan-50 text-teal-900",
+  "Het Female": "border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 text-amber-900",
+  "WT Female": "border-violet-200 bg-gradient-to-br from-violet-50 to-indigo-50 text-violet-900",
+};
 
 const CHART_COLORS = [
-  "#ef4444", "#3b82f6", "#f97316", "#8b5cf6",
-  "#10b981", "#f59e0b", "#06b6d4", "#ec4899",
+  "#0f766e", "#c2410c", "#7c3aed", "#b45309",
+  "#2563eb", "#059669", "#dc2626", "#4f46e5",
 ];
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -114,6 +119,45 @@ function welchTTest(a: number[], b: number[]): { t: number; df: number; p: numbe
   const cohenD = pooledSD === 0 ? 0 : (m1 - m2) / pooledSD;
   const p = 2 * (1 - approxNormCDF(Math.abs(t)));
   return { t: round(t), df: round(df), p: round(p, 6), cohenD: round(cohenD) };
+}
+
+/** Mann-Whitney U test (two-tailed normal approximation) */
+function mannWhitneyUTest(a: number[], b: number[]): { u: number; z: number; p: number } {
+  const n1 = a.length;
+  const n2 = b.length;
+  if (n1 === 0 || n2 === 0) return { u: 0, z: 0, p: 1 };
+
+  const pooled = [
+    ...a.map((v) => ({ v, g: 1 as const })),
+    ...b.map((v) => ({ v, g: 2 as const })),
+  ].sort((x, y) => x.v - y.v);
+
+  const ranks = new Array<number>(pooled.length).fill(0);
+  let i = 0;
+  while (i < pooled.length) {
+    let j = i;
+    while (j + 1 < pooled.length && pooled[j + 1].v === pooled[i].v) j++;
+    const avgRank = (i + j + 2) / 2; // 1-based rank average
+    for (let k = i; k <= j; k++) ranks[k] = avgRank;
+    i = j + 1;
+  }
+
+  let r1 = 0;
+  for (let idx = 0; idx < pooled.length; idx++) {
+    if (pooled[idx].g === 1) r1 += ranks[idx];
+  }
+
+  const u1 = r1 - (n1 * (n1 + 1)) / 2;
+  const u2 = n1 * n2 - u1;
+  const u = Math.min(u1, u2);
+  const mu = (n1 * n2) / 2;
+  const sigma = Math.sqrt((n1 * n2 * (n1 + n2 + 1)) / 12);
+  if (sigma === 0) return { u: round(u), z: 0, p: 1 };
+
+  const cc = u > mu ? -0.5 : 0.5; // continuity correction
+  const z = (u - mu + cc) / sigma;
+  const p = 2 * (1 - approxNormCDF(Math.abs(z)));
+  return { u: round(u), z: round(z), p: round(p, 6) };
 }
 
 /** One-way ANOVA */
@@ -232,7 +276,9 @@ export function ColonyAnalysisPanel({
   colonyResults,
 }: ColonyAnalysisPanelProps) {
   // ── Filter state ──
-  const [selectedExperiment, setSelectedExperiment] = useState<string>("__all__");
+  const [selectedExperiment, setSelectedExperiment] = useState<string>(
+    () => colonyResults[0]?.experiment_type || "__all__"
+  );
   const [selectedTimepoint, setSelectedTimepoint] = useState<string>("__all__");
   const [selectedCohort, setSelectedCohort] = useState<string>("__all__");
 
@@ -242,21 +288,35 @@ export function ColonyAnalysisPanel({
     return Array.from(exps).sort();
   }, [colonyResults]);
 
-  // Available timepoints from results
+  const effectiveSelectedExperiment =
+    selectedExperiment === "__all__" && availableExperiments.length > 0
+      ? availableExperiments[0]
+      : selectedExperiment;
+
+  // Available timepoints from results, scoped by selected experiment.
   const availableTimepoints = useMemo(() => {
-    const tps = new Set(colonyResults.map((r) => r.timepoint_age_days));
+    const scoped =
+      effectiveSelectedExperiment && effectiveSelectedExperiment !== "__all__"
+        ? colonyResults.filter((r) => r.experiment_type === effectiveSelectedExperiment)
+        : colonyResults;
+    const tps = new Set(scoped.map((r) => r.timepoint_age_days));
     return Array.from(tps).sort((a, b) => a - b);
-  }, [colonyResults]);
+  }, [colonyResults, effectiveSelectedExperiment]);
+
+  const effectiveSelectedTimepoint =
+    selectedTimepoint !== "__all__" && !availableTimepoints.includes(Number(selectedTimepoint))
+      ? "__all__"
+      : selectedTimepoint;
 
   // ── Build flat dataset ──
   const { flatData, measureKeys, measureLabels } = useMemo(() => {
     let results = colonyResults;
 
-    if (selectedExperiment !== "__all__") {
-      results = results.filter((r) => r.experiment_type === selectedExperiment);
+    if (effectiveSelectedExperiment !== "__all__") {
+      results = results.filter((r) => r.experiment_type === effectiveSelectedExperiment);
     }
-    if (selectedTimepoint !== "__all__") {
-      results = results.filter((r) => r.timepoint_age_days === Number(selectedTimepoint));
+    if (effectiveSelectedTimepoint !== "__all__") {
+      results = results.filter((r) => r.timepoint_age_days === Number(effectiveSelectedTimepoint));
     }
 
     const rows: FlatRow[] = [];
@@ -309,7 +369,7 @@ export function ColonyAnalysisPanel({
       measureKeys: Array.from(keySet).sort(),
       measureLabels: labels,
     };
-  }, [colonyResults, animals, cohorts, selectedExperiment, selectedTimepoint, selectedCohort]);
+  }, [colonyResults, animals, cohorts, effectiveSelectedExperiment, effectiveSelectedTimepoint, selectedCohort]);
 
   // Numeric measure keys only
   const numericMeasureKeys = useMemo(() => {
@@ -339,27 +399,36 @@ export function ColonyAnalysisPanel({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* ─── Filters ─── */}
-      <Card>
+      <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
         <CardContent className="pt-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Filter className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Data Filters</span>
-            <Badge variant="secondary" className="text-xs ml-auto">
-              {flatData.length} rows · {numericMeasureKeys.length} measures · {availableGroups.length} groups
-            </Badge>
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <Filter className="mt-0.5 h-4 w-4 text-cyan-700" />
+              <div>
+                <p className="text-sm font-semibold leading-none text-slate-900">Analysis Data</p>
+                <p className="mt-1 text-xs text-slate-600">
+                  Choose experiment scope before running stats or building plots.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge variant="outline" className="text-[11px]">{flatData.length} rows</Badge>
+              <Badge variant="outline" className="text-[11px]">{numericMeasureKeys.length} measures</Badge>
+              <Badge variant="outline" className="text-[11px]">{availableGroups.length} groups</Badge>
+            </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <div>
               <Label className="text-xs mb-1 block">Experiment Type</Label>
               <Select value={selectedExperiment} onValueChange={setSelectedExperiment}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">All Experiments</SelectItem>
-                  {availableExperiments.map((e) => (
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">All Experiments</SelectItem>
+                    {availableExperiments.map((e) => (
                     <SelectItem key={e} value={e}>
                       {EXPERIMENT_LABELS[e] || e}
                     </SelectItem>
@@ -369,7 +438,7 @@ export function ColonyAnalysisPanel({
             </div>
             <div>
               <Label className="text-xs mb-1 block">Timepoint</Label>
-              <Select value={selectedTimepoint} onValueChange={setSelectedTimepoint}>
+              <Select value={effectiveSelectedTimepoint} onValueChange={setSelectedTimepoint}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -410,17 +479,17 @@ export function ColonyAnalysisPanel({
         </div>
       ) : (
         <Tabs defaultValue="summary" className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="summary" className="gap-1.5">
+          <TabsList className="h-auto w-full justify-start gap-1 rounded-xl border border-slate-200 bg-slate-50/70 p-1">
+            <TabsTrigger value="summary" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <TrendingUp className="h-3.5 w-3.5" /> Summary
             </TabsTrigger>
-            <TabsTrigger value="data" className="gap-1.5">
+            <TabsTrigger value="data" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <TableIcon className="h-3.5 w-3.5" /> Data
             </TabsTrigger>
-            <TabsTrigger value="analyze" className="gap-1.5">
+            <TabsTrigger value="analyze" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <FlaskConical className="h-3.5 w-3.5" /> Statistics
             </TabsTrigger>
-            <TabsTrigger value="visualize" className="gap-1.5">
+            <TabsTrigger value="visualize" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <BarChart3 className="h-3.5 w-3.5" /> Graphs
             </TabsTrigger>
           </TabsList>
@@ -544,7 +613,7 @@ function SummaryPanel({
         {groups.map((g) => {
           const count = flatData.filter((r) => r.group === g).length;
           return (
-            <Card key={g}>
+            <Card key={g} className={`border ${GROUP_SURFACE_CLASSES[g] || "border-slate-200 bg-white"}`}>
               <CardContent className="pt-4 text-center">
                 <div
                   className="text-2xl font-bold"
@@ -552,7 +621,7 @@ function SummaryPanel({
                 >
                   {count}
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">{g}</p>
+                <p className="text-xs mt-0.5 opacity-85">{g}</p>
               </CardContent>
             </Card>
           );
@@ -560,8 +629,8 @@ function SummaryPanel({
       </div>
 
       {/* Summary stats per measure */}
-      <Card>
-        <CardHeader className="py-3 px-4">
+      <Card className="border-slate-200/80 shadow-sm">
+        <CardHeader className="py-3 px-4 bg-slate-50/65 border-b">
           <CardTitle className="text-sm font-medium">
             Summary Statistics by Group
           </CardTitle>
@@ -750,13 +819,18 @@ function DataTablePanel({
   }, [flatData, measureKeys, measureLabels]);
 
   return (
-    <Card>
-      <CardHeader className="py-3 px-4">
+    <Card className="overflow-hidden border-slate-200/80 shadow-sm">
+      <CardHeader className="border-b bg-slate-50/70 py-3 px-4">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-medium">
-            Colony Data — {flatData.length} rows, {measureKeys.length + 7} columns
-          </CardTitle>
-          <div className="flex gap-1">
+          <div>
+            <CardTitle className="text-sm font-semibold">
+              Analysis Data Table
+            </CardTitle>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {flatData.length} rows · {measureKeys.length + 7} columns
+            </p>
+          </div>
+          <div className="flex gap-1.5">
             <Button variant="outline" size="sm" className="gap-1 text-xs h-7" onClick={handleCopyTable}>
               {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
               {copied ? "Copied!" : "Copy"}
@@ -768,20 +842,20 @@ function DataTablePanel({
         </div>
       </CardHeader>
       <CardContent className="p-0">
-        <ScrollArea className="max-h-[500px]">
-          <table className="w-full text-xs">
-            <thead className="sticky top-0 bg-muted">
+        <div className="max-h-[560px] overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 z-10 border-b bg-slate-50/95 backdrop-blur supports-[backdrop-filter]:bg-slate-50/90">
               <tr>
-                <th className="px-2 py-2 text-left font-medium text-muted-foreground w-12">#</th>
-                <th className="px-2 py-2 text-left font-medium">ID</th>
-                <th className="px-2 py-2 text-left font-medium">Sex</th>
-                <th className="px-2 py-2 text-left font-medium">Genotype</th>
-                <th className="px-2 py-2 text-left font-medium">Group</th>
-                <th className="px-2 py-2 text-left font-medium">Cohort</th>
-                <th className="px-2 py-2 text-left font-medium">TP</th>
-                <th className="px-2 py-2 text-left font-medium">Experiment</th>
+                <th className="w-12 px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">#</th>
+                <th className="px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">ID</th>
+                <th className="px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sex</th>
+                <th className="px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Genotype</th>
+                <th className="px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Group</th>
+                <th className="px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Cohort</th>
+                <th className="px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">TP</th>
+                <th className="px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Experiment</th>
                 {measureKeys.map((k) => (
-                  <th key={k} className="px-2 py-2 text-left font-medium min-w-[80px]" title={k}>
+                  <th key={k} className="min-w-[110px] px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" title={k}>
                     {(measureLabels[k] || k).length > 20
                       ? (measureLabels[k] || k).slice(0, 18) + "…"
                       : measureLabels[k] || k}
@@ -791,37 +865,40 @@ function DataTablePanel({
             </thead>
             <tbody>
               {rows.map((row, i) => (
-                <tr key={`${row.animal_id}-${row.timepoint}-${row.experiment}`} className="border-t hover:bg-accent/50">
-                  <td className="px-2 py-1.5 text-muted-foreground">{page * pageSize + i + 1}</td>
-                  <td className="px-2 py-1.5 font-medium">{row.identifier}</td>
-                  <td className="px-2 py-1.5">
+                <tr
+                  key={`${row.animal_id}-${row.timepoint}-${row.experiment}`}
+                  className={`border-b transition-colors hover:bg-accent/40 ${i % 2 === 0 ? "bg-background" : "bg-muted/15"}`}
+                >
+                  <td className="px-2 py-2 text-xs text-muted-foreground">{page * pageSize + i + 1}</td>
+                  <td className="px-2 py-2 font-semibold">{row.identifier}</td>
+                  <td className="px-2 py-2">
                     <span className={row.sex === "Male" ? "text-blue-600" : "text-pink-600"}>
                       {row.sex === "Male" ? "♂" : "♀"}
                     </span>
                   </td>
-                  <td className="px-2 py-1.5">{row.genotype}</td>
-                  <td className="px-2 py-1.5" style={{ color: GROUP_COLORS[row.group] }}>
+                  <td className="px-2 py-2 text-xs font-medium uppercase tracking-wide">{row.genotype}</td>
+                  <td className="px-2 py-2 font-medium" style={{ color: GROUP_COLORS[row.group] }}>
                     {row.group}
                   </td>
-                  <td className="px-2 py-1.5">{row.cohort}</td>
-                  <td className="px-2 py-1.5">{row.timepoint}d</td>
-                  <td className="px-2 py-1.5">{EXPERIMENT_LABELS[row.experiment] || row.experiment}</td>
+                  <td className="px-2 py-2 text-xs">{row.cohort}</td>
+                  <td className="px-2 py-2 text-xs tabular-nums">{row.timepoint}d</td>
+                  <td className="px-2 py-2 text-xs">{EXPERIMENT_LABELS[row.experiment] || row.experiment}</td>
                   {measureKeys.map((k) => (
-                    <td key={k} className="px-2 py-1.5 tabular-nums">
+                    <td key={k} className="px-2 py-2 text-xs tabular-nums">
                       {row[k] !== null && row[k] !== undefined
                         ? typeof row[k] === "number"
                           ? formatNum(row[k] as number)
                           : String(row[k])
-                        : "—"}
+                        : <span className="text-muted-foreground">—</span>}
                     </td>
                   ))}
                 </tr>
               ))}
             </tbody>
           </table>
-        </ScrollArea>
+        </div>
         {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-2 border-t text-xs">
+          <div className="flex items-center justify-between border-t bg-slate-50/70 px-4 py-2 text-xs">
             <span className="text-muted-foreground">Page {page + 1} of {totalPages}</span>
             <div className="flex gap-1">
               <Button variant="outline" size="sm" className="h-6 text-xs" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Prev</Button>
@@ -976,13 +1053,13 @@ function StatisticsPanel({
 
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="border-slate-200/80 bg-white shadow-sm">
         <CardContent className="pt-4 space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="sm:col-span-2 lg:col-span-1">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
+            <div className="min-w-0 sm:col-span-2 lg:col-span-3">
               <Label className="text-xs mb-1 block">Statistical Test</Label>
               <Select value={testType} onValueChange={(v) => { setTestType(v); setCurrentResult(null); }}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full min-w-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -998,10 +1075,10 @@ function StatisticsPanel({
               </Select>
             </div>
 
-            <div>
+            <div className="min-w-0 sm:col-span-2 lg:col-span-5">
               <Label className="text-xs mb-1 block">Measure</Label>
               <Select value={measureKey} onValueChange={setMeasureKey}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full min-w-0">
                   <SelectValue placeholder="Select measure" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1014,10 +1091,10 @@ function StatisticsPanel({
 
             {needsGroups && (
               <>
-                <div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
                   <Label className="text-xs mb-1 block">Group 1</Label>
                   <Select value={group1} onValueChange={setGroup1}>
-                    <SelectTrigger>
+                    <SelectTrigger className="w-full min-w-0">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1027,10 +1104,10 @@ function StatisticsPanel({
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
                   <Label className="text-xs mb-1 block">Group 2</Label>
                   <Select value={group2} onValueChange={setGroup2}>
-                    <SelectTrigger>
+                    <SelectTrigger className="w-full min-w-0">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1044,7 +1121,7 @@ function StatisticsPanel({
             )}
           </div>
 
-          <Button onClick={runTest} disabled={!measureKey} className="gap-1.5">
+          <Button onClick={runTest} disabled={!measureKey} className="w-full gap-1.5 bg-slate-900 text-white hover:bg-slate-800 sm:w-auto">
             <FlaskConical className="h-4 w-4" /> Run Analysis
           </Button>
         </CardContent>
@@ -1052,8 +1129,8 @@ function StatisticsPanel({
 
       {/* Results */}
       {currentResult && (
-        <Card>
-          <CardHeader className="py-3 px-4">
+        <Card className="border-slate-200/80 shadow-sm">
+          <CardHeader className="border-b bg-slate-50/70 py-3 px-4">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <FlaskConical className="h-4 w-4" />
@@ -1083,7 +1160,7 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
 
   return (
     <div className="space-y-3">
-      <div className="text-xs text-muted-foreground">
+      <div className="text-xs text-slate-600">
         <span className="font-medium">Measure:</span> {String(result.measure)}
       </div>
 
@@ -1103,12 +1180,12 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
 
       {/* Key stats cards */}
       {comparisons == null && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           {Object.entries(result)
             .filter(([k]) => !["test", "measure", "group_stats", "group1_stats", "group2_stats", "comparisons", "significant_005", "significant_001", "groups_compared"].includes(k) && typeof result[k] !== "object")
             .map(([key, value]) => (
-              <div key={key} className="rounded-md border px-3 py-2">
-                <div className="text-[10px] text-muted-foreground">{key.replace(/_/g, " ")}</div>
+              <div key={key} className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-wide text-slate-500">{key.replace(/_/g, " ")}</div>
                 <div className="text-sm font-medium mt-0.5 tabular-nums">
                   {typeof value === "number" ? (key.includes("p") ? (value < 0.001 ? "< 0.001" : value.toFixed(4)) : value.toFixed(4)) : String(value)}
                 </div>
@@ -1121,10 +1198,10 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
       {(result.group1_stats != null || result.group_stats != null) && (
         <div className="text-xs">
           <span className="font-medium">Group Statistics:</span>
-          <div className="mt-1 overflow-x-auto">
+          <div className="mt-1 overflow-x-auto rounded-md border border-slate-200">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b">
+                <tr className="border-b bg-slate-50/70">
                   <th className="text-left py-1 px-2 font-medium text-muted-foreground">Group</th>
                   <th className="text-right py-1 px-2 font-medium text-muted-foreground">N</th>
                   <th className="text-right py-1 px-2 font-medium text-muted-foreground">Mean</th>
@@ -1172,10 +1249,10 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
           );
           if (groupKeys.length === 0) return null;
           return (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded-md border border-slate-200">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="border-b">
+                  <tr className="border-b bg-slate-50/70">
                     <th className="text-left py-1 px-2 font-medium text-muted-foreground">Group</th>
                     <th className="text-right py-1 px-2 font-medium text-muted-foreground">N</th>
                     <th className="text-right py-1 px-2 font-medium text-muted-foreground">Mean</th>
@@ -1211,10 +1288,10 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
 
       {/* Multi-comparison table */}
       {comparisons && (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto rounded-md border border-slate-200">
           <table className="w-full text-xs">
             <thead>
-              <tr className="border-b">
+              <tr className="border-b bg-slate-50/70">
                 <th className="text-left py-1.5 px-2 font-medium text-muted-foreground">Comparison</th>
                 <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">t</th>
                 <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">p</th>
@@ -1281,6 +1358,17 @@ function VisualizationPanel({
   const [pendingGroup1, setPendingGroup1] = useState("");
   const [pendingGroup2, setPendingGroup2] = useState("");
   const [pendingLabel, setPendingLabel] = useState("*");
+  const [autoRunSigStars, setAutoRunSigStars] = useState(false);
+  const [autoStatsMethod, setAutoStatsMethod] = useState<"welch_t" | "mann_whitney">("welch_t");
+  const [autoPAdjust, setAutoPAdjust] = useState<"none" | "bonferroni">("none");
+  const [includeNsAnnotations, setIncludeNsAnnotations] = useState(false);
+  const [showManualSigControls, setShowManualSigControls] = useState(false);
+  const [autoStatsSummary, setAutoStatsSummary] = useState<{
+    tested: number;
+    added: number;
+    method: string;
+    correction: string;
+  } | null>(null);
 
   const CHART_OPTIONS = [
     { value: "bar_sem", label: "Bar + SEM" },
@@ -1291,6 +1379,100 @@ function VisualizationPanel({
     { value: "dot_plot", label: "Dot Plot" },
     { value: "timepoint_line", label: "Timepoints (line)" },
   ];
+
+  const autoGenerateSigAnnotations = useCallback((): {
+    annotations: SigAnnotation[];
+    tested: number;
+  } => {
+    if (!measureKey) return { annotations: [], tested: 0 };
+    if (chartType === "scatter" || chartType === "timepoint_line") return { annotations: [], tested: 0 };
+
+    const getGrouping = (row: FlatRow): string => {
+      switch (groupBy) {
+        case "sex": return row.sex;
+        case "genotype": return row.genotype;
+        case "cohort": return row.cohort;
+        default: return row.group;
+      }
+    };
+
+    const groupLabels = groupBy === "group"
+      ? groups
+      : Array.from(new Set(flatData.map(getGrouping))).sort();
+
+    const pToLabel = (p: number): string => {
+      if (p < 0.0001) return "****";
+      if (p < 0.001) return "***";
+      if (p < 0.01) return "**";
+      if (p < 0.05) return "*";
+      return "ns";
+    };
+
+    const candidates: Array<{ group1: string; group2: string; p: number }> = [];
+    for (let i = 0; i < groupLabels.length; i++) {
+      for (let j = i + 1; j < groupLabels.length; j++) {
+        const g1 = groupLabels[i];
+        const g2 = groupLabels[j];
+
+        const vals1 = flatData
+          .filter((r) => getGrouping(r) === g1)
+          .map((r) => Number(r[measureKey]))
+          .filter((v) => !isNaN(v));
+        const vals2 = flatData
+          .filter((r) => getGrouping(r) === g2)
+          .map((r) => Number(r[measureKey]))
+          .filter((v) => !isNaN(v));
+
+        if (vals1.length < 2 || vals2.length < 2) continue;
+        const p =
+          autoStatsMethod === "welch_t"
+            ? welchTTest(vals1, vals2).p
+            : mannWhitneyUTest(vals1, vals2).p;
+        candidates.push({ group1: g1, group2: g2, p });
+      }
+    }
+
+    const nComparisons = candidates.length;
+    const autoAnnotations = candidates
+      .map((c) => {
+        const correctedP = autoPAdjust === "bonferroni"
+          ? Math.min(c.p * Math.max(nComparisons, 1), 1)
+          : c.p;
+        return { group1: c.group1, group2: c.group2, label: pToLabel(correctedP), p: correctedP };
+      })
+      .filter((ann) => includeNsAnnotations || ann.label !== "ns")
+      .sort((a, b) => a.p - b.p)
+      .slice(0, includeNsAnnotations ? 6 : 4)
+      .map(({ group1, group2, label }) => ({ group1, group2, label }));
+
+    return { annotations: autoAnnotations, tested: nComparisons };
+  }, [chartType, groupBy, groups, flatData, measureKey, autoStatsMethod, autoPAdjust, includeNsAnnotations]);
+
+  const applyAutoSigAnnotations = useCallback((showToast: boolean) => {
+    const { annotations, tested } = autoGenerateSigAnnotations();
+    setSigAnnotations(annotations);
+    setAutoStatsSummary({
+      tested,
+      added: annotations.length,
+      method: autoStatsMethod === "welch_t" ? "Welch t-test" : "Mann-Whitney U",
+      correction: autoPAdjust === "bonferroni" ? "Bonferroni" : "None",
+    });
+
+    if (showToast) {
+      if (tested === 0) {
+        toast.message("No valid group pairs to test (need at least 2 values per group).");
+      } else if (annotations.length === 0) {
+        toast.message("Ran selected stats, but no annotations met your current settings.");
+      } else {
+        toast.success(`Ran ${tested} comparisons and added ${annotations.length} annotation${annotations.length === 1 ? "" : "s"}.`);
+      }
+    }
+  }, [autoGenerateSigAnnotations, autoStatsMethod, autoPAdjust]);
+
+  useEffect(() => {
+    if (!autoRunSigStars) return;
+    applyAutoSigAnnotations(false);
+  }, [autoRunSigStars, applyAutoSigAnnotations]);
 
   const plotData = useMemo(() => {
     if (!measureKey) return null;
@@ -1547,8 +1729,16 @@ function VisualizationPanel({
 
   // Build Plotly shapes + annotations for significance brackets
   const sigShapesAndAnnotations = useMemo(() => {
-    if (!plotData || sigAnnotations.length === 0) return { shapes: [], annotations: [] };
-    if (chartType === "scatter" || chartType === "timepoint_line") return { shapes: [], annotations: [] };
+    if (!plotData || sigAnnotations.length === 0) {
+      return { shapes: [], annotations: [], yRangeMin: null as number | null, yRangeMax: null as number | null };
+    }
+    if (chartType === "scatter" || chartType === "timepoint_line") {
+      return { shapes: [], annotations: [], yRangeMin: null as number | null, yRangeMax: null as number | null };
+    }
+    const drawableAnnotations = sigAnnotations.filter((ann) => ann.label !== "ns");
+    if (drawableAnnotations.length === 0) {
+      return { shapes: [], annotations: [], yRangeMin: null as number | null, yRangeMax: null as number | null };
+    }
 
     const getGrouping = (row: FlatRow): string => {
       switch (groupBy) {
@@ -1575,20 +1765,26 @@ function VisualizationPanel({
       groupMaxY[g] = Math.max(m + s, ...values);
     }
 
-    const overallMax = Math.max(...Object.values(groupMaxY), 0);
-    const step = overallMax * 0.08; // spacing between stacked brackets
+    const allValues = flatData
+      .map((r) => Number(r[measureKey]))
+      .filter((v) => !isNaN(v));
+    const yValues = Object.values(groupMaxY);
+    const overallMax = Math.max(...yValues, ...allValues, 0);
+    const overallMin = Math.min(...allValues, 0);
+    const range = Math.max(overallMax - overallMin, 1);
+    const step = Math.max(range * 0.14, 2.2); // extra spacing between stacked brackets
 
     const shapes: Partial<Plotly.Shape>[] = [];
     const annotations: Partial<Plotly.Annotations>[] = [];
 
-    // Sort annotations by the span width (narrow first) to stack properly
-    const sorted = [...sigAnnotations].sort((a, b) => {
+    // Stack wider brackets first so inner comparisons are easier to read
+    const sorted = [...drawableAnnotations].sort((a, b) => {
       const spanA = Math.abs(groupLabels.indexOf(a.group2) - groupLabels.indexOf(a.group1));
       const spanB = Math.abs(groupLabels.indexOf(b.group2) - groupLabels.indexOf(b.group1));
-      return spanA - spanB;
+      return spanB - spanA;
     });
 
-    let currentY = overallMax + step;
+    let currentY = overallMax + step * 1.8;
 
     for (const ann of sorted) {
       const idx1 = groupLabels.indexOf(ann.group1);
@@ -1632,9 +1828,12 @@ function VisualizationPanel({
         y: bracketY + step * 0.15,
         xref: "x",
         yref: "y",
-        text: ann.label === "ns" ? "<i>ns</i>" : ann.label,
+        text: ann.label,
         showarrow: false,
-        font: { size: ann.label === "ns" ? 11 : 14, color: "black" },
+        font: { size: 15, color: "#111827" },
+        bgcolor: "rgba(255,255,255,0.9)",
+        bordercolor: "rgba(0,0,0,0)",
+        borderpad: 1,
         xanchor: "center",
         yanchor: "bottom",
       });
@@ -1642,7 +1841,13 @@ function VisualizationPanel({
       currentY += step;
     }
 
-    return { shapes, annotations };
+    const yRangeMax = currentY + step * 0.35;
+    return {
+      shapes,
+      annotations,
+      yRangeMin: overallMin < 0 ? overallMin * 1.08 : 0,
+      yRangeMax,
+    };
   }, [plotData, sigAnnotations, chartType, groupBy, flatData, groups, measureKey]);
 
   const handleExport = useCallback(
@@ -1663,7 +1868,7 @@ function VisualizationPanel({
 
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="border-slate-200/80 bg-white shadow-sm">
         <CardContent className="pt-4 space-y-3">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
             <div className="min-w-0 lg:col-span-2">
@@ -1738,7 +1943,7 @@ function VisualizationPanel({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white/70 px-2.5 py-2">
             <label className="flex items-center gap-1.5 text-xs cursor-pointer">
               <input
                 type="checkbox"
@@ -1752,79 +1957,157 @@ function VisualizationPanel({
 
           {/* ─── Significance Annotations ─────────────── */}
           {chartType !== "scatter" && chartType !== "timepoint_line" && (
-            <div className="border-t pt-3 space-y-2">
-              <Label className="text-xs font-medium">Significance Annotations</Label>
-              <div className="flex flex-wrap items-end gap-2">
-                <div>
-                  <Label className="text-[10px] text-muted-foreground block mb-0.5">Group 1</Label>
-                  <Select value={pendingGroup1} onValueChange={setPendingGroup1}>
-                    <SelectTrigger className="h-8 text-xs w-[140px]">
-                      <SelectValue placeholder="Select group" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(groupBy === "group" ? groups : Array.from(new Set(flatData.map((r) => {
-                        switch (groupBy) {
-                          case "sex": return r.sex;
-                          case "genotype": return r.genotype;
-                          case "cohort": return r.cohort;
-                          default: return r.group;
-                        }
-                      }))).sort()).map((g) => (
-                        <SelectItem key={g} value={g}>{g}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+            <div className="space-y-3 rounded-md border border-slate-200 bg-white/70 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label className="text-xs font-medium">Significance</Label>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setShowManualSigControls((v) => !v)}
+                  >
+                    {showManualSigControls ? "Hide manual" : "Manual stars"}
+                  </Button>
+                  <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoRunSigStars}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        setAutoRunSigStars(enabled);
+                        if (enabled) applyAutoSigAnnotations(true);
+                      }}
+                      className="rounded h-3.5 w-3.5"
+                    />
+                    Auto stars
+                  </label>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={() => applyAutoSigAnnotations(true)}
+                  >
+                    Run stats
+                  </Button>
                 </div>
-                <div>
-                  <Label className="text-[10px] text-muted-foreground block mb-0.5">Group 2</Label>
-                  <Select value={pendingGroup2} onValueChange={setPendingGroup2}>
-                    <SelectTrigger className="h-8 text-xs w-[140px]">
-                      <SelectValue placeholder="Select group" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(groupBy === "group" ? groups : Array.from(new Set(flatData.map((r) => {
-                        switch (groupBy) {
-                          case "sex": return r.sex;
-                          case "genotype": return r.genotype;
-                          case "cohort": return r.cohort;
-                          default: return r.group;
-                        }
-                      }))).sort()).filter((g) => g !== pendingGroup1).map((g) => (
-                        <SelectItem key={g} value={g}>{g}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label className="text-[10px] text-muted-foreground block mb-0.5">Significance</Label>
-                  <Select value={pendingLabel} onValueChange={setPendingLabel}>
-                    <SelectTrigger className="h-8 text-xs w-[90px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SIG_LABELS.map((l) => (
-                        <SelectItem key={l} value={l}>{l === "ns" ? "ns" : l} {l === "ns" ? "(p≥0.05)" : l === "*" ? "(p<0.05)" : l === "**" ? "(p<0.01)" : l === "***" ? "(p<0.001)" : "(p<0.0001)"}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs"
-                  disabled={!pendingGroup1 || !pendingGroup2 || pendingGroup1 === pendingGroup2}
-                  onClick={() => {
-                    setSigAnnotations((prev) => [
-                      ...prev,
-                      { group1: pendingGroup1, group2: pendingGroup2, label: pendingLabel },
-                    ]);
-                    setPendingGroup1("");
-                    setPendingGroup2("");
-                  }}
-                >
-                  + Add
-                </Button>
               </div>
+              <div className="rounded-md border border-slate-200 bg-slate-50/70 p-2">
+                <div className="flex flex-wrap items-end gap-2">
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground block mb-0.5">Method</Label>
+                    <Select value={autoStatsMethod} onValueChange={(v) => setAutoStatsMethod(v as "welch_t" | "mann_whitney")}>
+                      <SelectTrigger className="h-8 text-xs w-[180px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="welch_t">Welch t-test</SelectItem>
+                        <SelectItem value="mann_whitney">Mann-Whitney U</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground block mb-0.5">Correction</Label>
+                    <Select value={autoPAdjust} onValueChange={(v) => setAutoPAdjust(v as "none" | "bonferroni")}>
+                      <SelectTrigger className="h-8 text-xs w-[150px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="bonferroni">Bonferroni</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <label className="flex items-center gap-1.5 pb-1 text-xs cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={includeNsAnnotations}
+                      onChange={(e) => setIncludeNsAnnotations(e.target.checked)}
+                      className="rounded h-3.5 w-3.5"
+                    />
+                    Include ns
+                  </label>
+                </div>
+                {autoStatsSummary && (
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    Last run: {autoStatsSummary.tested} tested, {autoStatsSummary.added} added ({autoStatsSummary.method}, {autoStatsSummary.correction}).
+                  </p>
+                )}
+              </div>
+
+              {showManualSigControls && (
+                <div className="flex flex-wrap items-end gap-2 pt-1">
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground block mb-0.5">Group 1</Label>
+                    <Select value={pendingGroup1} onValueChange={setPendingGroup1}>
+                      <SelectTrigger className="h-8 text-xs w-[140px]">
+                        <SelectValue placeholder="Select group" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(groupBy === "group" ? groups : Array.from(new Set(flatData.map((r) => {
+                          switch (groupBy) {
+                            case "sex": return r.sex;
+                            case "genotype": return r.genotype;
+                            case "cohort": return r.cohort;
+                            default: return r.group;
+                          }
+                        }))).sort()).map((g) => (
+                          <SelectItem key={g} value={g}>{g}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground block mb-0.5">Group 2</Label>
+                    <Select value={pendingGroup2} onValueChange={setPendingGroup2}>
+                      <SelectTrigger className="h-8 text-xs w-[140px]">
+                        <SelectValue placeholder="Select group" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(groupBy === "group" ? groups : Array.from(new Set(flatData.map((r) => {
+                          switch (groupBy) {
+                            case "sex": return r.sex;
+                            case "genotype": return r.genotype;
+                            case "cohort": return r.cohort;
+                            default: return r.group;
+                          }
+                        }))).sort()).filter((g) => g !== pendingGroup1).map((g) => (
+                          <SelectItem key={g} value={g}>{g}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground block mb-0.5">Star</Label>
+                    <Select value={pendingLabel} onValueChange={setPendingLabel}>
+                      <SelectTrigger className="h-8 text-xs w-[90px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SIG_LABELS.map((l) => (
+                          <SelectItem key={l} value={l}>{l === "ns" ? "ns" : l} {l === "ns" ? "(p≥0.05)" : l === "*" ? "(p<0.05)" : l === "**" ? "(p<0.01)" : l === "***" ? "(p<0.001)" : "(p<0.0001)"}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs"
+                    disabled={!pendingGroup1 || !pendingGroup2 || pendingGroup1 === pendingGroup2}
+                    onClick={() => {
+                      setSigAnnotations((prev) => [
+                        ...prev,
+                        { group1: pendingGroup1, group2: pendingGroup2, label: pendingLabel },
+                      ]);
+                      setPendingGroup1("");
+                      setPendingGroup2("");
+                    }}
+                  >
+                    + Add
+                  </Button>
+                </div>
+              )}
 
               {sigAnnotations.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-1">
@@ -1857,8 +2140,8 @@ function VisualizationPanel({
       </Card>
 
       {plotData && (
-        <Card>
-          <CardHeader className="py-3 px-4">
+        <Card className="border-slate-200/80 shadow-sm">
+          <CardHeader className="border-b bg-slate-50/70 py-3 px-4">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium">Preview</CardTitle>
               <div className="flex gap-1">
@@ -1878,7 +2161,16 @@ function VisualizationPanel({
                 layout={{
                   ...plotData.layout,
                   autosize: true,
+                  paper_bgcolor: "rgba(255,255,255,0.96)",
+                  plot_bgcolor: "rgba(248,250,252,0.85)",
+                  font: { color: "#0f172a" },
                   margin: { l: 70, r: 30, t: sigAnnotations.length > 0 ? 80 + sigAnnotations.length * 20 : 60, b: 60 },
+                  yaxis: {
+                    ...((plotData.layout as Record<string, unknown>).yaxis as Partial<Plotly.Layout["yaxis"]> || {}),
+                    ...(sigShapesAndAnnotations.yRangeMax !== null
+                      ? { range: [sigShapesAndAnnotations.yRangeMin ?? 0, sigShapesAndAnnotations.yRangeMax] as [number, number] }
+                      : {}),
+                  },
                   shapes: [
                     ...((plotData.layout as Record<string, unknown>).shapes as Partial<Plotly.Shape>[] || []),
                     ...sigShapesAndAnnotations.shapes,

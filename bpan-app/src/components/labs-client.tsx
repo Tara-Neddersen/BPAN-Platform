@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useState, type ReactNode } from "react";
+import { cloneElement, isValidElement, startTransition, useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   Building2,
@@ -8,10 +8,11 @@ import {
   ClipboardCheck,
   FlaskConical,
   History,
-  ListTodo,
   Megaphone,
   MessageSquare,
   NotebookPen,
+  ShieldCheck,
+  Trash2,
   UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -19,7 +20,6 @@ import {
   addLabMemberByEmail,
   createLab,
   deactivateLabMember,
-  setActiveLabContext,
   updateLabMemberDisplayName,
   updateLabMemberRole,
   updateLabPolicies,
@@ -94,22 +94,23 @@ type ManagerMemberProfile = {
 
 type AnnouncementEntry = {
   id: string;
+  labId: string;
   type: "inspection" | "general";
   title: string;
   body: string;
-  author: string;
+  createdByUserId: string | null;
   createdAt: string;
 };
 
 type SharedTaskEntry = {
   id: string;
+  labId: string;
   listType: "inspection" | "general";
   title: string;
   details: string;
   assigneeMemberId: string | null;
-  assigneeLabel: string;
   done: boolean;
-  createdBy: string;
+  createdByUserId: string | null;
   createdAt: string;
   completedAt: string | null;
 };
@@ -117,6 +118,31 @@ type SharedTaskEntry = {
 type SharedTaskEditDraft = {
   title: string;
   details: string;
+};
+
+type AnnouncementRecord = {
+  id: string;
+  lab_id: string;
+  type: "inspection" | "general";
+  title: string;
+  body: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type SharedTaskRecord = {
+  id: string;
+  lab_id: string;
+  list_type: "inspection" | "general";
+  title: string;
+  details: string;
+  assignee_member_id: string | null;
+  done: boolean;
+  completed_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type InventorySyncStatus = {
@@ -136,7 +162,20 @@ interface LabsClientProps {
   initialPanel?: string | null;
   operationsReagentsPanel?: ReactNode;
   operationsEquipmentPanel?: ReactNode;
+  labsAssistantPanel?: ReactNode;
   labChatPanel?: ReactNode;
+  labMeetingsPanel?: ReactNode;
+  initialAnnouncementsByLab?: Record<string, AnnouncementRecord[]>;
+  initialSharedTasksByLab?: Record<string, SharedTaskRecord[]>;
+  announcementActions: {
+    createAnnouncement: (formData: FormData) => Promise<unknown>;
+    deleteAnnouncement: (formData: FormData) => Promise<unknown>;
+  };
+  sharedTaskActions: {
+    createTask: (formData: FormData) => Promise<unknown>;
+    updateTask: (formData: FormData) => Promise<unknown>;
+    deleteTask: (formData: FormData) => Promise<unknown>;
+  };
   syncStatusByLab?: Record<string, InventorySyncStatus>;
   workspaces: LabWorkspaceRecord[];
 }
@@ -144,9 +183,9 @@ interface LabsClientProps {
 type LabHubSection =
   | "reagents"
   | "chat"
+  | "meetings"
   | "announcements"
   | "inspection_tasks"
-  | "general_tasks"
   | "equipment_booking";
 
 const ROLE_LABELS: Record<PlatformLabRole, string> = {
@@ -167,6 +206,13 @@ const LAB_HOME_SHORTCUTS = [
     description: "Track stock and reorder needs.",
     actionLabel: "Open section",
     icon: FlaskConical,
+  },
+  {
+    key: "meetings" as const,
+    title: "Lab meetings",
+    description: "Transcribe meetings and extract team action items.",
+    actionLabel: "Open section",
+    icon: NotebookPen,
   },
   {
     key: "chat" as const,
@@ -190,13 +236,6 @@ const LAB_HOME_SHORTCUTS = [
     icon: ClipboardCheck,
   },
   {
-    key: "general_tasks" as const,
-    title: "Shared general tasks",
-    description: "Track team to-dos.",
-    actionLabel: "Open section",
-    icon: ListTodo,
-  },
-  {
     key: "equipment_booking" as const,
     title: "Equipment booking",
     description: "Book and manage equipment time.",
@@ -205,12 +244,51 @@ const LAB_HOME_SHORTCUTS = [
   },
 ] as const;
 
+const SHORTCUT_THEME: Record<string, { active: string; idle: string; icon: string; iconBg: string }> = {
+  reagents: {
+    active: "border-emerald-300 bg-emerald-50 text-emerald-950",
+    idle: "border-emerald-200/70 bg-white text-slate-700 hover:bg-emerald-50/60",
+    icon: "text-emerald-700",
+    iconBg: "bg-emerald-100",
+  },
+  chat: {
+    active: "border-sky-300 bg-sky-50 text-sky-950",
+    idle: "border-sky-200/70 bg-white text-slate-700 hover:bg-sky-50/60",
+    icon: "text-sky-700",
+    iconBg: "bg-sky-100",
+  },
+  meetings: {
+    active: "border-indigo-300 bg-indigo-50 text-indigo-950",
+    idle: "border-indigo-200/70 bg-white text-slate-700 hover:bg-indigo-50/60",
+    icon: "text-indigo-700",
+    iconBg: "bg-indigo-100",
+  },
+  announcements: {
+    active: "border-amber-300 bg-amber-50 text-amber-950",
+    idle: "border-amber-200/70 bg-white text-slate-700 hover:bg-amber-50/60",
+    icon: "text-amber-700",
+    iconBg: "bg-amber-100",
+  },
+  inspection_tasks: {
+    active: "border-violet-300 bg-violet-50 text-violet-950",
+    idle: "border-violet-200/70 bg-white text-slate-700 hover:bg-violet-50/60",
+    icon: "text-violet-700",
+    iconBg: "bg-violet-100",
+  },
+  equipment_booking: {
+    active: "border-cyan-300 bg-cyan-50 text-cyan-950",
+    idle: "border-cyan-200/70 bg-white text-slate-700 hover:bg-cyan-50/60",
+    icon: "text-cyan-700",
+    iconBg: "bg-cyan-100",
+  },
+};
+
 const HUB_SECTION_LABELS: Record<LabHubSection, string> = {
   reagents: "Reagents",
   chat: "Lab chat",
+  meetings: "Lab meetings",
   announcements: "Announcements",
   inspection_tasks: "Shared inspection tasks",
-  general_tasks: "Shared general tasks",
   equipment_booking: "Equipment booking",
 };
 
@@ -221,9 +299,10 @@ function normalizeIncomingPanel(panel: string | null | undefined): LabHubSection
   const normalized = panel.trim().toLowerCase();
   if (normalized === "reagents" || normalized === "inventory") return "reagents";
   if (normalized === "chat" || normalized === "lab-chat") return "chat";
+  if (normalized === "meetings" || normalized === "meeting" || normalized === "lab-meetings" || normalized === "lab_meetings") return "meetings";
   if (normalized === "announcements") return "announcements";
   if (normalized === "inspection" || normalized === "inspection-tasks" || normalized === "inspection_tasks") return "inspection_tasks";
-  if (normalized === "tasks" || normalized === "general-tasks" || normalized === "general_tasks") return "general_tasks";
+  if (normalized === "tasks" || normalized === "general-tasks" || normalized === "general_tasks") return "meetings";
   if (normalized === "booking" || normalized === "bookings" || normalized === "equipment" || normalized === "equipment-booking" || normalized === "equipment_booking") {
     return "equipment_booking";
   }
@@ -262,6 +341,33 @@ function safeArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
+function toAnnouncementEntry(entry: AnnouncementRecord): AnnouncementEntry {
+  return {
+    id: entry.id,
+    labId: entry.lab_id,
+    type: entry.type === "inspection" ? "inspection" : "general",
+    title: entry.title,
+    body: entry.body,
+    createdByUserId: entry.created_by,
+    createdAt: entry.created_at,
+  };
+}
+
+function toSharedTaskEntry(entry: SharedTaskRecord): SharedTaskEntry {
+  return {
+    id: entry.id,
+    labId: entry.lab_id,
+    listType: entry.list_type === "inspection" ? "inspection" : "general",
+    title: entry.title,
+    details: entry.details ?? "",
+    assigneeMemberId: entry.assignee_member_id,
+    done: Boolean(entry.done),
+    createdByUserId: entry.created_by,
+    createdAt: entry.created_at,
+    completedAt: entry.completed_at,
+  };
+}
+
 function formatSyncTimestamp(timestamp: string | null) {
   if (!timestamp) return "No sync marker yet";
   const date = new Date(timestamp);
@@ -277,7 +383,13 @@ export function LabsClient({
   initialPanel = null,
   operationsReagentsPanel,
   operationsEquipmentPanel,
+  labsAssistantPanel,
   labChatPanel,
+  labMeetingsPanel,
+  initialAnnouncementsByLab = {},
+  initialSharedTasksByLab = {},
+  announcementActions,
+  sharedTaskActions,
   syncStatusByLab = {},
   workspaces,
 }: LabsClientProps) {
@@ -292,18 +404,24 @@ export function LabsClient({
   const [roleAuditNoteByMember, setRoleAuditNoteByMember] = useState<Record<string, string>>({});
   const [lastAddDraftByLab, setLastAddDraftByLab] = useState<Record<string, AddMemberDraft>>({});
   const [managerProfileByLab, setManagerProfileByLab] = useState<Record<string, Record<string, ManagerMemberProfile>>>({});
-  const [announcementsByLab, setAnnouncementsByLab] = useState<Record<string, AnnouncementEntry[]>>({});
-  const [sharedTasksByLab, setSharedTasksByLab] = useState<Record<string, SharedTaskEntry[]>>({});
   const [sharedTaskEditById, setSharedTaskEditById] = useState<Record<string, SharedTaskEditDraft>>({});
   const [teamTargetLabId, setTeamTargetLabId] = useState<string | null>(null);
   const [openTeamPoliciesByLab, setOpenTeamPoliciesByLab] = useState<Record<string, boolean>>({});
-  const [pendingTeamTarget, setPendingTeamTarget] = useState<{ labId: string; target: "members" | "policies" } | null>(null);
   const [opsTabByLab, setOpsTabByLab] = useState<Record<string, LabHubSection>>({});
   const [advancedPanelByLab, setAdvancedPanelByLab] = useState<Record<string, Partial<Record<LabHubSection, boolean>>>>({});
-  const [pendingActiveLabId, setPendingActiveLabId] = useState<string | null>(null);
   const [opsPanelPulseKey, setOpsPanelPulseKey] = useState<string | null>(null);
-  const effectiveActiveLabId = pendingActiveLabId ?? selectedLabId;
+  const [isNarrowMobile, setIsNarrowMobile] = useState(false);
+  const effectiveActiveLabId = selectedLabId ?? workspaces[0]?.membership.lab.id ?? null;
   const normalizedInitialPanel = normalizeIncomingPanel(initialPanel);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(max-width: 640px)");
+    const apply = () => setIsNarrowMobile(mediaQuery.matches);
+    apply();
+    mediaQuery.addEventListener("change", apply);
+    return () => mediaQuery.removeEventListener("change", apply);
+  }, []);
 
   function readStoredEvents<T>(key: string): T[] {
     if (typeof window === "undefined") return [];
@@ -330,11 +448,11 @@ export function LabsClient({
   }
 
   function getAnnouncementEntries(labId: string) {
-    return announcementsByLab[labId] ?? readStoredEvents<AnnouncementEntry>(`labs:announcements:${labId}`);
+    return safeArray(initialAnnouncementsByLab[labId]).map(toAnnouncementEntry);
   }
 
   function getSharedTaskEntries(labId: string) {
-    return sharedTasksByLab[labId] ?? readStoredEvents<SharedTaskEntry>(`labs:shared-tasks:${labId}`);
+    return safeArray(initialSharedTasksByLab[labId]).map(toSharedTaskEntry);
   }
 
   function getManagerProfile(labId: string, memberId: string): ManagerMemberProfile {
@@ -400,49 +518,52 @@ export function LabsClient({
     });
   }
 
-  function appendAnnouncement(labId: string, entry: Omit<AnnouncementEntry, "id" | "createdAt">) {
-    setAnnouncementsByLab((current) => {
-      const next = [
-        { id: crypto.randomUUID(), createdAt: new Date().toISOString(), ...entry },
-        ...(current[labId] ?? []),
-      ].slice(0, 60);
-      localStorage.setItem(`labs:announcements:${labId}`, JSON.stringify(next));
-      return { ...current, [labId]: next };
-    });
-  }
-
-  function appendSharedTask(labId: string, entry: Omit<SharedTaskEntry, "id" | "createdAt" | "completedAt">) {
-    setSharedTasksByLab((current) => {
-      const next = [
-        { id: crypto.randomUUID(), createdAt: new Date().toISOString(), completedAt: null, ...entry },
-        ...(current[labId] ?? []),
-      ].slice(0, 120);
-      localStorage.setItem(`labs:shared-tasks:${labId}`, JSON.stringify(next));
-      return { ...current, [labId]: next };
-    });
-  }
-
-  function updateSharedTask(labId: string, taskId: string, updater: (task: SharedTaskEntry) => SharedTaskEntry) {
-    setSharedTasksByLab((current) => {
-      const source = current[labId] ?? readStoredEvents<SharedTaskEntry>(`labs:shared-tasks:${labId}`);
-      const next = source.map((task) => (task.id === taskId ? updater(task) : task));
-      localStorage.setItem(`labs:shared-tasks:${labId}`, JSON.stringify(next));
-      return { ...current, [labId]: next };
-    });
-  }
-
-  function removeSharedTask(labId: string, taskId: string) {
-    setSharedTasksByLab((current) => {
-      const source = current[labId] ?? readStoredEvents<SharedTaskEntry>(`labs:shared-tasks:${labId}`);
-      const next = source.filter((task) => task.id !== taskId);
-      localStorage.setItem(`labs:shared-tasks:${labId}`, JSON.stringify(next));
-      return { ...current, [labId]: next };
-    });
+  function removeSharedTask(taskId: string) {
     setSharedTaskEditById((current) => {
       const next = { ...current };
       delete next[taskId];
       return next;
     });
+  }
+
+  function submitSharedTaskUpdate(
+    labId: string,
+    task: SharedTaskEntry,
+    overrides: Partial<Pick<SharedTaskEntry, "title" | "details" | "listType" | "assigneeMemberId" | "done">>,
+    successMessage = "Shared task updated.",
+    onSuccess?: () => void,
+  ) {
+    const nextTitle = (overrides.title ?? task.title).trim();
+    if (!nextTitle) return;
+    const nextDetails = (overrides.details ?? task.details).trim();
+    const nextListType = overrides.listType ?? task.listType;
+    const nextAssigneeMemberId = overrides.assigneeMemberId ?? task.assigneeMemberId;
+    const nextDone = overrides.done ?? task.done;
+
+    runAction(
+      `shared-task-update-${labId}-${task.id}`,
+      sharedTaskActions.updateTask,
+      withLabContext(labId, [
+        ["task_id", task.id],
+        ["title", nextTitle],
+        ["details", nextDetails],
+        ["list_type", nextListType],
+        ["assignee_member_id", nextAssigneeMemberId ?? ""],
+        ["done", nextDone ? "true" : "false"],
+      ]),
+      successMessage,
+      onSuccess,
+    );
+  }
+
+  function submitSharedTaskDelete(labId: string, taskId: string) {
+    runAction(
+      `shared-task-delete-${labId}-${taskId}`,
+      sharedTaskActions.deleteTask,
+      withLabContext(labId, [["task_id", taskId]]),
+      "Shared task deleted.",
+      () => removeSharedTask(taskId),
+    );
   }
 
   function startSharedTaskEdit(task: SharedTaskEntry) {
@@ -500,25 +621,18 @@ export function LabsClient({
     });
   }
 
-  function getStoredOpsTab(labId: string): LabHubSection {
-    if (typeof window === "undefined") return "announcements";
-    const raw = window.localStorage.getItem(`${OPS_TAB_STORAGE_PREFIX}${labId}`);
-    if (!raw) return "announcements";
-    if (
-      raw === "reagents" ||
-      raw === "chat" ||
-      raw === "announcements" ||
-      raw === "inspection_tasks" ||
-      raw === "general_tasks" ||
-      raw === "equipment_booking"
-    ) {
-      return raw;
+  function withLabContext(labId: string, fields: Array<[string, string]>) {
+    const formData = new FormData();
+    formData.set("lab_id", labId);
+    formData.set("active_lab_id", labId);
+    for (const [key, value] of fields) {
+      formData.set(key, value);
     }
-    return "announcements";
+    return formData;
   }
 
   function getActiveOpsTab(labId: string): LabHubSection {
-    return opsTabByLab[labId] ?? normalizedInitialPanel ?? getStoredOpsTab(labId);
+    return opsTabByLab[labId] ?? normalizedInitialPanel ?? "announcements";
   }
 
   function setOpsTab(labId: string, section: LabHubSection) {
@@ -587,7 +701,7 @@ export function LabsClient({
         }
         const element = document.getElementById(targetId) as HTMLElement | null;
         if (!element) {
-          toast.error("Could not open that section. Try setting the target lab active first.");
+          toast.error("Could not open that section.");
           return;
         }
         element.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -598,6 +712,9 @@ export function LabsClient({
   }
 
   const hasActiveLab = Boolean(effectiveActiveLabId);
+  const activeLabName = effectiveActiveLabId
+    ? workspaces.find((workspace) => workspace.membership.lab.id === effectiveActiveLabId)?.membership.lab.name ?? "Selected lab"
+    : null;
   const manageableLabs = workspaces.filter(
     (workspace) =>
       canManageLabMembers(workspace.membership.role) || canManageLabPolicies(workspace.membership.role),
@@ -613,28 +730,31 @@ export function LabsClient({
   const resolvedTeamTargetLab = manageableLabs.find(
     (workspace) => workspace.membership.lab.id === resolvedTeamTargetLabId,
   );
-  const targetLabNeedsActivation =
-    Boolean(resolvedTeamTargetLabId) && effectiveActiveLabId !== resolvedTeamTargetLabId;
   const canRunMemberAction = resolvedTeamTargetLab ? canManageLabMembers(resolvedTeamTargetLab.membership.role) : false;
   const canRunPolicyAction = resolvedTeamTargetLab ? canManageLabPolicies(resolvedTeamTargetLab.membership.role) : false;
   const canViewSyncStatus = resolvedTeamTargetLab ? roleRank(resolvedTeamTargetLab.membership.role) >= 2 : false;
   const syncStatus = resolvedTeamTargetLabId ? syncStatusByLab[resolvedTeamTargetLabId] : undefined;
+  const activeShortcutKey = effectiveActiveLabId ? getActiveOpsTab(effectiveActiveLabId) : "announcements";
+  const activeShortcut = LAB_HOME_SHORTCUTS.find((item) => item.key === activeShortcutKey) ?? LAB_HOME_SHORTCUTS[0];
+  const activeShortcutTheme = SHORTCUT_THEME[activeShortcut.key] ?? SHORTCUT_THEME.equipment_booking;
 
   return (
-    <div className="page-shell">
-      <section className="section-card card-density-comfy">
+    <div
+      className="page-shell labs-aesthetic"
+      style={isNarrowMobile ? { transform: "scale(0.8)", transformOrigin: "top left", width: "125%" } : undefined}
+    >
+      <section className="section-card card-density-comfy labs-hero border border-slate-200 bg-gradient-to-r from-white via-cyan-50/40 to-amber-50/35">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
             <div className="flex items-center gap-1.5">
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Lab operations hub</h1>
+              <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">Lab operations hub</h1>
               <HelpHint text="Start daily lab work from one place." />
             </div>
-            <p className="mt-2 text-sm text-slate-600">
-              Open reagents, chat, announcements, shared tasks, and equipment booking first. Settings stay available below.
-            </p>
+            <p className="mt-1.5 text-xs text-slate-600 sm:text-sm">Daily execution up top, admin controls tucked below.</p>
           </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
-            {workspaces.length} lab{workspaces.length === 1 ? "" : "s"} available
+          <div className="labs-meta-chip rounded-xl border border-cyan-200/70 bg-white/90 px-3 py-2 text-xs text-slate-700 shadow-sm">
+            <p className="font-medium">{hasActiveLab ? `Current lab: ${activeLabName}` : "Personal workspace"}</p>
+            <p>{workspaces.length} lab{workspaces.length === 1 ? "" : "s"} available</p>
           </div>
         </div>
 
@@ -645,85 +765,82 @@ export function LabsClient({
         ) : null}
       </section>
 
-      <section className="section-card card-density-comfy">
+      {labsAssistantPanel ? (
+        <section className="section-card card-density-comfy border border-sky-200/70 bg-gradient-to-r from-white via-sky-50/35 to-white">
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">Lab AI assistant</h2>
+            <HelpHint text="Ask inventory, equipment, booking, and operations questions for the active lab." />
+          </div>
+          {labsAssistantPanel}
+        </section>
+      ) : null}
+
+      <section className="section-card card-density-comfy labs-shortcuts border border-slate-200 bg-white">
         <div className="mb-3 flex items-center gap-2">
           <h2 className="text-sm font-semibold text-slate-900">Daily operations</h2>
           <HelpHint text="Quick links to the core shared lab workflows." />
         </div>
-        <div className={`grid gap-3 sm:grid-cols-2 xl:grid-cols-3 ${hasActiveLab ? "" : "opacity-60"}`}>
+        <div
+          className={`labs-tool-strip flex gap-2 overflow-x-auto ${hasActiveLab ? "" : "opacity-60"}`}
+          role="tablist"
+          aria-label="Lab tools"
+        >
           {LAB_HOME_SHORTCUTS.map((shortcut) => {
             const Icon = shortcut.icon;
+            const theme = SHORTCUT_THEME[shortcut.key] ?? SHORTCUT_THEME.equipment_booking;
             const isActiveShortcut =
               effectiveActiveLabId ? shortcut.key === getActiveOpsTab(effectiveActiveLabId) : shortcut.key === "announcements";
             return (
-              <Card
+              <button
                 key={shortcut.title}
-                role="button"
-                tabIndex={hasActiveLab ? 0 : -1}
+                type="button"
+                role="tab"
+                aria-selected={isActiveShortcut}
+                disabled={!hasActiveLab}
                 onClick={() => {
                   if (!effectiveActiveLabId) {
-                    toast.info("Switch to a lab to use shared operations.");
+                    toast.info("Create a lab to use shared operations.");
                     return;
                   }
                   openOpsSection(effectiveActiveLabId, shortcut.key);
                 }}
-                onKeyDown={(event) => {
-                  if (!hasActiveLab) return;
-                  if (event.key !== "Enter" && event.key !== " ") return;
-                  event.preventDefault();
-                  if (!effectiveActiveLabId) return;
-                  openOpsSection(effectiveActiveLabId, shortcut.key);
-                }}
-                className={`border-slate-200/80 bg-white/90 shadow-none transition-all duration-200 ${isActiveShortcut ? "ring-2 ring-cyan-200" : ""} ${hasActiveLab ? "cursor-pointer hover:border-cyan-300 hover:bg-cyan-50/40" : ""}`}
+                className={`labs-tool-tab inline-flex items-center gap-2 rounded-xl border px-3 py-2.5 text-sm shadow-[0_6px_16px_-12px_rgba(15,23,42,0.45)] transition ${
+                  isActiveShortcut ? theme.active : theme.idle
+                } ${hasActiveLab ? "" : "cursor-not-allowed"}`}
               >
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Icon className="h-4 w-4 text-cyan-700" />
-                    {shortcut.title}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <p className="text-sm text-slate-600">{shortcut.description}</p>
-                  <Button
-                    type="button"
-                    size="default"
-                    variant={isActiveShortcut ? "default" : "outline"}
-                    className="h-10 w-full justify-center"
-                    disabled={!hasActiveLab}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (!effectiveActiveLabId) {
-                        toast.info("Switch to a lab to use shared operations.");
-                        return;
-                      }
-                      openOpsSection(effectiveActiveLabId, shortcut.key);
-                    }}
-                  >
-                    {hasActiveLab ? shortcut.actionLabel : "Switch to lab to use"}
-                  </Button>
-                </CardContent>
-              </Card>
+                <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${theme.iconBg}`}>
+                  <Icon className={`h-4 w-4 ${theme.icon}`} />
+                </span>
+                <span className="font-medium">{shortcut.title}</span>
+              </button>
             );
           })}
         </div>
+        <div className={`mt-3 rounded-xl border px-3 py-2 text-xs ${activeShortcutTheme.active}`}>
+          <span className="font-semibold">{activeShortcut.title}:</span> {activeShortcut.description}
+        </div>
       </section>
 
-      <section className="section-card card-density-comfy">
+      <section className="section-card card-density-comfy border border-violet-200/60 bg-gradient-to-r from-white via-violet-50/25 to-white">
         <div className="mb-3 flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-slate-900">Team & policies</h2>
-          <HelpHint text="Member invitations, roles, and sharing policy controls." />
+          <h2 className="text-sm font-semibold text-slate-900">Lab administration</h2>
+          <HelpHint text="Infrequent controls for access, roles, and sharing rules." />
         </div>
-      <details className="rounded-2xl border border-slate-200/80 bg-white/85 p-4">
-        <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">Open team and policy controls</summary>
-        <p className="mt-1 text-sm text-slate-600">Manage lab setup, invitations, roles, and sharing policies.</p>
+      <details className="rounded-2xl border border-violet-200/70 bg-white/90 p-3 sm:p-4">
+        <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-slate-900">
+          <ShieldCheck className="h-4 w-4 text-slate-600" />
+          Open administration controls
+        </summary>
         <div className="mt-3 space-y-2 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3">
           <label className="space-y-1">
-            <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Target lab</span>
+            <span className="flex items-center gap-1 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+              Target lab
+              <HelpHint text="Member and policy actions below apply to this selected lab." />
+            </span>
             <select
               value={resolvedTeamTargetLabId ?? ""}
               onChange={(event) => {
                 setTeamTargetLabId(event.target.value || null);
-                setPendingTeamTarget(null);
               }}
               className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm shadow-xs outline-none"
             >
@@ -749,11 +866,6 @@ export function LabsClient({
                 toast.error("Select a target lab first.");
                 return;
               }
-              if (effectiveActiveLabId !== resolvedTeamTargetLabId) {
-                setPendingTeamTarget({ labId: resolvedTeamTargetLabId, target: "members" });
-                toast.info("Set target as active, then we will open member invite.");
-                return;
-              }
               focusTeamTarget(resolvedTeamTargetLabId, "members");
             }}
           >
@@ -769,51 +881,27 @@ export function LabsClient({
                 toast.error("Select a target lab first.");
                 return;
               }
-              if (effectiveActiveLabId !== resolvedTeamTargetLabId) {
-                setPendingTeamTarget({ labId: resolvedTeamTargetLabId, target: "policies" });
-                toast.info("Set target as active, then we will open policy and role controls.");
-                return;
-              }
               focusTeamTarget(resolvedTeamTargetLabId, "policies");
             }}
           >
-            Edit roles and policies
+            Open roles and access
           </Button>
-          {targetLabNeedsActivation && resolvedTeamTargetLabId ? (
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                setPendingActiveLabId(resolvedTeamTargetLabId);
-                const formData = new FormData();
-                formData.set("lab_id", resolvedTeamTargetLabId);
-                runAction(
-                  `active-${resolvedTeamTargetLabId}`,
-                  setActiveLabContext,
-                  formData,
-                  `${resolvedTeamTargetLab?.membership.lab.name ?? "Target lab"} is now active.`,
-                  () => {
-                    setPendingActiveLabId(resolvedTeamTargetLabId);
-                    if (pendingTeamTarget?.labId === resolvedTeamTargetLabId) {
-                      focusTeamTarget(resolvedTeamTargetLabId, pendingTeamTarget.target);
-                      setPendingTeamTarget(null);
-                    }
-                  },
-                  () => {
-                    toast.error("Could not set target lab as active.");
-                  },
-                );
-              }}
-            >
-              Set target as active
-            </Button>
-          ) : null}
           </div>
+          {resolvedTeamTargetLabId ? (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Badge className={canRunMemberAction ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
+                {canRunMemberAction ? "Members: editable" : "Members: limited"}
+              </Badge>
+              <Badge className={canRunPolicyAction ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"}>
+                {canRunPolicyAction ? "Policies: editable" : "Policies: limited"}
+              </Badge>
+            </div>
+          ) : null}
           {!resolvedTeamTargetLabId ? (
-            <p className="text-xs text-slate-600">Select a target lab to enable team and policy actions.</p>
+            <p className="text-xs text-amber-700">Select a target lab to enable actions.</p>
           ) : null}
           {resolvedTeamTargetLabId && (!canRunMemberAction || !canRunPolicyAction) ? (
-            <p className="text-xs text-slate-600">
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
               {canRunMemberAction && !canRunPolicyAction
                 ? "You can invite members for this lab, but policy editing requires higher access."
                 : !canRunMemberAction && canRunPolicyAction
@@ -848,9 +936,10 @@ export function LabsClient({
               <p className="text-xs text-slate-600">
                 {syncStatus?.hint ?? "Sync summary is not available yet for this lab."}
               </p>
-              <p className="text-xs text-slate-600">
-                Manual check: run <code>node scripts/quartzy_sync_orders.mjs --dry-run</code> (or <code>--apply</code>) and review cron/job logs for summary output.
-              </p>
+              <div className="flex items-center gap-1 text-xs text-slate-600">
+                <span>Manual checks</span>
+                <HelpHint text="Run: node scripts/quartzy_sync_orders.mjs --dry-run (or --apply), then review cron/job logs for summary output." />
+              </div>
             </CardContent>
           </Card>
         ) : null}
@@ -953,38 +1042,48 @@ export function LabsClient({
           const canManageMembers = canManageLabMembers(workspace.membership.role);
           const canManagePolicies = canManageLabPolicies(workspace.membership.role);
           const canDeactivate = canDeactivateLabMembers(workspace.membership.role);
-          const requiresActiveLab = !isSelected;
+          const requiresActiveLab = false;
           const activityEntries = getActivityEntries(workspace.membership.lab.id);
           const inviteEntries = getInviteEntries(workspace.membership.lab.id);
           const roleHistoryEntries = getRoleHistoryEntries(workspace.membership.lab.id);
           const announcementEntries = safeArray(getAnnouncementEntries(workspace.membership.lab.id));
           const sharedTaskEntries = safeArray(getSharedTaskEntries(workspace.membership.lab.id));
           const inspectionTasks = sharedTaskEntries.filter((task) => task.listType === "inspection");
-          const generalTasks = sharedTaskEntries.filter((task) => task.listType === "general");
           const activeMembers = safeArray(workspace.members).filter((member) => member.is_active);
+          const memberLabelByUserId = new Map(activeMembers.map((member) => [member.user_id, getMemberPrimaryLabel(member)]));
+          const memberLabelByMembershipId = new Map(activeMembers.map((member) => [member.id, getMemberPrimaryLabel(member)]));
           const activeOpsTab = getActiveOpsTab(workspace.membership.lab.id);
           const showAdvanced = isAdvancedPanelOpen(workspace.membership.lab.id, activeOpsTab);
           const usesEmbeddedSurface =
             activeOpsTab === "reagents"
             || activeOpsTab === "chat"
+            || activeOpsTab === "meetings"
             || activeOpsTab === "equipment_booking";
 
           return (
             <Card
               key={workspace.membership.lab.id}
               id={`lab-${workspace.membership.lab.id}`}
-              className={`border-white/80 bg-white/85 shadow-[0_18px_38px_-30px_rgba(15,23,42,0.24)] ${
+              className={`labs-workspace-card relative overflow-hidden border-white/80 bg-white/90 shadow-[0_18px_38px_-30px_rgba(15,23,42,0.24)] ${
                 isSelected ? "ring-2 ring-cyan-200" : ""
               }`}
             >
-              <CardHeader className="gap-4">
+              <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-cyan-400 via-violet-400 to-amber-300" />
+              <CardHeader className="gap-3 pb-3">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <CardTitle className="text-lg">{workspace.membership.lab.name}</CardTitle>
-                      <Badge variant="secondary">{ROLE_LABELS[workspace.membership.role]}</Badge>
-                      <Badge variant="outline">Private + Lab Shared</Badge>
-                      {effectiveActiveLabId === workspace.membership.lab.id ? (
+                      <Badge className={
+                        workspace.membership.role === "admin"
+                          ? "bg-emerald-100 text-emerald-800"
+                          : workspace.membership.role === "manager"
+                            ? "bg-blue-100 text-blue-800"
+                            : "bg-slate-100 text-slate-700"
+                      }>
+                        {ROLE_LABELS[workspace.membership.role]}
+                      </Badge>
+                      {isSelected ? (
                         <Badge className="bg-cyan-600 text-white">Active lab</Badge>
                       ) : null}
                     </div>
@@ -992,61 +1091,34 @@ export function LabsClient({
                       {workspace.membership.lab.description || "No lab description yet."}
                     </p>
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600">
+                  <div className="labs-minimal-chip rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600">
                     <div className="flex items-center gap-1.5">
                       <p className="font-semibold uppercase tracking-[0.14em] text-slate-500">Visibility boundary</p>
                       <HelpHint text="Private records stay personal. Shared records follow this lab's rules." />
                     </div>
                   </div>
                 </div>
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    variant={effectiveActiveLabId === workspace.membership.lab.id ? "secondary" : "outline"}
-                    disabled={busyKey === `active-${workspace.membership.lab.id}`}
-                    onClick={() => {
-                      setPendingActiveLabId(workspace.membership.lab.id);
-                      const formData = new FormData();
-                      formData.set("lab_id", workspace.membership.lab.id);
-                      runAction(
-                        `active-${workspace.membership.lab.id}`,
-                        setActiveLabContext,
-                        formData,
-                        `${workspace.membership.lab.name} is now active.`,
-                        () => setPendingActiveLabId(workspace.membership.lab.id),
-                        () => setPendingActiveLabId(null),
-                      );
-                    }}
-                  >
-                    {effectiveActiveLabId === workspace.membership.lab.id ? "Active lab" : "Set as active"}
-                  </Button>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <Badge variant={canManageMembers ? "secondary" : "outline"}>
-                    {canManageMembers ? "Can invite + edit members" : "Member list view-only"}
+                <div className="flex flex-wrap gap-1.5 text-xs">
+                  <Badge variant="outline" className={canManageMembers ? "border-emerald-200 text-emerald-800" : "border-slate-200 text-slate-600"}>
+                    {canManageMembers ? "Members editable" : "Members read-only"}
                   </Badge>
-                  <Badge variant={canManagePolicies ? "secondary" : "outline"}>
-                    {canManagePolicies ? "Can edit policies" : "Policy view-only"}
-                  </Badge>
-                  <Badge variant={canDeactivate ? "secondary" : "outline"}>
-                    {canDeactivate ? "Can deactivate members" : "No deactivation access"}
+                  <Badge variant="outline" className={canManagePolicies ? "border-blue-200 text-blue-800" : "border-slate-200 text-slate-600"}>
+                    {canManagePolicies ? "Policies editable" : "Policies read-only"}
                   </Badge>
                 </div>
               </CardHeader>
 
-              <CardContent className="space-y-4">
-                {isSelected ? (
+              <CardContent className="space-y-3">
                 <section
                   id={getOpsHubId(workspace.membership.lab.id)}
-                  className="space-y-4 rounded-2xl border border-cyan-100 bg-cyan-50/40 p-4"
+                  className="labs-ops-surface space-y-3 rounded-2xl border border-cyan-100 bg-cyan-50/40 p-4"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-1.5">
                         <h3 className="text-sm font-semibold text-slate-900">Operations hub</h3>
-                        <HelpHint text="Shared announcements and tasks for this lab." />
+                        <HelpHint text="Shared announcements, meetings, and inspection tasks for this lab." />
                       </div>
-                      <p className="text-xs text-slate-600">Inspection workflows and general team tasks.</p>
                     </div>
                   </div>
 
@@ -1054,10 +1126,11 @@ export function LabsClient({
                     className={
                       usesEmbeddedSurface
                         ? "min-w-0 space-y-2 overflow-x-hidden"
-                        : "rounded-2xl border border-slate-200 bg-white p-4"
+                        : "labs-content-panel rounded-2xl border border-slate-200 bg-white p-4"
                     }
                     role="tabpanel"
                     id={getOpsPanelId(workspace.membership.lab.id, activeOpsTab)}
+                    aria-labelledby={`ops-tab-${workspace.membership.lab.id}-${activeOpsTab}`}
                   >
                     {usesEmbeddedSurface ? null : (
                       <div className="mb-3 flex items-center justify-between gap-2">
@@ -1075,7 +1148,6 @@ export function LabsClient({
 
                     {activeOpsTab === "reagents" ? (
                       <div
-                        id={getOpsPanelId(workspace.membership.lab.id, "reagents")}
                         className={cn(
                           "min-w-0 overflow-x-hidden",
                           opsPanelPulseKey === `${workspace.membership.lab.id}:reagents`
@@ -1083,26 +1155,46 @@ export function LabsClient({
                             : "",
                         )}
                       >
-                        {operationsReagentsPanel ? operationsReagentsPanel : (
-                          <p className="text-sm text-slate-600">Set this lab as active to load reagent operations.</p>
+                        {operationsReagentsPanel
+                          ? (isValidElement(operationsReagentsPanel)
+                            ? cloneElement(operationsReagentsPanel, { key: `ops-reagents-${workspace.membership.lab.id}` })
+                            : operationsReagentsPanel)
+                          : (
+                          <p className="text-sm text-slate-600">Reagent operations are not available for this lab yet.</p>
                         )}
                       </div>
                     ) : null}
 
                     {activeOpsTab === "chat" ? (
                       <div
-                        id={getOpsPanelId(workspace.membership.lab.id, "chat")}
                         className={opsPanelPulseKey === `${workspace.membership.lab.id}:chat` ? "rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200" : ""}
                       >
-                        {labChatPanel ? labChatPanel : (
-                          <p className="text-sm text-slate-600">Set this lab as active to load lab chat.</p>
+                        {labChatPanel
+                          ? (isValidElement(labChatPanel)
+                            ? cloneElement(labChatPanel, { key: `ops-chat-${workspace.membership.lab.id}` })
+                            : labChatPanel)
+                          : (
+                          <p className="text-sm text-slate-600">Lab chat is not available for this lab yet.</p>
+                        )}
+                      </div>
+                    ) : null}
+
+                    {activeOpsTab === "meetings" ? (
+                      <div
+                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:meetings` ? "rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200" : ""}
+                      >
+                        {labMeetingsPanel
+                          ? (isValidElement(labMeetingsPanel)
+                            ? cloneElement(labMeetingsPanel, { key: `ops-meetings-${workspace.membership.lab.id}` })
+                            : labMeetingsPanel)
+                          : (
+                          <p className="text-sm text-slate-600">Lab meetings are not available for this lab yet.</p>
                         )}
                       </div>
                     ) : null}
 
                     {activeOpsTab === "announcements" ? (
                       <div
-                        id={getOpsPanelId(workspace.membership.lab.id, "announcements")}
                         className={opsPanelPulseKey === `${workspace.membership.lab.id}:announcements` ? "space-y-3 rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200" : "space-y-3"}
                       >
                         <form
@@ -1114,13 +1206,17 @@ export function LabsClient({
                             const title = String(formData.get("title") ?? "").trim();
                             const body = String(formData.get("body") ?? "").trim();
                             if (!title || !body) return;
-                            appendAnnouncement(workspace.membership.lab.id, {
-                              type: typeRaw === "inspection" ? "inspection" : "general",
-                              title,
-                              body,
-                              author: "You",
-                            });
-                            event.currentTarget.reset();
+                            runAction(
+                              `announcement-create-${workspace.membership.lab.id}`,
+                              announcementActions.createAnnouncement,
+                              withLabContext(workspace.membership.lab.id, [
+                                ["announcement_type", typeRaw === "inspection" ? "inspection" : "general"],
+                                ["title", title],
+                                ["body", body],
+                              ]),
+                              "Announcement posted.",
+                              () => event.currentTarget.reset(),
+                            );
                           }}
                         >
                           {showAdvanced ? (
@@ -1153,9 +1249,9 @@ export function LabsClient({
                             type="submit"
                             variant="outline"
                             className="w-full sm:w-fit"
-                            disabled={!canManageMembers || requiresActiveLab}
+                            disabled={!canManageMembers || requiresActiveLab || busyKey === `announcement-create-${workspace.membership.lab.id}`}
                           >
-                            Post announcement
+                            {busyKey === `announcement-create-${workspace.membership.lab.id}` ? "Posting..." : "Post announcement"}
                           </Button>
                         </form>
                         <div className="space-y-2">
@@ -1163,16 +1259,41 @@ export function LabsClient({
                             <p className="text-sm text-slate-500">No announcements yet.</p>
                           ) : (
                             (showAdvanced ? announcementEntries : announcementEntries.slice(0, 5)).map((entry) => (
-                              <div key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                              <div key={entry.id} className="labs-list-item rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                                 <div className="flex items-center justify-between gap-2">
                                   <p className="truncate text-sm font-medium text-slate-900">{entry.title}</p>
-                                  <Badge variant={entry.type === "inspection" ? "secondary" : "outline"}>
-                                    {entry.type === "inspection" ? "Inspection" : "General"}
-                                  </Badge>
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant={entry.type === "inspection" ? "secondary" : "outline"}>
+                                      {entry.type === "inspection" ? "Inspection" : "General"}
+                                    </Badge>
+                                    {canManageMembers ? (
+                                      <Button
+                                        type="button"
+                                        size="icon"
+                                        variant="ghost"
+                                        className="h-7 w-7 text-slate-500 hover:text-rose-600"
+                                        onClick={() =>
+                                          runAction(
+                                            `announcement-delete-${workspace.membership.lab.id}-${entry.id}`,
+                                            announcementActions.deleteAnnouncement,
+                                            withLabContext(workspace.membership.lab.id, [["announcement_id", entry.id]]),
+                                            "Announcement deleted.",
+                                          )
+                                        }
+                                        disabled={requiresActiveLab || busyKey === `announcement-delete-${workspace.membership.lab.id}-${entry.id}`}
+                                        aria-label="Delete announcement"
+                                        title="Delete announcement"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    ) : null}
+                                  </div>
                                 </div>
                                 <p className="mt-1 text-xs text-slate-700">{entry.body}</p>
                                 <p className="mt-1 text-[11px] text-slate-500">
-                                  {entry.author} · {formatRelativeTime(entry.createdAt)}
+                                  {entry.createdByUserId === currentUserId
+                                    ? "You"
+                                    : (entry.createdByUserId ? memberLabelByUserId.get(entry.createdByUserId) : null) ?? "Lab manager"} · {formatRelativeTime(entry.createdAt)}
                                 </p>
                               </div>
                             ))
@@ -1183,7 +1304,6 @@ export function LabsClient({
 
                     {activeOpsTab === "inspection_tasks" ? (
                       <div
-                        id={getOpsPanelId(workspace.membership.lab.id, "inspection_tasks")}
                         className={opsPanelPulseKey === `${workspace.membership.lab.id}:inspection_tasks` ? "space-y-3 rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200" : "space-y-3"}
                       >
                         <form
@@ -1194,18 +1314,19 @@ export function LabsClient({
                             const title = String(formData.get("title") ?? "").trim();
                             const details = String(formData.get("details") ?? "").trim();
                             const assigneeMemberIdRaw = String(formData.get("assignee_member_id") ?? "").trim();
-                            const assigneeMember = activeMembers.find((member) => member.id === assigneeMemberIdRaw);
                             if (!title) return;
-                            appendSharedTask(workspace.membership.lab.id, {
-                              listType: "inspection",
-                              title,
-                              details,
-                              assigneeMemberId: assigneeMember?.id ?? null,
-                              assigneeLabel: assigneeMember ? getMemberPrimaryLabel(assigneeMember) : "Unassigned",
-                              done: false,
-                              createdBy: "You",
-                            });
-                            event.currentTarget.reset();
+                            runAction(
+                              `shared-task-create-${workspace.membership.lab.id}-inspection`,
+                              sharedTaskActions.createTask,
+                              withLabContext(workspace.membership.lab.id, [
+                                ["title", title],
+                                ["details", details],
+                                ["list_type", "inspection"],
+                                ["assignee_member_id", assigneeMemberIdRaw],
+                              ]),
+                              "Inspection task added.",
+                              () => event.currentTarget.reset(),
+                            );
                           }}
                         >
                           <Input
@@ -1236,8 +1357,13 @@ export function LabsClient({
                               </select>
                             </>
                           ) : null}
-                          <Button type="submit" variant="outline" className="w-full sm:w-fit" disabled={!canManageMembers || requiresActiveLab}>
-                            Add inspection task
+                          <Button
+                            type="submit"
+                            variant="outline"
+                            className="w-full sm:w-fit"
+                            disabled={!canManageMembers || requiresActiveLab || busyKey === `shared-task-create-${workspace.membership.lab.id}-inspection`}
+                          >
+                            {busyKey === `shared-task-create-${workspace.membership.lab.id}-inspection` ? "Adding..." : "Add inspection task"}
                           </Button>
                         </form>
                         <div className="space-y-2">
@@ -1245,7 +1371,7 @@ export function LabsClient({
                             <p className="text-sm text-slate-500">No shared inspection tasks yet.</p>
                           ) : (
                             (showAdvanced ? inspectionTasks : inspectionTasks.slice(0, 6)).map((task) => (
-                              <div key={task.id} className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                              <div key={task.id} className="labs-list-item space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                                 {sharedTaskEditById[task.id] ? (
                                   <div className="space-y-2">
                                     <Input
@@ -1292,12 +1418,12 @@ export function LabsClient({
                                     value={task.assigneeMemberId ?? ""}
                                     onChange={(event) => {
                                       const assigneeMemberIdRaw = event.target.value;
-                                      const assigneeMember = activeMembers.find((member) => member.id === assigneeMemberIdRaw);
-                                      updateSharedTask(workspace.membership.lab.id, task.id, (current) => ({
-                                        ...current,
-                                        assigneeMemberId: assigneeMember?.id ?? null,
-                                        assigneeLabel: assigneeMember ? getMemberPrimaryLabel(assigneeMember) : "Unassigned",
-                                      }));
+                                      submitSharedTaskUpdate(
+                                        workspace.membership.lab.id,
+                                        task,
+                                        { assigneeMemberId: assigneeMemberIdRaw || null },
+                                        "Task assignee updated.",
+                                      );
                                     }}
                                     disabled={!canManageMembers || requiresActiveLab}
                                     className="h-9 min-w-40 rounded-md border border-input bg-white px-3 text-xs shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
@@ -1318,12 +1444,16 @@ export function LabsClient({
                                         disabled={!canManageMembers || requiresActiveLab || !sharedTaskEditById[task.id].title.trim()}
                                         onClick={() => {
                                           const draft = sharedTaskEditById[task.id];
-                                          updateSharedTask(workspace.membership.lab.id, task.id, (current) => ({
-                                            ...current,
-                                            title: draft.title.trim(),
-                                            details: draft.details.trim(),
-                                          }));
-                                          cancelSharedTaskEdit(task.id);
+                                          submitSharedTaskUpdate(
+                                            workspace.membership.lab.id,
+                                            task,
+                                            {
+                                              title: draft.title.trim(),
+                                              details: draft.details.trim(),
+                                            },
+                                            "Task updated.",
+                                            () => cancelSharedTaskEdit(task.id),
+                                          );
                                         }}
                                       >
                                         Save
@@ -1349,11 +1479,12 @@ export function LabsClient({
                                         size="sm"
                                         disabled={!canManageMembers || requiresActiveLab}
                                         onClick={() => {
-                                          updateSharedTask(workspace.membership.lab.id, task.id, (current) => ({
-                                            ...current,
-                                            done: !current.done,
-                                            completedAt: !current.done ? new Date().toISOString() : null,
-                                          }));
+                                          submitSharedTaskUpdate(
+                                            workspace.membership.lab.id,
+                                            task,
+                                            { done: !task.done },
+                                            task.done ? "Task marked open." : "Task marked done.",
+                                          );
                                         }}
                                       >
                                         {task.done ? "Mark open" : "Mark done"}
@@ -1363,211 +1494,16 @@ export function LabsClient({
                                         variant="ghost"
                                         size="sm"
                                         disabled={!canManageMembers || requiresActiveLab}
-                                        onClick={() => removeSharedTask(workspace.membership.lab.id, task.id)}
+                                        onClick={() => submitSharedTaskDelete(workspace.membership.lab.id, task.id)}
                                       >
                                         Delete
                                       </Button>
                                     </>
                                   )}
                                 </div>
-                                <p className="text-[11px] text-slate-500">{task.assigneeLabel} · {formatRelativeTime(task.createdAt)}</p>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {activeOpsTab === "general_tasks" ? (
-                      <div
-                        id={getOpsPanelId(workspace.membership.lab.id, "general_tasks")}
-                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:general_tasks` ? "space-y-3 rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200" : "space-y-3"}
-                      >
-                        <form
-                          className="grid max-w-2xl gap-2"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            const formData = new FormData(event.currentTarget);
-                            const title = String(formData.get("title") ?? "").trim();
-                            const details = String(formData.get("details") ?? "").trim();
-                            const assigneeMemberIdRaw = String(formData.get("assignee_member_id") ?? "").trim();
-                            const assigneeMember = activeMembers.find((member) => member.id === assigneeMemberIdRaw);
-                            if (!title) return;
-                            appendSharedTask(workspace.membership.lab.id, {
-                              listType: "general",
-                              title,
-                              details,
-                              assigneeMemberId: assigneeMember?.id ?? null,
-                              assigneeLabel: assigneeMember ? getMemberPrimaryLabel(assigneeMember) : "Unassigned",
-                              done: false,
-                              createdBy: "You",
-                            });
-                            event.currentTarget.reset();
-                          }}
-                        >
-                          <Input
-                            name="title"
-                            placeholder="Add shared task"
-                            disabled={!canManageMembers || requiresActiveLab}
-                            required
-                          />
-                          {showAdvanced ? (
-                            <>
-                              <Input
-                                name="details"
-                                placeholder="Task details"
-                                disabled={!canManageMembers || requiresActiveLab}
-                              />
-                              <select
-                                name="assignee_member_id"
-                                defaultValue=""
-                                disabled={!canManageMembers || requiresActiveLab}
-                                className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                <option value="">Unassigned</option>
-                                {activeMembers.map((member) => (
-                                  <option key={`general-assignee-${member.id}`} value={member.id}>
-                                    {getMemberPrimaryLabel(member)}
-                                  </option>
-                                ))}
-                              </select>
-                            </>
-                          ) : null}
-                          <Button type="submit" variant="outline" className="w-full sm:w-fit" disabled={!canManageMembers || requiresActiveLab}>
-                            Add general task
-                          </Button>
-                        </form>
-                        <div className="space-y-2">
-                          {generalTasks.length === 0 ? (
-                            <p className="text-sm text-slate-500">No shared general tasks yet.</p>
-                          ) : (
-                            (showAdvanced ? generalTasks : generalTasks.slice(0, 6)).map((task) => (
-                              <div key={task.id} className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                {sharedTaskEditById[task.id] ? (
-                                  <div className="space-y-2">
-                                    <Input
-                                      value={sharedTaskEditById[task.id].title}
-                                      onChange={(event) =>
-                                        setSharedTaskEditById((current) => ({
-                                          ...current,
-                                          [task.id]: {
-                                            ...(current[task.id] ?? { title: task.title, details: task.details }),
-                                            title: event.target.value,
-                                          },
-                                        }))
-                                      }
-                                      disabled={!canManageMembers || requiresActiveLab}
-                                    />
-                                    <Textarea
-                                      rows={2}
-                                      value={sharedTaskEditById[task.id].details}
-                                      onChange={(event) =>
-                                        setSharedTaskEditById((current) => ({
-                                          ...current,
-                                          [task.id]: {
-                                            ...(current[task.id] ?? { title: task.title, details: task.details }),
-                                            details: event.target.value,
-                                          },
-                                        }))
-                                      }
-                                      disabled={!canManageMembers || requiresActiveLab}
-                                    />
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div>
-                                      <p className={`text-sm font-medium ${task.done ? "text-slate-500 line-through" : "text-slate-900"}`}>
-                                        {task.title}
-                                      </p>
-                                      {task.details ? <p className="mt-1 text-xs text-slate-600">{task.details}</p> : null}
-                                    </div>
-                                    <Badge variant={task.done ? "secondary" : "outline"}>{task.done ? "Done" : "Open"}</Badge>
-                                  </div>
-                                )}
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <select
-                                    value={task.assigneeMemberId ?? ""}
-                                    onChange={(event) => {
-                                      const assigneeMemberIdRaw = event.target.value;
-                                      const assigneeMember = activeMembers.find((member) => member.id === assigneeMemberIdRaw);
-                                      updateSharedTask(workspace.membership.lab.id, task.id, (current) => ({
-                                        ...current,
-                                        assigneeMemberId: assigneeMember?.id ?? null,
-                                        assigneeLabel: assigneeMember ? getMemberPrimaryLabel(assigneeMember) : "Unassigned",
-                                      }));
-                                    }}
-                                    disabled={!canManageMembers || requiresActiveLab}
-                                    className="h-9 min-w-40 rounded-md border border-input bg-white px-3 text-xs shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                                  >
-                                    <option value="">Unassigned</option>
-                                    {activeMembers.map((member) => (
-                                      <option key={`general-edit-assignee-${task.id}-${member.id}`} value={member.id}>
-                                        {getMemberPrimaryLabel(member)}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  {sharedTaskEditById[task.id] ? (
-                                    <>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={!canManageMembers || requiresActiveLab || !sharedTaskEditById[task.id].title.trim()}
-                                        onClick={() => {
-                                          const draft = sharedTaskEditById[task.id];
-                                          updateSharedTask(workspace.membership.lab.id, task.id, (current) => ({
-                                            ...current,
-                                            title: draft.title.trim(),
-                                            details: draft.details.trim(),
-                                          }));
-                                          cancelSharedTaskEdit(task.id);
-                                        }}
-                                      >
-                                        Save
-                                      </Button>
-                                      <Button type="button" variant="ghost" size="sm" onClick={() => cancelSharedTaskEdit(task.id)}>
-                                        Cancel
-                                      </Button>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={!canManageMembers || requiresActiveLab}
-                                        onClick={() => startSharedTaskEdit(task)}
-                                      >
-                                        Edit
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={!canManageMembers || requiresActiveLab}
-                                        onClick={() => {
-                                          updateSharedTask(workspace.membership.lab.id, task.id, (current) => ({
-                                            ...current,
-                                            done: !current.done,
-                                            completedAt: !current.done ? new Date().toISOString() : null,
-                                          }));
-                                        }}
-                                      >
-                                        {task.done ? "Mark open" : "Mark done"}
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={!canManageMembers || requiresActiveLab}
-                                        onClick={() => removeSharedTask(workspace.membership.lab.id, task.id)}
-                                      >
-                                        Delete
-                                      </Button>
-                                    </>
-                                  )}
-                                </div>
-                                <p className="text-[11px] text-slate-500">{task.assigneeLabel} · {formatRelativeTime(task.createdAt)}</p>
+                                <p className="text-[11px] text-slate-500">
+                                  {(task.assigneeMemberId ? memberLabelByMembershipId.get(task.assigneeMemberId) : null) ?? "Unassigned"} · {formatRelativeTime(task.createdAt)}
+                                </p>
                               </div>
                             ))
                           )}
@@ -1577,7 +1513,6 @@ export function LabsClient({
 
                     {activeOpsTab === "equipment_booking" ? (
                       <div
-                        id={getOpsPanelId(workspace.membership.lab.id, "equipment_booking")}
                         className={cn(
                           "min-w-0 overflow-x-hidden",
                           opsPanelPulseKey === `${workspace.membership.lab.id}:equipment_booking`
@@ -1586,27 +1521,19 @@ export function LabsClient({
                         )}
                       >
                         {operationsEquipmentPanel ? operationsEquipmentPanel : (
-                          <p className="text-sm text-slate-600">Set this lab as active to load equipment booking operations.</p>
+                          <p className="text-sm text-slate-600">Equipment booking is not available for this lab yet.</p>
                         )}
                       </div>
                     ) : null}
                   </div>
 
-                  {(activeOpsTab === "announcements" || activeOpsTab === "inspection_tasks" || activeOpsTab === "general_tasks")
+                  {(activeOpsTab === "announcements" || activeOpsTab === "inspection_tasks")
                     && (!canManageMembers || requiresActiveLab) ? (
                     <p className="text-xs text-slate-500">
-                      {requiresActiveLab
-                        ? "Set this lab as active before posting announcements or updating tasks."
-                        : "Manager or admin role required to edit announcements and shared tasks."}
+                      Manager or admin role required to edit announcements and shared tasks.
                     </p>
                   ) : null}
                 </section>
-                ) : (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700">
-                    Shared operations are hidden for non-active labs to reduce clutter. Set this lab as active to open chat,
-                    announcements, shared tasks, and equipment booking.
-                  </div>
-                )}
 
                 <details
                   id={getTeamDetailsId(workspace.membership.lab.id)}
@@ -1618,15 +1545,15 @@ export function LabsClient({
                       [workspace.membership.lab.id]: detailsElement.open,
                     }));
                   }}
-                  className="rounded-2xl border border-slate-200/80 bg-slate-50/50 p-4"
+                  className="labs-content-panel rounded-2xl border border-slate-200/80 bg-slate-50/50 p-4"
                 >
-                  <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">Team & policies</summary>
-                  <p className="mt-1 text-sm text-slate-600">Roles, member access, and policy controls.</p>
+                  <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">Lab administration</summary>
+                  <p className="mt-1 text-sm text-slate-600">Roles, access control, and sharing rules.</p>
                   <div className="mt-4 space-y-5">
                     <form
                   id={getTeamTargetId(workspace.membership.lab.id, "policies")}
                   tabIndex={-1}
-                  className="grid gap-4 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4 lg:grid-cols-2"
+                  className="grid gap-4 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4 lg:grid-cols-2 labs-subtle-block"
                   onSubmit={(event) => {
                     event.preventDefault();
                     runAction(
@@ -1638,7 +1565,7 @@ export function LabsClient({
                   }}
                 >
                   <input type="hidden" name="lab_id" value={workspace.membership.lab.id} />
-                  <input type="hidden" name="active_lab_id" value={effectiveActiveLabId ?? ""} />
+                  <input type="hidden" name="active_lab_id" value={workspace.membership.lab.id} />
 
                   <label className="space-y-2 text-sm text-slate-700">
                     <span className="font-medium">Shared template edits</span>
@@ -1701,7 +1628,7 @@ export function LabsClient({
                   <form
                     id={getTeamTargetId(workspace.membership.lab.id, "members")}
                     tabIndex={-1}
-                    className="grid gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4 md:grid-cols-4"
+                    className="grid gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4 md:grid-cols-4 labs-subtle-block"
                     onSubmit={(event) => {
                       event.preventDefault();
                       const formElement = event.currentTarget;
@@ -1819,7 +1746,7 @@ export function LabsClient({
                     }}
                   >
                     <input type="hidden" name="lab_id" value={workspace.membership.lab.id} />
-                    <input type="hidden" name="active_lab_id" value={effectiveActiveLabId ?? ""} />
+                    <input type="hidden" name="active_lab_id" value={workspace.membership.lab.id} />
                     <label className="space-y-1 md:col-span-2">
                       <span className="text-xs font-medium uppercase tracking-[0.12em] text-slate-500">Email</span>
                       <Input
@@ -1889,7 +1816,7 @@ export function LabsClient({
                             if (!draft?.email) return;
                             const retryData = new FormData();
                             retryData.set("lab_id", workspace.membership.lab.id);
-                            retryData.set("active_lab_id", effectiveActiveLabId ?? "");
+                            retryData.set("active_lab_id", workspace.membership.lab.id);
                             retryData.set("email", draft.email);
                             retryData.set("role", draft.role);
                             if (draft.displayTitle) {
@@ -1963,9 +1890,7 @@ export function LabsClient({
                   ) : null}
                   {!canManageMembers || requiresActiveLab ? (
                     <p className="text-xs text-slate-500">
-                      {requiresActiveLab
-                        ? "Set this lab as active before editing members or policies."
-                        : "Manager or admin role required to add or edit members."}
+                      Manager or admin role required to add or edit members.
                     </p>
                   ) : null}
 
@@ -1987,10 +1912,7 @@ export function LabsClient({
                         const managerProfile = getManagerProfile(workspace.membership.lab.id, member.id);
 
                         return (
-                          <div
-                            key={member.id}
-                            className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white px-4 py-4"
-                          >
+                          <div key={member.id} className="labs-member-row flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white px-4 py-3">
                             <div className="min-w-0">
                               <div className="flex flex-wrap items-center gap-2">
                                 <p className="truncate text-sm font-medium text-slate-900">
@@ -2001,44 +1923,49 @@ export function LabsClient({
                                 </Badge>
                               </div>
                               <p className="mt-1 text-xs text-slate-500">{member.profile?.email || "No email on profile"}</p>
-                              <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                                <Input
-                                  value={managerProfile.focusArea}
-                                  onChange={(event) =>
-                                    saveManagerProfile(workspace.membership.lab.id, member.id, {
-                                      ...managerProfile,
-                                      focusArea: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Focus area"
-                                  className="h-8 text-xs"
-                                  disabled={!canManageMembers || requiresActiveLab}
-                                />
-                                <Input
-                                  value={managerProfile.contact}
-                                  onChange={(event) =>
-                                    saveManagerProfile(workspace.membership.lab.id, member.id, {
-                                      ...managerProfile,
-                                      contact: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Contact handle"
-                                  className="h-8 text-xs"
-                                  disabled={!canManageMembers || requiresActiveLab}
-                                />
-                                <Input
-                                  value={managerProfile.notes}
-                                  onChange={(event) =>
-                                    saveManagerProfile(workspace.membership.lab.id, member.id, {
-                                      ...managerProfile,
-                                      notes: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Manager note"
-                                  className="h-8 text-xs"
-                                  disabled={!canManageMembers || requiresActiveLab}
-                                />
-                              </div>
+                              <details className="mt-2">
+                                <summary className="cursor-pointer text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+                                  Manager fields
+                                </summary>
+                                <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                                  <Input
+                                    value={managerProfile.focusArea}
+                                    onChange={(event) =>
+                                      saveManagerProfile(workspace.membership.lab.id, member.id, {
+                                        ...managerProfile,
+                                        focusArea: event.target.value,
+                                      })
+                                    }
+                                    placeholder="Focus area"
+                                    className="h-8 text-xs"
+                                    disabled={!canManageMembers || requiresActiveLab}
+                                  />
+                                  <Input
+                                    value={managerProfile.contact}
+                                    onChange={(event) =>
+                                      saveManagerProfile(workspace.membership.lab.id, member.id, {
+                                        ...managerProfile,
+                                        contact: event.target.value,
+                                      })
+                                    }
+                                    placeholder="Contact handle"
+                                    className="h-8 text-xs"
+                                    disabled={!canManageMembers || requiresActiveLab}
+                                  />
+                                  <Input
+                                    value={managerProfile.notes}
+                                    onChange={(event) =>
+                                      saveManagerProfile(workspace.membership.lab.id, member.id, {
+                                        ...managerProfile,
+                                        notes: event.target.value,
+                                      })
+                                    }
+                                    placeholder="Manager note"
+                                    className="h-8 text-xs"
+                                    disabled={!canManageMembers || requiresActiveLab}
+                                  />
+                                </div>
+                              </details>
                             </div>
 
                             <div className="flex flex-col gap-2 lg:items-end">
@@ -2063,7 +1990,7 @@ export function LabsClient({
                                 }}
                               >
                                 <input type="hidden" name="lab_id" value={workspace.membership.lab.id} />
-                                <input type="hidden" name="active_lab_id" value={effectiveActiveLabId ?? ""} />
+                                <input type="hidden" name="active_lab_id" value={workspace.membership.lab.id} />
                                 <input type="hidden" name="member_id" value={member.id} />
                                 <Input
                                   name="display_title"
@@ -2127,7 +2054,7 @@ export function LabsClient({
                                   }}
                                 >
                                   <input type="hidden" name="lab_id" value={workspace.membership.lab.id} />
-                                  <input type="hidden" name="active_lab_id" value={effectiveActiveLabId ?? ""} />
+                                  <input type="hidden" name="active_lab_id" value={workspace.membership.lab.id} />
                                   <input type="hidden" name="member_id" value={member.id} />
                                   <select
                                     name="role"
@@ -2183,7 +2110,7 @@ export function LabsClient({
                                   }}
                                 >
                                   <input type="hidden" name="lab_id" value={workspace.membership.lab.id} />
-                                  <input type="hidden" name="active_lab_id" value={effectiveActiveLabId ?? ""} />
+                                  <input type="hidden" name="active_lab_id" value={workspace.membership.lab.id} />
                                   <input type="hidden" name="member_id" value={member.id} />
                                   <input type="hidden" name="member_user_id" value={member.user_id} />
                                   <Button
@@ -2203,10 +2130,10 @@ export function LabsClient({
                     )}
                   </div>
 
-                  <details className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4">
+                  <details className="labs-content-panel rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4">
                     <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">Activity and history</summary>
                     <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                      <div className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4">
+                      <div className="labs-subtle-block rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4">
                         <div className="mb-3 flex items-center gap-2">
                           <History className="h-4 w-4 text-slate-600" />
                           <p className="text-sm font-semibold text-slate-900">Member activity feed</p>
@@ -2216,7 +2143,7 @@ export function LabsClient({
                             <p className="text-sm text-slate-500">No recent member activity yet.</p>
                           ) : (
                             activityEntries.map((event) => (
-                              <div key={event.id} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                              <div key={event.id} className="labs-list-item rounded-xl border border-slate-200 bg-white px-3 py-2">
                                 <p className="text-sm font-medium text-slate-900">{event.memberLabel}</p>
                                 <p className="text-xs text-slate-600">{event.detail}</p>
                                 <p className="mt-1 text-[11px] text-slate-500">{formatRelativeTime(event.createdAt)}</p>
@@ -2226,7 +2153,7 @@ export function LabsClient({
                         </div>
                       </div>
 
-                      <div className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4">
+                      <div className="labs-subtle-block rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4">
                         <div className="mb-3 flex items-center gap-2">
                           <NotebookPen className="h-4 w-4 text-slate-600" />
                           <p className="text-sm font-semibold text-slate-900">Invite/add history</p>
@@ -2236,7 +2163,7 @@ export function LabsClient({
                             <p className="text-sm text-slate-500">No invite attempts yet.</p>
                           ) : (
                             inviteEntries.map((entry) => (
-                              <div key={entry.id} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                              <div key={entry.id} className="labs-list-item rounded-xl border border-slate-200 bg-white px-3 py-2">
                                 <div className="flex items-center justify-between gap-2">
                                   <p className="truncate text-sm font-medium text-slate-900">{entry.email || "Unknown email"}</p>
                                   <Badge
@@ -2269,7 +2196,7 @@ export function LabsClient({
                         </div>
                       </div>
                     </div>
-                    <div className="mt-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4">
+                    <div className="labs-subtle-block mt-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4">
                       <div className="mb-3 flex items-center gap-2">
                         <History className="h-4 w-4 text-slate-600" />
                         <p className="text-sm font-semibold text-slate-900">Role history timeline</p>
@@ -2279,7 +2206,7 @@ export function LabsClient({
                           <p className="text-sm text-slate-500">No role changes recorded yet.</p>
                         ) : (
                           roleHistoryEntries.map((entry) => (
-                            <div key={entry.id} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                            <div key={entry.id} className="labs-list-item rounded-xl border border-slate-200 bg-white px-3 py-2">
                               <div className="flex items-center justify-between gap-2">
                                 <p className="truncate text-sm font-medium text-slate-900">{entry.memberLabel}</p>
                                 <Badge variant="outline">{entry.actor}</Badge>

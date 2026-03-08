@@ -5,6 +5,7 @@ import {
   refreshAccessToken,
   findOrCreateFolder,
   uploadFile,
+  makeFilePublic,
 } from "@/lib/google-drive";
 
 export async function POST(req: NextRequest) {
@@ -105,6 +106,11 @@ export async function POST(req: NextRequest) {
       buffer,
       parentFolder
     );
+    try {
+      await makeFilePublic(accessToken, result.fileId);
+    } catch (err) {
+      console.warn("Drive upload succeeded but sharing update failed:", err);
+    }
 
     // If we have an experiment ID, update the experiment record with the Drive URL
     if (experimentId) {
@@ -128,4 +134,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-

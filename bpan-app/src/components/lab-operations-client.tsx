@@ -424,8 +424,23 @@ function downloadCsv(filename: string, headers: string[], rows: Array<Array<stri
   URL.revokeObjectURL(url);
 }
 
+const MIN_CONFLICT_OVERLAP_MS = 5 * 60 * 1000;
+
 function bookingIntervalsOverlap(a: BookingView, b: BookingView) {
-  return new Date(a.startsAt) < new Date(b.endsAt) && new Date(a.endsAt) > new Date(b.startsAt);
+  const aStart = new Date(a.startsAt).getTime();
+  const aEnd = new Date(a.endsAt).getTime();
+  const bStart = new Date(b.startsAt).getTime();
+  const bEnd = new Date(b.endsAt).getTime();
+  if (!Number.isFinite(aStart) || !Number.isFinite(aEnd) || !Number.isFinite(bStart) || !Number.isFinite(bEnd)) {
+    return false;
+  }
+  const aDuration = aEnd - aStart;
+  const bDuration = bEnd - bStart;
+  if (aDuration < MIN_CONFLICT_OVERLAP_MS || bDuration < MIN_CONFLICT_OVERLAP_MS) {
+    return false;
+  }
+  const overlap = Math.min(aEnd, bEnd) - Math.max(aStart, bStart);
+  return overlap >= MIN_CONFLICT_OVERLAP_MS;
 }
 
 function equipmentTabLabel(name: string) {
@@ -707,10 +722,29 @@ export function LabOperationsClient({
   const [equipmentEditError, setEquipmentEditError] = useState<string | null>(null);
   const [equipmentTab, setEquipmentTab] = useState("all");
   const [equipmentSection, setEquipmentSection] = useState<"booking" | "calendar" | "equipment">("booking");
+  const [calendarStatusDraftByBookingId, setCalendarStatusDraftByBookingId] = useState<Record<string, PlatformBookingStatus>>({});
+  const [calendarView, setCalendarView] = useState<"week" | "month">("month");
   const [surfaceTab, setSurfaceTab] = useState<"inventory" | "bookings" | "handoff">(initialTab);
+  const [isNarrowMobile, setIsNarrowMobile] = useState(false);
   const [scanUsageAmount, setScanUsageAmount] = useState("1");
+  const [reorderVendorInput, setReorderVendorInput] = useState("");
+  const [reorderPoInput, setReorderPoInput] = useState("");
+  const [reorderEtaInput, setReorderEtaInput] = useState("");
   const activeSurfaceTab = embedded ? initialTab : surfaceTab;
   const reagentDetailRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(max-width: 640px)");
+    const apply = () => setIsNarrowMobile(mediaQuery.matches);
+    apply();
+    mediaQuery.addEventListener("change", apply);
+    return () => mediaQuery.removeEventListener("change", apply);
+  }, []);
+
+  useEffect(() => {
+    setCalendarView(isNarrowMobile ? "week" : "month");
+  }, [isNarrowMobile]);
 
   useEffect(() => {
     setLocalInventory(inventory);
@@ -922,8 +956,11 @@ export function LabOperationsClient({
 
   useEffect(() => {
     if (equipmentTab === "all") {
-      if (embedded && equipmentSection === "calendar") {
-        setEquipmentSection("booking");
+      if (!calendarEquipmentId) {
+        const fallback = localEquipmentOptions.find((item) => item.isActive) ?? localEquipmentOptions[0];
+        if (fallback) {
+          setCalendarEquipmentId(fallback.id);
+        }
       }
       return;
     }
@@ -934,13 +971,47 @@ export function LabOperationsClient({
     setCalendarEquipmentId(equipmentTab);
     setSelectedEquipmentId(equipmentTab);
     setEquipmentSection("calendar");
-  }, [embedded, equipmentSection, equipmentTab, localEquipmentOptions]);
+  }, [calendarEquipmentId, embedded, equipmentSection, equipmentTab, localEquipmentOptions]);
 
   const bookingConflictMap = useMemo(() => {
     const map = new Map<string, BookingView[]>();
-    const actionable = localBookings.filter(
-      (booking) => booking.status !== "cancelled" && booking.status !== "completed",
-    );
+    const dedupedById = new Map<string, BookingView>();
+    for (const booking of localBookings) dedupedById.set(booking.id, booking);
+
+    // Guard against optimistic/server duplicate clones of the same booking window.
+    const dedupedBySignature = new Map<string, BookingView>();
+    for (const booking of dedupedById.values()) {
+      const start = new Date(booking.startsAt);
+      const end = new Date(booking.endsAt);
+      const startKey = Number.isNaN(start.getTime()) ? booking.startsAt : start.toISOString();
+      const endKey = Number.isNaN(end.getTime()) ? booking.endsAt : end.toISOString();
+      const signature = [
+        booking.equipmentId,
+        booking.title.trim().toLowerCase(),
+        startKey,
+        endKey,
+      ].join("|");
+      const existing = dedupedBySignature.get(signature);
+      if (!existing) {
+        dedupedBySignature.set(signature, booking);
+        continue;
+      }
+      const existingIsTemp = existing.id.startsWith("temp-booking-");
+      const currentIsTemp = booking.id.startsWith("temp-booking-");
+      if (existingIsTemp && !currentIsTemp) {
+        dedupedBySignature.set(signature, booking);
+      }
+    }
+
+    const actionable = [...dedupedBySignature.values()].filter((booking) => {
+      if (booking.status === "cancelled" || booking.status === "completed") return false;
+      const startMs = new Date(booking.startsAt).getTime();
+      const endMs = new Date(booking.endsAt).getTime();
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return false;
+      // Ignore zero/negative windows; they should not be treated as conflicts.
+      if (endMs <= startMs) return false;
+      return true;
+    });
     for (const booking of actionable) {
       map.set(booking.id, []);
     }
@@ -1335,6 +1406,11 @@ export function LabOperationsClient({
     quantityDelta: number,
     note: string,
     unit: string | null,
+    options?: {
+      vendor?: string | null;
+      purchaseOrderNumber?: string | null;
+      expectedArrivalAt?: string | null;
+    },
   ) {
     if (!labContext.labId) {
       toast.error("Select an active lab before recording stock events.");
@@ -1349,6 +1425,9 @@ export function LabOperationsClient({
     if (unit) {
       formData.set("unit", unit);
     }
+    if (options?.vendor) formData.set("vendor", options.vendor);
+    if (options?.purchaseOrderNumber) formData.set("purchase_order_number", options.purchaseOrderNumber);
+    if (options?.expectedArrivalAt) formData.set("expected_arrival_at", options.expectedArrivalAt);
     formData.set("notes", note);
 
     const previousEvent = localLatestInventoryEventByReagentId[labReagentId];
@@ -1378,6 +1457,21 @@ export function LabOperationsClient({
       });
     }
   }
+
+  const selectedReagentPlacedEvent = useMemo(() => {
+    if (!selectedInventory) return null;
+    return selectedInventory.stockEvents.find((event) => event.event_type === "reorder_placed") ?? null;
+  }, [selectedInventory]);
+
+  const selectedReagentReceivedEvent = useMemo(() => {
+    if (!selectedInventory) return null;
+    return selectedInventory.stockEvents.find((event) => event.event_type === "reorder_received") ?? null;
+  }, [selectedInventory]);
+
+  const selectedReagentArrivalEta = useMemo(() => {
+    if (selectedReagentReceivedEvent) return null;
+    return selectedReagentPlacedEvent?.expected_arrival_at ?? null;
+  }, [selectedReagentPlacedEvent, selectedReagentReceivedEvent]);
 
   async function submitUpdateReagent() {
     if (!labContext.labId || !selectedInventory) {
@@ -2243,6 +2337,26 @@ export function LabOperationsClient({
     return days;
   }, [calendarMonth]);
 
+  const calendarAnchorDate = useMemo(() => {
+    if (calendarDateFilter) {
+      const parsed = new Date(`${calendarDateFilter}T12:00:00`);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+    return new Date();
+  }, [calendarDateFilter]);
+
+  const weekStartDate = useMemo(
+    () => addDays(calendarAnchorDate, -calendarAnchorDate.getDay()),
+    [calendarAnchorDate],
+  );
+
+  const weekGridDays = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => addDays(weekStartDate, index)),
+    [weekStartDate],
+  );
+
+  const visibleCalendarDays = calendarView === "week" ? weekGridDays : monthGridDays;
+
   const monthBookingsByDay = useMemo(() => {
     const map = new Map<string, BookingView[]>();
     for (const booking of localBookings) {
@@ -2340,14 +2454,41 @@ export function LabOperationsClient({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-2">
+          <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={calendarView === "week" ? "default" : "ghost"}
+              className={cn(calendarView === "week" ? "bg-slate-900 text-white hover:bg-slate-800" : "text-slate-700")}
+              onClick={() => setCalendarView("week")}
+            >
+              Week
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={calendarView === "month" ? "default" : "ghost"}
+              className={cn(calendarView === "month" ? "bg-slate-900 text-white hover:bg-slate-800" : "text-slate-700")}
+              onClick={() => setCalendarView("month")}
+            >
+              Month
+            </Button>
+          </div>
           <div className="flex items-center gap-1">
             <Button
               type="button"
               size="icon"
               variant="ghost"
               className="h-8 w-8 rounded-full"
-              onClick={() => setCalendarMonth((current) => addMonths(current, -1))}
-              aria-label="Previous month"
+              onClick={() => {
+                if (calendarView === "week") {
+                  const target = addDays(weekStartDate, -7);
+                  setCalendarDateFilter(toLocalDateKey(target));
+                } else {
+                  setCalendarMonth((current) => addMonths(current, -1));
+                }
+              }}
+              aria-label={calendarView === "week" ? "Previous week" : "Previous month"}
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
@@ -2356,14 +2497,23 @@ export function LabOperationsClient({
               size="icon"
               variant="ghost"
               className="h-8 w-8 rounded-full"
-              onClick={() => setCalendarMonth((current) => addMonths(current, 1))}
-              aria-label="Next month"
+              onClick={() => {
+                if (calendarView === "week") {
+                  const target = addDays(weekStartDate, 7);
+                  setCalendarDateFilter(toLocalDateKey(target));
+                } else {
+                  setCalendarMonth((current) => addMonths(current, 1));
+                }
+              }}
+              aria-label={calendarView === "week" ? "Next week" : "Next month"}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
           <p className="text-sm font-semibold text-slate-900">
-            {calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+            {calendarView === "week"
+              ? `${weekStartDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${addDays(weekStartDate, 6).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+              : calendarMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
           </p>
           <Button
             type="button"
@@ -2406,13 +2556,13 @@ export function LabOperationsClient({
         </div>
 
         <div className="grid grid-cols-7 gap-1">
-          {monthGridDays.map((day) => {
+          {visibleCalendarDays.map((day) => {
             const dayKey = toLocalDateKey(day);
             const bookingsForDay = monthBookingsByDay.get(dayKey) ?? [];
             const conflictCount = bookingsForDay.filter(
               (booking) => (bookingConflictMap.get(booking.id) ?? []).length > 0,
             ).length;
-            const isCurrentMonth = day.getMonth() === calendarMonth.getMonth();
+            const isCurrentMonth = calendarView === "week" ? true : day.getMonth() === calendarMonth.getMonth();
             const isToday = dayKey === toLocalDateKey(new Date());
             const isSelectedDay = calendarDateFilter === dayKey;
 
@@ -2557,6 +2707,8 @@ export function LabOperationsClient({
               const hasConflict = conflicts.length > 0;
               const ownerTone = ownerColor(booking.bookedBy ?? booking.bookedByLabel);
               const canDelete = canEditBooking(booking);
+              const canChangeStatus = canEditBooking(booking);
+              const statusDraft = calendarStatusDraftByBookingId[booking.id] ?? booking.status;
               return (
                 <div
                   key={booking.id}
@@ -2603,6 +2755,37 @@ export function LabOperationsClient({
                       Overlaps with {conflicts.length} booking{conflicts.length === 1 ? "" : "s"}.
                     </p>
                   ) : null}
+                  {canChangeStatus ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <select
+                        value={statusDraft}
+                        onChange={(event) =>
+                          setCalendarStatusDraftByBookingId((current) => ({
+                            ...current,
+                            [booking.id]: event.target.value as PlatformBookingStatus,
+                          }))
+                        }
+                        disabled={busy}
+                        className="h-8 min-w-40 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
+                      >
+                        <option value="draft">Scheduled (draft)</option>
+                        <option value="confirmed">Scheduled (confirmed)</option>
+                        <option value="in_use">In use</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8 border-slate-200"
+                        disabled={busy || statusDraft === booking.status}
+                        onClick={() => void submitBookingStatus(booking.id, statusDraft)}
+                      >
+                        Apply
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               );
             })
@@ -2613,7 +2796,7 @@ export function LabOperationsClient({
   );
 
   return (
-    <div className={cn(embedded ? "space-y-3 overflow-x-hidden" : "space-y-5", "min-w-0")} aria-busy={busy}>
+    <div className={cn(embedded ? "space-y-3 overflow-x-hidden" : "space-y-5", "min-w-0 ops-mobile-compact")} aria-busy={busy}>
       {embedded ? null : (
       <section className="overflow-hidden rounded-3xl border border-white/80 bg-[linear-gradient(135deg,#ecfeff_0%,#f8fafc_45%,#fff7ed_100%)] p-5 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.3)] sm:p-6">
         <div className="grid gap-5 lg:grid-cols-[1.3fr_0.7fr]">
@@ -3164,7 +3347,7 @@ export function LabOperationsClient({
                   ) : (
                     <div ref={reagentDetailRef} className="space-y-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="min-w-0 flex flex-wrap items-center gap-2">
                         <Badge
                           variant="outline"
                           className={cn(
@@ -3204,7 +3387,7 @@ export function LabOperationsClient({
                           type="button"
                           variant="default"
                           size="sm"
-                          className="bg-slate-900 text-white hover:bg-slate-800"
+                          className="w-full bg-slate-900 text-white hover:bg-slate-800 sm:w-auto"
                           onClick={() => {
                             setIsEditingReagent((current) => !current);
                             setReagentEditError(null);
@@ -3509,14 +3692,55 @@ export function LabOperationsClient({
                             {formatDateTime(selectedInventory.lastOrderedAt)}
                           </p>
                         </div>
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 sm:col-span-2">
+                          <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Expected arrival</p>
+                          <p className="mt-1 text-base font-semibold text-slate-900">
+                            {selectedReagentArrivalEta ? formatDateTime(selectedReagentArrivalEta) : "Not recorded"}
+                          </p>
+                          {selectedReagentPlacedEvent?.purchase_order_number ? (
+                            <p className="mt-1 text-xs text-slate-600">
+                              PO: {selectedReagentPlacedEvent.purchase_order_number}
+                            </p>
+                          ) : null}
+                        </div>
                       </div>
 
-                      <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:grid-cols-3">
+                        <div>
+                          <Label className="text-xs">Vendor</Label>
+                          <Input
+                            className="mt-1 border-slate-200 bg-white"
+                            value={reorderVendorInput}
+                            onChange={(event) => setReorderVendorInput(event.target.value)}
+                            placeholder="e.g., Sigma"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">PO Number</Label>
+                          <Input
+                            className="mt-1 border-slate-200 bg-white"
+                            value={reorderPoInput}
+                            onChange={(event) => setReorderPoInput(event.target.value)}
+                            placeholder="e.g., PO-2026-0142"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Expected Arrival</Label>
+                          <Input
+                            className="mt-1 border-slate-200 bg-white"
+                            type="datetime-local"
+                            value={reorderEtaInput}
+                            onChange={(event) => setReorderEtaInput(event.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(11.5rem,1fr))]">
                         <Button
                           type="button"
                           variant="outline"
                           disabled={busy || labContext.featureUnavailable}
-                          className="rounded-2xl border-slate-200 bg-white"
+                          className="h-auto min-h-11 rounded-2xl border-slate-200 bg-white px-3 py-2 text-left whitespace-normal"
                           onClick={() => void submitStockEvent(
                             selectedInventory.id,
                             REORDER_EVENT_MAP.request,
@@ -3532,13 +3756,18 @@ export function LabOperationsClient({
                           type="button"
                           variant="outline"
                           disabled={busy || labContext.featureUnavailable}
-                          className="rounded-2xl border-slate-200 bg-white"
+                          className="h-auto min-h-11 rounded-2xl border-slate-200 bg-white px-3 py-2 text-left whitespace-normal"
                           onClick={() => void submitStockEvent(
                             selectedInventory.id,
                             REORDER_EVENT_MAP.placed,
                             0,
                             "Order placed with vendor.",
                             selectedInventory.unit,
+                            {
+                              vendor: reorderVendorInput.trim() || null,
+                              purchaseOrderNumber: reorderPoInput.trim() || null,
+                              expectedArrivalAt: reorderEtaInput || null,
+                            },
                           )}
                         >
                           <Wrench className="mr-2 h-4 w-4" />
@@ -3547,7 +3776,7 @@ export function LabOperationsClient({
                         <Button
                           type="button"
                           disabled={busy || labContext.featureUnavailable}
-                          className="rounded-2xl bg-slate-900 text-white hover:bg-slate-800"
+                          className="h-auto min-h-11 rounded-2xl bg-slate-900 px-3 py-2 text-left whitespace-normal text-white hover:bg-slate-800"
                           onClick={() => void submitStockEvent(
                             selectedInventory.id,
                             REORDER_EVENT_MAP.received,
@@ -3606,12 +3835,23 @@ export function LabOperationsClient({
                                   </Badge>
                                   <p className="text-xs text-slate-500">{formatDateTime(event.created_at)}</p>
                                 </div>
-                                <p className="mt-2 text-xs text-slate-500">
-                                  Delta {event.quantity_delta > 0 ? `+${event.quantity_delta}` : event.quantity_delta}
-                                  {selectedInventory.unit ? ` ${selectedInventory.unit}` : ""}
-                                </p>
-                                {event.notes ? <p className="mt-1 text-sm text-slate-600">{event.notes}</p> : null}
-                              </div>
+                                  <p className="mt-2 text-xs text-slate-500">
+                                    Delta {event.quantity_delta > 0 ? `+${event.quantity_delta}` : event.quantity_delta}
+                                    {selectedInventory.unit ? ` ${selectedInventory.unit}` : ""}
+                                  </p>
+                                  {event.vendor ? (
+                                    <p className="mt-1 text-xs text-slate-600">Vendor: {event.vendor}</p>
+                                  ) : null}
+                                  {event.purchase_order_number ? (
+                                    <p className="mt-1 text-xs text-slate-600">PO: {event.purchase_order_number}</p>
+                                  ) : null}
+                                  {event.expected_arrival_at ? (
+                                    <p className="mt-1 text-xs text-slate-600">
+                                      ETA: {formatDateTime(event.expected_arrival_at)}
+                                    </p>
+                                  ) : null}
+                                  {event.notes ? <p className="mt-1 text-sm text-slate-600">{event.notes}</p> : null}
+                                </div>
                             ))
                           )}
                         </div>
@@ -3650,19 +3890,57 @@ export function LabOperationsClient({
                 <TabsList
                   className={cn(
                     "h-auto w-full justify-start rounded-xl border border-slate-200 bg-slate-50 p-1",
-                    embedded ? "min-w-0 flex-wrap gap-1 overflow-x-hidden" : "overflow-x-auto",
+                    embedded ? "overflow-x-auto" : "overflow-x-auto",
                   )}
                 >
-                  <TabsTrigger value="all" className="max-w-full whitespace-nowrap rounded-lg px-3 py-2">
+                  <TabsTrigger value="all" className="!flex-none max-w-full whitespace-nowrap rounded-lg px-3 py-2">
                     All Equipment
                   </TabsTrigger>
                   {localEquipmentOptions.map((item) => (
-                    <TabsTrigger key={item.id} value={item.id} className="max-w-full truncate whitespace-nowrap rounded-lg px-3 py-2">
+                    <TabsTrigger key={item.id} value={item.id} className="!flex-none max-w-full truncate whitespace-nowrap rounded-lg px-3 py-2">
                       {equipmentTabLabel(item.name)}
                     </TabsTrigger>
                   ))}
                 </TabsList>
               </Tabs>
+              {embedded ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-slate-600">View:</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={equipmentSection === "booking" ? "default" : "outline"}
+                    className={cn(
+                      equipmentSection === "booking" ? "bg-slate-900 text-white hover:bg-slate-800" : "border-slate-200",
+                    )}
+                    onClick={() => setEquipmentSection("booking")}
+                  >
+                    Booking
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={equipmentSection === "calendar" ? "default" : "outline"}
+                    className={cn(
+                      equipmentSection === "calendar" ? "bg-slate-900 text-white hover:bg-slate-800" : "border-slate-200",
+                    )}
+                    onClick={() => setEquipmentSection("calendar")}
+                  >
+                    Calendar
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={equipmentSection === "equipment" ? "default" : "outline"}
+                    className={cn(
+                      equipmentSection === "equipment" ? "bg-slate-900 text-white hover:bg-slate-800" : "border-slate-200",
+                    )}
+                    onClick={() => setEquipmentSection("equipment")}
+                  >
+                    Equipment
+                  </Button>
+                </div>
+              ) : null}
               {embedded ? null : (
                 <p className="mt-2 text-xs text-slate-500">
                   {equipmentTab === "all"
@@ -3672,6 +3950,7 @@ export function LabOperationsClient({
               )}
             </CardContent>
           </Card>
+          {embedded ? null : (
           <Card className="border-white/80 bg-white/90">
             <CardContent className="pt-4">
               <div className="flex flex-wrap gap-2">
@@ -3711,9 +3990,107 @@ export function LabOperationsClient({
               </div>
             </CardContent>
           </Card>
-          <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]">
+          )}
+          <div
+            className={cn(
+              "grid min-w-0 gap-4",
+              equipmentSection === "calendar"
+                ? "grid-cols-1"
+                : "xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]",
+            )}
+          >
             <div className="min-w-0 space-y-4">
               {equipmentSection === "booking" ? (
+              isNarrowMobile ? (
+                <details className="ops-mobile-disclosure rounded-xl border border-slate-200 bg-white/90 p-2">
+                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
+                    New booking
+                  </summary>
+                  <Card className="mt-2 border-white/80 bg-white/90 shadow-none">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm text-slate-900">Add booking</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <form
+                        ref={bookingFormRef}
+                        className="grid gap-3"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const formElement = event.currentTarget;
+                          void submitCreateBooking(new FormData(formElement), () => formElement.reset());
+                        }}
+                      >
+                        <div>
+                          <Label className="text-xs">Equipment</Label>
+                          <select
+                            key={`booking-equipment-mobile-${equipmentTab}`}
+                            name="equipment_id"
+                            required
+                            aria-label="Booking equipment"
+                            disabled={
+                              busy
+                              || activeEquipmentOptions.length === 0
+                              || labContext.featureUnavailable
+                              || equipmentTab !== "all"
+                            }
+                            className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                            defaultValue={equipmentTab !== "all" ? equipmentTab : (activeEquipmentOptions[0]?.id ?? "")}
+                          >
+                            <option value="" disabled>
+                              Select equipment
+                            </option>
+                            {activeEquipmentOptions.map((option) => (
+                              <option key={option.id} value={option.id}>
+                                {option.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Title</Label>
+                          <Input
+                            name="title"
+                            required
+                            aria-label="Booking title"
+                            disabled={busy || activeEquipmentOptions.length === 0 || labContext.featureUnavailable}
+                          />
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div>
+                            <Label className="text-xs">Starts At</Label>
+                            <Input
+                              name="starts_at"
+                              type="datetime-local"
+                              required
+                              aria-label="Booking start date and time"
+                              disabled={busy || activeEquipmentOptions.length === 0 || labContext.featureUnavailable}
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Ends At</Label>
+                            <Input
+                              name="ends_at"
+                              type="datetime-local"
+                              required
+                              aria-label="Booking end date and time"
+                              disabled={busy || activeEquipmentOptions.length === 0 || labContext.featureUnavailable}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex justify-end">
+                          <Button
+                            type="submit"
+                            disabled={busy || activeEquipmentOptions.length === 0 || labContext.featureUnavailable}
+                            className="rounded-full bg-slate-900 px-4 text-white hover:bg-slate-800"
+                          >
+                            Add booking
+                          </Button>
+                        </div>
+                      </form>
+                    </CardContent>
+                  </Card>
+                </details>
+              ) : (
               <Card className="border-white/80 bg-white/90">
                 <CardHeader className="pb-4">
                   <div className="flex items-center justify-between gap-2">
@@ -3815,9 +4192,80 @@ export function LabOperationsClient({
                   )}
                 </CardContent>
               </Card>
+              )
               ) : null}
 
               {equipmentSection === "equipment" ? (
+              isNarrowMobile ? (
+                <details className="ops-mobile-disclosure rounded-xl border border-slate-200 bg-white/90 p-2">
+                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
+                    Equipment setup
+                  </summary>
+                  <Card className="mt-2 border-white/80 bg-white/90 shadow-none">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm text-slate-900">Add equipment</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+              <form
+                className="grid gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const formElement = event.currentTarget;
+                  void submitCreateEquipment(new FormData(formElement), () => formElement.reset());
+                }}
+              >
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label className="text-xs">Name</Label>
+                    <Input
+                      name="name"
+                      required
+                      aria-label="Equipment name"
+                      disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Location</Label>
+                    <Input
+                      name="location"
+                      disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs">Description</Label>
+                  <Textarea
+                    name="description"
+                    rows={2}
+                    disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                  />
+                </div>
+                <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    name="booking_requires_approval"
+                    value="true"
+                    disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                  />
+                  Booking requires approval
+                </label>
+                {!canManageEquipment ? (
+                  <p className="text-xs text-slate-500">Only lab managers or admins can create equipment.</p>
+                ) : null}
+                <div className="flex justify-end">
+                  <Button
+                    type="submit"
+                    disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                    className="rounded-full bg-slate-900 px-4 text-white hover:bg-slate-800"
+                  >
+                    Add equipment
+                  </Button>
+                </div>
+              </form>
+                    </CardContent>
+                  </Card>
+                </details>
+              ) : (
               <Card className="border-white/80 bg-white/90">
                 <CardHeader className="pb-4">
                   <CardTitle className="text-base text-slate-900">Add equipment</CardTitle>
@@ -4012,6 +4460,7 @@ export function LabOperationsClient({
                   </details>
                 </CardContent>
               </Card>
+              )
               ) : null}
 
               {equipmentSection === "booking" ? (
@@ -4156,6 +4605,7 @@ export function LabOperationsClient({
               ) : null}
             </div>
 
+            {equipmentSection === "calendar" ? null : (
             <div className="min-w-0 space-y-4">
               {equipmentSection === "booking" ? (
               <Card className="border-white/80 bg-white/90">
@@ -4372,7 +4822,7 @@ export function LabOperationsClient({
 
                       <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
                         <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Status controls</p>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+                        <div className="mt-2 flex flex-wrap gap-2">
                           <select
                             value={bookingEditDraft.status}
                             onChange={(event) =>
@@ -4382,7 +4832,7 @@ export function LabOperationsClient({
                               }))
                             }
                             disabled={busy || !canEditSelectedBooking}
-                            className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                            className="h-10 min-w-0 flex-1 basis-56 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
                           >
                             <option value="draft">Scheduled (draft)</option>
                             <option value="confirmed">Scheduled (confirmed)</option>
@@ -4393,7 +4843,7 @@ export function LabOperationsClient({
                           <Button
                             type="button"
                             disabled={busy || labContext.featureUnavailable || !canEditSelectedBooking}
-                            className="bg-slate-900 text-white hover:bg-slate-800"
+                            className="w-full sm:w-auto bg-slate-900 text-white hover:bg-slate-800"
                             onClick={() => {
                               const nextStatus = bookingEditDraft.status;
                               const confirmed = window.confirm(
@@ -4436,6 +4886,7 @@ export function LabOperationsClient({
                 />
               ) : null}
             </div>
+            )}
           </div>
         </TabsContent>
 

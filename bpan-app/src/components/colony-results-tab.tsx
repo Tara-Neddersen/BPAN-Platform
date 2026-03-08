@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Loader2, Save, ChevronDown, ChevronRight, Plus, Check, Upload, Eye, EyeOff, Camera, ExternalLink, Image as ImageIcon, Download, MoreHorizontal, Trash2 } from "lucide-react";
+import { Loader2, Save, ChevronDown, ChevronRight, Plus, Check, Upload, Eye, EyeOff, Camera, ExternalLink, Image as ImageIcon, Download, MoreHorizontal, Trash2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1010,12 +1010,12 @@ export function ColonyResultsTab({
       {/* ─── Timepoint Master Tabs ─────────────────────────────── */}
       <Tabs value={activeTimepoint} onValueChange={handleTimepointChange}>
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <TabsList className="h-auto gap-1 p-1">
+          <TabsList className="h-auto gap-1 rounded-xl bg-muted/60 p-1">
             {timepointOptions.map((age) => (
               <TabsTrigger
                 key={age}
                 value={String(age)}
-                className="px-4 py-2 font-semibold"
+                className="px-4 py-2 text-sm font-semibold"
               >
                 {age} Day
               </TabsTrigger>
@@ -1037,7 +1037,7 @@ export function ColonyResultsTab({
           <TabsContent key={age} value={String(age)} className="mt-4">
             {/* ─── Experiment Sub-tabs ───────────────────────── */}
             <Tabs value={activeExperiment} onValueChange={setActiveExperiment}>
-              <TabsList className="w-full flex flex-wrap h-auto gap-1 p-1 mb-4">
+              <TabsList className="mb-4 h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-xl bg-muted/40 p-1.5 whitespace-nowrap">
                 {availableExperiments.map((exp) => {
                   // Count animals with data for this experiment
                   const count = activeAnimals.filter((a) => {
@@ -1051,11 +1051,11 @@ export function ColonyResultsTab({
                     <TabsTrigger
                       key={exp}
                       value={exp}
-                      className="flex-1 min-w-[80px] text-[11px] sm:text-xs relative px-2 py-1.5"
+                      className="relative h-8 flex-none rounded-lg px-3 text-xs font-medium"
                     >
                       {EXPERIMENT_LABELS[exp] || exp}
                       {count > 0 && (
-                        <span className="ml-1.5 text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 px-1.5 py-0.5 rounded-full">
+                        <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
                           {count}
                         </span>
                       )}
@@ -1066,61 +1066,66 @@ export function ColonyResultsTab({
 
               {availableExperiments.map((exp) => (
                 <TabsContent key={exp} value={exp}>
-                  <Card>
+                  <Card className="border-slate-200/80 shadow-sm">
                     <CardHeader className="pb-3">
-                      <div className="flex items-center justify-between">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div>
                           <CardTitle className="text-lg">
                             {EXPERIMENT_LABELS[exp] || exp} — {age} Day Results
                           </CardTitle>
-                          <p className="text-xs text-muted-foreground mt-1">
+                          <p className="mt-1 text-sm text-muted-foreground">
                             Enter measured values for each animal. Changes are saved when you click Save.
                           </p>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5 rounded-xl border border-slate-200/80 bg-slate-50/70 p-1">
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={handleReconcileTracker}
                             disabled={reconciling || saving}
+                            className="h-8 w-8 p-0"
+                            title="Reconcile Tracker"
+                            aria-label="Reconcile Tracker"
                           >
-                            {reconciling ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Check className="w-3.5 h-3.5 mr-1" />}
-                            Reconcile Tracker
+                            {reconciling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={handleExport}
+                            className="h-8 text-xs"
                           >
-                            <Download className="w-3.5 h-3.5 mr-1" />
+                            <Download className="mr-1 h-3.5 w-3.5" />
                             Export CSV
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => setShowImport(true)}
+                            className="h-8 text-xs"
                           >
-                            <Upload className="w-3.5 h-3.5 mr-1" />
+                            <Upload className="mr-1 h-3.5 w-3.5" />
                             Import Data
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => setShowAddField(!showAddField)}
+                            className="h-8 text-xs"
                           >
-                            <Plus className="w-3.5 h-3.5 mr-1" />
+                            <Plus className="mr-1 h-3.5 w-3.5" />
                             Add Field
                           </Button>
                           <Button
                             size="sm"
                             onClick={handleSave}
                             disabled={saving || dirtyKeys.size === 0}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                            className="h-8 bg-slate-900 text-xs text-white hover:bg-slate-800"
                           >
                             {saving ? (
-                              <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
                             ) : (
-                              <Save className="w-3.5 h-3.5 mr-1" />
+                              <Save className="mr-1 h-3.5 w-3.5" />
                             )}
                             Save All
                           </Button>
@@ -1198,7 +1203,7 @@ export function ColonyResultsTab({
 
                     <CardContent className="p-0">
                       {/* ─── Data Grid ─────────────────────────── */}
-                      <div className="overflow-auto max-h-[70vh]">
+                      <div className="max-h-[70vh] overflow-auto">
                         <table className="w-full text-sm">
                           <thead className="sticky top-0 z-20">
                             <tr className="border-b bg-background shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
@@ -1217,7 +1222,7 @@ export function ColonyResultsTab({
                               {currentFields.map((field) => (
                                 <th
                                   key={field.key}
-                                  className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[120px] group/col"
+                                  className="group/col min-w-[120px] bg-background px-3 py-2.5 text-left text-xs font-medium text-muted-foreground"
                                 >
                                   <div className="flex items-center gap-1.5">
                                     <span className="truncate">{field.label}</span>
@@ -1388,13 +1393,6 @@ function CohortGroup({
               ? "border-l-4 border-l-orange-400 dark:border-l-orange-600"
               : "border-l-4 border-l-slate-300 dark:border-l-slate-600";
 
-          const genotypeRowBg =
-            animal.genotype === "hemi"
-              ? "bg-red-50/30 dark:bg-red-950/10"
-              : animal.genotype === "het"
-              ? "bg-orange-50/30 dark:bg-orange-950/10"
-              : "bg-slate-50/30 dark:bg-slate-950/10";
-
           return (
             <tr
               key={animal.id}
@@ -1402,9 +1400,9 @@ function CohortGroup({
                 isDirty
                   ? "bg-amber-50/50 dark:bg-amber-950/20"
                   : hasData
-                  ? "bg-green-50/30 dark:bg-green-950/10"
-                  : genotypeRowBg
-              } hover:bg-muted/20`}
+                  ? "bg-emerald-50/30 dark:bg-emerald-950/10"
+                  : "bg-background"
+              } hover:bg-slate-50/70 dark:hover:bg-slate-900/30`}
             >
               <td className="px-3 py-2 sticky left-0 bg-inherit font-medium text-xs">
                 <div className="flex items-center gap-1.5">

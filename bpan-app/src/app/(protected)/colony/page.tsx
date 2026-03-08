@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { ColonyClient } from "@/components/colony-client";
+import type { ReactNode } from "react";
 import type {
   BreederCage,
   Cohort,
@@ -94,12 +95,24 @@ async function fetchAllRows(supabase: any, table: string, userId: string, orderB
   return all;
 }
 
-export default async function ColonyPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+interface ColonyPageViewOptions {
+  defaultTab?: string;
+  title?: string;
+  description?: string;
+  showTabList?: boolean;
+  footer?: ReactNode;
+}
+
+export async function renderColonyPageView({
+  defaultTab = "animals",
+  title = "Mouse Colony",
+  description = "Manage breeder cages, cohorts, animals, experiment schedules, meetings, and PI access.",
+  showTabList = true,
+  footer,
+}: ColonyPageViewOptions = {}) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
-  const params = await searchParams;
-  const defaultTab = params?.tab || "animals";
 
   // Small tables use normal queries (well under 1000 rows)
   // Large tables use paginated RPC to bypass PostgREST 1000-row hard limit
@@ -134,14 +147,15 @@ export default async function ColonyPage({ searchParams }: { searchParams: Promi
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Mouse Colony</h1>
+        <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Manage breeder cages, cohorts, animals, experiment schedules, meetings, and PI access.
+          {description}
         </p>
       </div>
 
       <ColonyClient
         defaultTab={defaultTab}
+        showTabList={showTabList}
         breederCages={(breederCages || []) as BreederCage[]}
         cohorts={(cohorts || []) as Cohort[]}
         animals={(animals || []) as Animal[]}
@@ -198,6 +212,13 @@ export default async function ColonyPage({ searchParams }: { searchParams: Promi
           rescheduleExperimentsAfterTimepointEdit,
         }}
       />
+      {footer}
     </div>
   );
+}
+
+export default async function ColonyPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const params = await searchParams;
+  const defaultTab = params?.tab || "animals";
+  return renderColonyPageView({ defaultTab });
 }

@@ -59,6 +59,7 @@ const CHART_COLORS = [
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface PortalPhoto {
+  id: string;
   image_url: string;
   caption: string | null;
   experiment_type: string | null;
@@ -113,16 +114,20 @@ interface PortalData {
 
 /** Convert Google Drive share links to direct image URLs */
 function convertDriveUrl(url: string): string {
-  const match = url.match(/drive\.google\.com\/file\/d\/([^/]+)/);
-  if (match) return `https://lh3.googleusercontent.com/d/${match[1]}`;
-  const match2 = url.match(/drive\.google\.com\/open\?id=([^&]+)/);
-  if (match2) return `https://lh3.googleusercontent.com/d/${match2[1]}`;
+  const matchFilePath = url.match(/drive\.google\.com\/file\/d\/([^/?]+)/);
+  if (matchFilePath) return `https://drive.google.com/uc?export=view&id=${matchFilePath[1]}`;
+
+  const matchOpen = url.match(/[?&]id=([^&]+)/);
+  if ((/drive\.google\.com\/open/.test(url) || /drive\.google\.com\/uc/.test(url) || /drive\.google\.com\/thumbnail/.test(url)) && matchOpen) {
+    return `https://drive.google.com/uc?export=view&id=${matchOpen[1]}`;
+  }
+
   return url;
 }
 
 // ─── Photo Gallery Slideshow ────────────────────────────────────────────
 
-function PhotoGallery({ photos }: { photos: PortalPhoto[] }) {
+function PhotoGallery({ photos, portalToken }: { photos: PortalPhoto[]; portalToken: string }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [fade, setFade] = useState(true);
 
@@ -151,7 +156,9 @@ function PhotoGallery({ photos }: { photos: PortalPhoto[] }) {
   if (photos.length === 0) return null;
 
   const photo = photos[currentIdx];
-  const displayUrl = convertDriveUrl(photo.image_url);
+  const displayUrl = photo.id
+    ? `/api/pi/${encodeURIComponent(portalToken)}/photo/${encodeURIComponent(photo.id)}`
+    : convertDriveUrl(photo.image_url);
 
   return (
     <Card className="overflow-hidden">
@@ -1534,7 +1541,7 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
 
       {/* Photo Gallery Slideshow */}
       {data.photos && data.photos.length > 0 && (
-        <PhotoGallery photos={data.photos} />
+        <PhotoGallery photos={data.photos} portalToken={token} />
       )}
 
       {/* Tabbed sections: Tracker / Results / Analysis / Overview */}

@@ -93,6 +93,7 @@
 - [x] Lab meeting prep — AI generates a structured summary (what I worked on, findings, problems, next steps, questions)
 - [x] Collaboration/sharing — create read-only snapshot links to share papers, notes, experiments, results, ideas, and hypotheses with PI or collaborators (no account needed)
 - [x] Performance optimization — dynamic imports for heavy client components, responsive grids throughout
+- [ ] Snoozing events for X days — one action should update reminders/tasks consistently across the entire platform
 
 ## Mouse Colony Manager ✅
 

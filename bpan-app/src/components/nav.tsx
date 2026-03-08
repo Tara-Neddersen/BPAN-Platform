@@ -4,13 +4,15 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { setActiveLabContext } from "@/app/(protected)/labs/actions";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { User, LogOut, Menu, X, ChevronDown, Building2, Bell } from "lucide-react";
@@ -30,14 +32,20 @@ type NavGroup = {
   type: "group";
   label: string;
   basePaths: string[];
-  items: { href: string; label: string }[];
+  items: (
+    | { type?: "link"; href: string; label: string }
+    | { type: "section"; label: string; items: { href: string; label: string }[] }
+  )[];
 };
 type NavItem = NavLink | NavGroup;
 
 const PRIMARY_NAV_ITEMS: NavLink[] = [
   { type: "link", href: "/tasks", label: "Dashboard" },
   { type: "link", href: "/experiments", label: "Experiments" },
-  { type: "link", href: "/results", label: "Results" },
+  { type: "link", href: "/colony/tracker", label: "Tracker" },
+  { type: "link", href: "/colony/results", label: "Results" },
+  { type: "link", href: "/colony/analysis", label: "Analysis" },
+  { type: "link", href: "/colony/pi-access", label: "PI Access" },
   { type: "link", href: "/labs", label: "Labs" },
 ];
 
@@ -62,10 +70,11 @@ const SECONDARY_NAV_ITEMS: NavItem[] = [
     label: "Colony",
     basePaths: ["/colony"],
     items: [
-      { href: "/colony", label: "Colony" },
-      { href: "/colony?tab=tracker", label: "Tracker" },
-      { href: "/colony?tab=results", label: "Colony results" },
-      { href: "/colony?tab=analysis", label: "Analysis" },
+      { href: "/colony", label: "Animals" },
+      { href: "/colony?tab=cohorts", label: "Cohorts" },
+      { href: "/colony?tab=breeders", label: "Breeders" },
+      { href: "/colony?tab=housing", label: "Housing" },
+      { href: "/colony?tab=cages", label: "Cage change" },
     ],
   },
   {
@@ -84,7 +93,6 @@ const SECONDARY_NAV_ITEMS: NavItem[] = [
 
 export function Nav({ userEmail, labMemberships = [], activeLabId = null, unreadNotificationCount = 0 }: NavProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [switchingLab, setSwitchingLab] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const activeLab = activeLabId
@@ -99,20 +107,6 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
     router.refresh();
   }
 
-  async function handleSetActiveLab(labId: string | null) {
-    setSwitchingLab(true);
-    try {
-      const formData = new FormData();
-      if (labId) {
-        formData.set("lab_id", labId);
-      }
-      await setActiveLabContext(formData);
-      router.refresh();
-    } finally {
-      setSwitchingLab(false);
-    }
-  }
-
   const primaryIsActive = (href: string) => pathname === href;
   const notificationsActive = pathname.startsWith("/notifications");
   const moreIsActive = SECONDARY_NAV_ITEMS.some((item) =>
@@ -122,13 +116,67 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
   );
   const flatSecondaryLinks = SECONDARY_NAV_ITEMS.flatMap((item) =>
     item.type === "group"
-      ? item.items.map((sub) => ({ href: sub.href, label: `${item.label} › ${sub.label}` }))
-      : [{ href: item.href, label: item.label }]
+      ? item.items.flatMap((sub) =>
+          sub.type === "section"
+            ? sub.items.map((sectionLink) => ({
+                href: sectionLink.href,
+                label: `${item.label} › ${sub.label} › ${sectionLink.label}`,
+                mobileLabel: sectionLink.label,
+              }))
+            : [{ href: sub.href, label: `${item.label} › ${sub.label}`, mobileLabel: sub.label }]
+        )
+      : [{ href: item.href, label: item.label, mobileLabel: item.label }]
   );
+
+  const renderSecondaryDropdownItems = () =>
+    SECONDARY_NAV_ITEMS.map((item, index) => {
+      if (item.type === "group") {
+        return (
+            <DropdownMenuSub key={item.label}>
+              <DropdownMenuSubTrigger>{item.label}</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-56 border-white/80 bg-white/95 backdrop-blur-xl">
+                {item.items.map((subItem) =>
+                  subItem.type === "section" ? (
+                    <div key={`${item.label}-${subItem.label}`} className="py-1">
+                      <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        {subItem.label}
+                      </div>
+                      {subItem.items.map((sectionLink) => (
+                        <DropdownMenuItem key={sectionLink.href} asChild>
+                          <Link href={sectionLink.href} className="cursor-pointer">
+                            {sectionLink.label}
+                          </Link>
+                        </DropdownMenuItem>
+                      ))}
+                    </div>
+                  ) : (
+                    <DropdownMenuItem key={subItem.href} asChild>
+                      <Link href={subItem.href} className="cursor-pointer">
+                        {subItem.label}
+                      </Link>
+                    </DropdownMenuItem>
+                  )
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+      }
+
+      return (
+        <div key={item.href}>
+          <DropdownMenuItem asChild>
+            <Link href={item.href} className="cursor-pointer">
+              {item.label}
+            </Link>
+          </DropdownMenuItem>
+          {index < SECONDARY_NAV_ITEMS.length - 1 ? <DropdownMenuSeparator /> : null}
+        </div>
+      );
+    });
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-white/70 bg-white/75 backdrop-blur-xl supports-[backdrop-filter]:bg-white/65">
-      <div className="mx-auto flex h-12 max-w-7xl items-center justify-between px-3 sm:px-5">
+      <div className="mx-auto flex h-12 max-w-7xl items-center justify-between gap-2 px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2.5 sm:gap-4">
           {userEmail && (
             <button
@@ -168,46 +216,21 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuSeparator />
-                  {SECONDARY_NAV_ITEMS.map((item, index) => {
-                    if (item.type === "group") {
-                      return (
-                        <div key={item.label}>
-                          <DropdownMenuItem disabled className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            {item.label}
-                          </DropdownMenuItem>
-                          {item.items.map((subItem) => (
-                            <DropdownMenuItem key={subItem.href} asChild>
-                              <Link href={subItem.href} className="cursor-pointer">
-                                {subItem.label}
-                              </Link>
-                            </DropdownMenuItem>
-                          ))}
-                          {index < SECONDARY_NAV_ITEMS.length - 1 ? <DropdownMenuSeparator /> : null}
-                        </div>
-                      );
-                    }
-                    return (
-                      <DropdownMenuItem key={item.href} asChild>
-                        <Link href={item.href} className="cursor-pointer">
-                          {item.label}
-                        </Link>
-                      </DropdownMenuItem>
-                    );
-                  })}
+                  {renderSecondaryDropdownItems()}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
           )}
 
           {userEmail && (
-            <nav className="hidden lg:flex items-center gap-1 text-sm ml-3">
+            <nav className="ml-2 hidden items-center gap-1 text-sm lg:flex">
               {PRIMARY_NAV_ITEMS.map((item) => {
                 const isActive = primaryIsActive(item.href);
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`relative rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                    className={`relative whitespace-nowrap rounded-md px-2 py-1.5 text-[13px] font-medium transition-colors ${
                       isActive
                         ? "bg-cyan-100/70 text-cyan-900"
                         : "text-slate-600 hover:bg-white hover:text-slate-900"
@@ -221,7 +244,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
-                    className={`relative inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                    className={`relative inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1.5 text-[13px] font-medium transition-colors ${
                       moreIsActive
                         ? "bg-cyan-100/70 text-cyan-900"
                         : "text-slate-600 hover:bg-white hover:text-slate-900"
@@ -233,40 +256,15 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-64 border-white/80 bg-white/95 backdrop-blur-xl">
-                  {SECONDARY_NAV_ITEMS.map((item, index) => {
-                    if (item.type === "group") {
-                      return (
-                        <div key={item.label}>
-                          <DropdownMenuItem disabled className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                            {item.label}
-                          </DropdownMenuItem>
-                          {item.items.map((subItem) => (
-                            <DropdownMenuItem key={subItem.href} asChild>
-                              <Link href={subItem.href} className="cursor-pointer">
-                                {subItem.label}
-                              </Link>
-                            </DropdownMenuItem>
-                          ))}
-                          {index < SECONDARY_NAV_ITEMS.length - 1 ? <DropdownMenuSeparator /> : null}
-                        </div>
-                      );
-                    }
-                    return (
-                      <DropdownMenuItem key={item.href} asChild>
-                        <Link href={item.href} className="cursor-pointer">
-                          {item.label}
-                        </Link>
-                      </DropdownMenuItem>
-                    );
-                  })}
+                  {renderSecondaryDropdownItems()}
                 </DropdownMenuContent>
               </DropdownMenu>
             </nav>
           )}
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          {userEmail && <SearchTrigger />}
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          {userEmail && <div className="hidden sm:block"><SearchTrigger /></div>}
           {userEmail && (
             <Button asChild variant="ghost" size="sm" className="relative h-8 w-8 rounded-lg p-0 hover:bg-white/90">
               <Link href="/notifications" aria-label="Notifications">
@@ -282,7 +280,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
           {userEmail && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="gap-2 rounded-lg border border-white/70 bg-white/70 px-2 hover:bg-white/90">
+                <Button variant="ghost" size="sm" className="h-8 w-8 rounded-lg p-0 hover:bg-white/90">
                   <div className="flex h-6 w-6 items-center justify-center rounded-full bg-cyan-100 text-cyan-700">
                     <Building2 className="h-3.5 w-3.5" />
                   </div>
@@ -290,19 +288,12 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-64 border-white/80 bg-white/95 backdrop-blur-xl">
-                <DropdownMenuItem
-                  onClick={() => handleSetActiveLab(null)}
-                  disabled={switchingLab}
-                >
-                  Personal workspace {activeLab ? "" : "• Active"}
+                <DropdownMenuItem disabled>
+                  Personal workspace
                 </DropdownMenuItem>
                 {labMemberships.length > 0 ? <DropdownMenuSeparator /> : null}
                 {labMemberships.map((membership) => (
-                  <DropdownMenuItem
-                    key={membership.id}
-                    onClick={() => handleSetActiveLab(membership.lab.id)}
-                    disabled={switchingLab}
-                  >
+                  <DropdownMenuItem key={membership.id} disabled>
                     {membership.lab.name} ({membership.role})
                     {activeLab?.lab.id === membership.lab.id ? " • Active" : ""}
                   </DropdownMenuItem>
@@ -320,7 +311,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
           {userEmail ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="gap-2 rounded-lg hover:bg-white/90">
+                <Button variant="ghost" size="sm" className="h-8 w-8 rounded-lg p-0 hover:bg-white/90">
                   <div className="flex h-6 w-6 items-center justify-center rounded-full bg-cyan-100 text-cyan-700">
                     <User className="h-3.5 w-3.5" />
                   </div>
@@ -357,7 +348,10 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
       {/* Mobile drawer */}
       {userEmail && mobileOpen && (
         <div className="sm:hidden border-t border-white/70 bg-white/90 backdrop-blur-lg">
-          <nav className="space-y-2 px-4 py-3">
+          <nav className="max-h-[calc(100vh-3rem)] space-y-1.5 overflow-y-auto px-3 py-2">
+            <div className="pb-1">
+              <SearchTrigger />
+            </div>
             <div className="space-y-0.5">
               {PRIMARY_NAV_ITEMS.map((link) => {
                 const isActive = pathname === link.href;
@@ -366,7 +360,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
                     key={link.href}
                     href={link.href}
                     onClick={() => setMobileOpen(false)}
-                    className={`block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                    className={`block rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors ${
                       isActive
                         ? "bg-cyan-100/70 text-cyan-900"
                         : "text-slate-700 hover:bg-white hover:text-slate-900"
@@ -378,7 +372,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
               })}
             </div>
             <details className="rounded-lg border border-slate-200 bg-white/80">
-              <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium text-slate-700">
+              <summary className="cursor-pointer list-none px-2.5 py-2 text-[13px] font-medium text-slate-700">
                 More
               </summary>
               <div className="space-y-0.5 border-t border-slate-200 px-2 py-2">
@@ -389,13 +383,13 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
                       key={link.href}
                       href={link.href}
                       onClick={() => setMobileOpen(false)}
-                      className={`block rounded-md px-2.5 py-2 text-sm transition-colors ${
+                      className={`block rounded-md px-2 py-1.5 text-[13px] transition-colors ${
                         isActive
                           ? "bg-cyan-100/70 text-cyan-900"
                           : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                       }`}
                     >
-                      {link.label}
+                      {link.mobileLabel}
                     </Link>
                   );
                 })}
@@ -404,7 +398,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
             <Link
               href="/notifications"
               onClick={() => setMobileOpen(false)}
-              className={`block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+              className={`block rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors ${
                 notificationsActive
                   ? "bg-cyan-100/70 text-cyan-900"
                   : "text-slate-700 hover:bg-white hover:text-slate-900"

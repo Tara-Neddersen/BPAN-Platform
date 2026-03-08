@@ -92,6 +92,15 @@ function parseBooleanInput(value: FormDataEntryValue | null) {
   return normalized === "true" || normalized === "on" || normalized === "1";
 }
 
+function parseDateTimeInput(value: FormDataEntryValue | null) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
 function withOperationsSchemaGuidance(message: string) {
   return `${message} Lab operations may still be initializing for this workspace. Please try again shortly.`;
 }
@@ -160,6 +169,72 @@ async function ensureManagerOrAdmin(
 
 async function refreshOperationsPage() {
   revalidatePath("/operations");
+}
+
+function quartzyHeaders(token: string) {
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function pushQuartzyInventoryUpdateForReagent({
+  labReagentId,
+  nextQuantity,
+  eventType,
+}: {
+  labReagentId: string;
+  nextQuantity: number;
+  eventType: PlatformInventoryEventType;
+}) {
+  const token = process.env.QUARTZY_ACCESS_TOKEN;
+  if (!token) return;
+
+  const baseUrl = process.env.QUARTZY_API_BASE_URL || "https://api.quartzy.com";
+  const admin = createAdminClient();
+  const { data: link, error } = await admin
+    .from("quartzy_inventory_links")
+    .select("quartzy_item_id")
+    .eq("lab_reagent_id", labReagentId)
+    .maybeSingle();
+
+  if (error || !link?.quartzy_item_id) {
+    return;
+  }
+
+  const payload: Record<string, string | number> = {
+    quantity: nextQuantity,
+  };
+  if (eventType === "reorder_received") {
+    payload.status = "received";
+  }
+
+  try {
+    const response = await fetch(
+      `${baseUrl}/inventory-items/${encodeURIComponent(link.quartzy_item_id)}`,
+      {
+        method: "PUT",
+        headers: quartzyHeaders(token),
+        body: JSON.stringify(payload),
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok && eventType === "reorder_received") {
+      const fallback = await fetch(
+        `${baseUrl}/inventory-items/${encodeURIComponent(link.quartzy_item_id)}`,
+        {
+          method: "PUT",
+          headers: quartzyHeaders(token),
+          body: JSON.stringify({ quantity: nextQuantity, state: "received" }),
+          cache: "no-store",
+        },
+      );
+      if (fallback.ok) return;
+    }
+  } catch {
+    // Best-effort only: local inventory updates should not fail when external sync is down.
+  }
 }
 
 export async function createLabReagent(formData: FormData): Promise<ActionResult> {
@@ -370,6 +445,8 @@ export async function createReagentStockEvent(formData: FormData): Promise<Actio
       unit: normalizeOptionalString(formData.get("unit")),
       vendor: normalizeOptionalString(formData.get("vendor")),
       reference_number: normalizeOptionalString(formData.get("reference_number")),
+      purchase_order_number: normalizeOptionalString(formData.get("purchase_order_number")),
+      expected_arrival_at: parseDateTimeInput(formData.get("expected_arrival_at")),
       notes: normalizeOptionalString(formData.get("notes")),
       created_by: userId,
     });
@@ -405,6 +482,12 @@ export async function createReagentStockEvent(formData: FormData): Promise<Actio
     if (updateError) {
       throw new Error(updateError.message || "Unable to update reagent inventory totals.");
     }
+
+    await pushQuartzyInventoryUpdateForReagent({
+      labReagentId,
+      nextQuantity,
+      eventType,
+    });
 
     await refreshOperationsPage();
     return { success: true };

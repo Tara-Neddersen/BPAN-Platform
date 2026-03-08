@@ -107,7 +107,7 @@ Keep notes short and factual.
 
 ### Status
 
-- `Status:` DONE
+- `Status:` BLOCKED
 - `Status:` BLOCKED
 - `Started:` 2026-03-04
 - `Last Updated:` 2026-03-07
@@ -203,7 +203,7 @@ Keep notes short and factual.
 - `Status:` BLOCKED
 - `Status:` IN_PROGRESS
 - `Started:` 2026-03-04
-- `Last Updated:` 2026-03-08 (Phase 3 UI closeout pass)
+- `Last Updated:` 2026-03-08 (P1 `/labs` nav + shell cleanup pass)
 - `Files Touched:` `/Users/tahouranedaee/Desktop/BPAN-Platform/AGENT_COORDINATION.md`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/experiments/page.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/experiments/template-actions.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/experiment-template-builder.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/experiments-client.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/labs-client.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/lab-operations-client.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/results-client.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/ui/help-hint.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/nav.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/auth/login/page.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/auth/callback/route.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/api/calendar/google/callback/route.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/api/calendar/outlook/callback/route.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/labs/page.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/operations/page.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/lib/chat-notification-delivery.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/labs/chat/actions.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/operations/actions.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/notifications/actions.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/notifications/page.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/chat-notification-preferences-card.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/lib/notifications.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/notifications-center-client.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/globals.css`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/docs/sms-notifications-setup.md`, `/Users/tahouranedaee/Desktop/BPAN-Platform/docs/PHASE3_EXECUTION_BACKLOG.md`
 - `Completed:`
   - Added a new `Templates` tab to the experiments surface without removing existing planner, schedule, protocol, or reagent flows
@@ -279,6 +279,11 @@ Keep notes short and factual.
   - Before/after (`/results`): reduced dataset summary action clutter by keeping one direct action (`Open Analyze`) and moving secondary actions (`Export CSV`, `Report Pack`, `Open Visualize`) into a compact `More` disclosure; no action paths removed
   - Spacing/hierarchy alignment: standardized major section wrappers in touched surfaces to the shared `section-card` + density token pattern introduced earlier
   - Validation: `npm run -s lint -- src/app/(protected)/experiments/page.tsx src/components/labs-client.tsx src/components/results-client.tsx` passed
+  - P1 `/labs` production cleanup pass (nav + labs shell only): reduced top-area visual density and normalized spacing rhythm without feature logic changes
+  - `nav.tsx` before/after: trimmed header control weight and collision risk by compacting nav button paddings, making labels non-wrapping, and hiding search trigger on very small widths (`sm+` only) to preserve mobile header usability
+  - `labs-client.tsx` before/after: simplified top shell status to one essential active-context line, reduced badge/chip density in workspace card headers, and standardized paddings (`details` + card header) for cleaner hierarchy
+  - Navigation ownership unchanged: `Labs` remains a primary nav destination and operations workflows remain merged under Labs
+  - Validation: `npm run -s lint -- src/components/nav.tsx src/components/labs-client.tsx` passed
 - `Exceptions:`
   - Long-form critical alerts were intentionally kept visible and not moved into hints
   - Form placeholders and empty-state labels that are already short were left unchanged
@@ -707,6 +712,17 @@ Keep notes short and factual.
       - prevents prior action intent from incorrectly carrying to a newly selected lab
       - `PASS` Dead/no-op control check:
       - no silent no-op paths in target-lab actions; blocked paths provide explicit helper text or toasts
+    - files touched:
+      - `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/labs-client.tsx`
+      - `/Users/tahouranedaee/Desktop/BPAN-Platform/AGENT_COORDINATION.md`
+    - validation:
+      - `npm run -s lint -- src/components/labs-client.tsx` passed
+  - P1 interaction polish (`/labs` operations hub tabs/cards):
+    - quick behavior checklist:
+      - `[x]` Daily operations cards switch the active operations tab and keep exactly one active section panel visible
+      - `[x]` Smooth in-page panel transition retained (scroll + subtle pulse) with reduced panel ID/ARIA noise (single `tabpanel` id per active panel)
+      - `[x]` Team & Policies controls are visibly available by default (`details` open) with explicit target-lab selector
+      - `[x]` Personal vs active-lab state remains explicit, with shared-feature disabled CTA in personal mode
     - files touched:
       - `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/labs-client.tsx`
       - `/Users/tahouranedaee/Desktop/BPAN-Platform/AGENT_COORDINATION.md`
@@ -1762,7 +1778,7 @@ Keep notes short and factual.
 
 - `Status:` DONE
 - `Started:` 2026-03-04
-- `Last Updated:` 2026-03-07 21:22 PST
+- `Last Updated:` 2026-03-07 22:03 PST
 - `Files Touched:` `/Users/tahouranedaee/Desktop/BPAN-Platform/AGENT_COORDINATION.md`, `/Users/tahouranedaee/Desktop/BPAN-Platform/.vercelignore`, `/Users/tahouranedaee/Desktop/BPAN-Platform/.github/workflows/quartzy-sync-orders.yml`, `/Users/tahouranedaee/Desktop/BPAN-Platform/docs/POST_DEPLOY_48H_RUNBOOK.md`, `/Users/tahouranedaee/Desktop/BPAN-Platform/docs/PHASE3_EXECUTION_BACKLOG.md`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/schedule-builder.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/labs/page.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/(protected)/operations/actions.ts`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/lab-operations-client.tsx`, `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/app/auth/login/page.tsx`
 - `Completed:`
   - Verified Vercel linkage from `.vercel/project.json` and `bpan-app/.vercel/project.json` (project `bpan-app`, org `team_dKgNdEwlF7JmY2HqnwCcCyAK`)
@@ -1858,6 +1874,41 @@ Keep notes short and factual.
       - `/results` -> `200` (`h1: Results Analyzer`) PASS
       - `/operations` -> `200`, final URL `https://bpan-app.vercel.app/labs` (`landsInLabsFlow=true`) PASS
     - No P1 failures observed; release complete
+  - Latest deploy run (Agents 2/5/6 merge gate request):
+    - Branch/SHA confirmed: `main` @ `37b924421371fa8ace8c86ad112ff72537088c9d`
+    - Preview deployed: `https://bpan-lt54tdqdb-tara-neddersens-projects.vercel.app`
+    - Requested authenticated smoke set:
+      - `/labs`
+      - `/labs?panel=reagents`
+      - `/labs?panel=equipment-booking`
+      - `/labs/chat`
+      - `/experiments`
+      - `/results`
+    - Preview auth smoke outcome: BLOCKED before route checks
+      - `/auth/login` on preview returned `401`
+      - Browser redirected to `vercel.com/login` via Vercel SSO
+      - Login form fields (`#email`, `#password`) unavailable in preview context
+    - Production deploy skipped because preview smoke did not pass
+  - Latest deploy run (preview auth wall expected procedure):
+    - Deployed SHA: `37b924421371fa8ace8c86ad112ff72537088c9d`
+    - Preview URL: `https://bpan-1co14019q-tara-neddersens-projects.vercel.app`
+    - Preview unauth sanity:
+      - `/auth/login` -> `401` (acceptable due Vercel edge protection)
+      - `/experiments` -> `401` (acceptable on preview)
+      - `/labs` -> `401` (acceptable on preview)
+      - `/labs/chat` -> `401` (acceptable on preview)
+      - `/results` -> `401` (acceptable on preview)
+    - Production deployment URL: `https://bpan-bgnfrefyd-tara-neddersens-projects.vercel.app`
+    - Production alias: `https://bpan-app.vercel.app`
+    - Authenticated production smoke (`agent11.deploy.smoke+20260308@example.com`):
+      - `/labs` -> `200` PASS
+      - `/labs?panel=reagents` -> `200` PASS
+      - `/labs?panel=equipment-booking` -> `200` PASS
+      - `/labs/chat` -> `200` PASS
+      - `/experiments` -> `200` PASS
+      - `/results` -> `200` PASS
+      - `/operations` -> `200`, final URL `https://bpan-app.vercel.app/labs` (`landsInLabsFlow=true`) PASS
+    - No P1 failures observed; rollback not executed
 - `Blockers:`
   - None
 - `Notes For Other Agents:`
@@ -1889,6 +1940,8 @@ Keep notes short and factual.
     - `PWCLI --session deploysmoke open https://bpan-mydekhxc5-tara-neddersens-projects.vercel.app/auth/login` (redirected to Vercel login page)
     - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && npx --yes vercel deploy --prod -y`
     - `cd /Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app && node <playwright-authenticated-production-smoke-script>`
+    - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && npx --yes vercel deploy -y` (preview for Agents 2/5/6 merge gate)
+    - `cd /Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app && node <playwright-authenticated-preview-smoke-script>` (blocked by Vercel login wall)
     - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && git rev-parse --abbrev-ref HEAD`
     - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && git rev-parse HEAD`
     - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && npx --yes vercel deploy -y`
@@ -1900,6 +1953,12 @@ Keep notes short and factual.
     - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && git tag -a release-stable-2026-03-08 890037962e6428c03f24eb3465f31a2f18f03da7 -m "Stable release anchor 2026-03-08"`
     - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && git push origin refs/heads/safe/release-stable-2026-03-08`
     - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && git push origin refs/tags/release-stable-2026-03-08`
+    - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && git rev-parse --abbrev-ref HEAD`
+    - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && git rev-parse HEAD`
+    - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && npx --yes vercel deploy -y` (preview-wall-accepted procedure preview)
+    - `curl -sS -o /dev/null -D - https://bpan-1co14019q-tara-neddersens-projects.vercel.app/{auth/login,experiments,labs,labs/chat,results}`
+    - `cd /Users/tahouranedaee/Desktop/BPAN-Platform && npx --yes vercel deploy --prod -y` (preview-wall-accepted procedure production)
+    - `cd /Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app && node <playwright-authenticated-production-smoke-with-labs-panels-script>`
   - Deploy targets:
     - Preview URL: `https://bpan-kuw9v3u9f-tara-neddersens-projects.vercel.app`
     - Latest preview URL (current HEAD run): `https://bpan-abtbot3d5-tara-neddersens-projects.vercel.app`
@@ -1907,11 +1966,15 @@ Keep notes short and factual.
     - Latest preview URL (2026-03-07 run, pass 2): `https://bpan-4mj1pvbfb-tara-neddersens-projects.vercel.app`
     - Latest preview URL (2026-03-07 run, corrected gate): `https://bpan-mydekhxc5-tara-neddersens-projects.vercel.app`
     - Latest preview URL (2026-03-07 run, quick check): `https://bpan-in2il23y4-tara-neddersens-projects.vercel.app`
+    - Latest preview URL (Agents 2/5/6 merge gate): `https://bpan-lt54tdqdb-tara-neddersens-projects.vercel.app`
+    - Latest preview URL (preview-wall-accepted procedure): `https://bpan-1co14019q-tara-neddersens-projects.vercel.app`
+    - Latest production URL (preview-wall-accepted procedure): `https://bpan-bgnfrefyd-tara-neddersens-projects.vercel.app`
     - Latest production URL (2026-03-07 run, pass 2): `https://bpan-idj8wgvbm-tara-neddersens-projects.vercel.app`
     - Latest production URL (2026-03-07 run): `https://bpan-mcv1js6qx-tara-neddersens-projects.vercel.app`
     - Production deployment URL: `https://bpan-5pgqfp6kb-tara-neddersens-projects.vercel.app`
     - Production alias: `https://bpan-app.vercel.app`
   - Rollback-ready commands (do not execute unless instructed):
+    - Immediate rollback for latest production deploy: `cd /Users/tahouranedaee/Desktop/BPAN-Platform && npx --yes vercel rollback https://bpan-bgnfrefyd-tara-neddersens-projects.vercel.app -y`
     - Immediate rollback for latest production deploy: `cd /Users/tahouranedaee/Desktop/BPAN-Platform && npx --yes vercel rollback https://bpan-mcv1js6qx-tara-neddersens-projects.vercel.app -y`
     - Immediate Vercel rollback to prior production deployment: `cd /Users/tahouranedaee/Desktop/BPAN-Platform && npx --yes vercel rollback https://bpan-5pgqfp6kb-tara-neddersens-projects.vercel.app -y`
     - Redeploy from known-safe git anchors:
@@ -2243,6 +2306,27 @@ Until then, other agents should treat their work as planning or local scaffoldin
     - 1366: `NOT VERIFIED IN SESSION` (auth/session-gated in local headless run)
     - 1024: `NOT VERIFIED IN SESSION` (auth/session-gated in local headless run)
     - 390: `NOT VERIFIED IN SESSION` (auth/session-gated in local headless run)
+
+## Agent 6 Update (2026-03-08) - P1 Labs embedded operations layout cleanup
+- Scope: UI-only layout cleanup for embedded reagent/equipment surfaces. No backend/schema/action logic changes.
+- Files touched:
+  - `/Users/tahouranedaee/Desktop/BPAN-Platform/bpan-app/src/components/lab-operations-client.tsx`
+- Root layout fixes:
+  - Reagent detail action row:
+    - improved wrapping behavior for chip/select cluster (`min-w-0` + wrap-safe layout)
+    - primary action button (`Edit reagent`) now uses full-width on small screens to prevent collisions/truncation
+  - Equipment controls:
+    - removed duplicated stacked control bars in embedded mode by consolidating section controls into the equipment-tab card
+    - kept non-embedded behavior unchanged (separate section control card still shown outside embedded mode)
+  - Preserved all existing operations behaviors (reagent/equipment edit/delete, booking create/edit/delete/status, QR actions, calendar-first flow)
+- Validation:
+  - ESLint:
+    - `npm run lint -- src/components/lab-operations-client.tsx src/components/labs-client.tsx` ✅
+  - Viewport smoke notes (local browser automation, `/labs` route):
+    - Desktop 1366x768: no horizontal overflow (`scrollWidth === innerWidth`)
+    - Tablet 1024x768: no horizontal overflow (`scrollWidth === innerWidth`)
+    - Mobile 390x844: no horizontal overflow (`scrollWidth === innerWidth`)
+  - Note: authenticated lab-specific embedded content remains session-gated in local headless run; overflow smoke above confirms container/layout constraints at target widths.
 
 ## Agent 10 Release-Gate QA (2026-03-08) - Production + Preview Post-Deploy Gate
 - Scope requested: `/experiments`, `/labs`, `/labs/chat`, `/operations` redirect mapping, `/results`, `/notifications` on latest production + latest preview.
