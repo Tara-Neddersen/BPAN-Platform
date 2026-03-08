@@ -1,0 +1,12 @@
+logs/*.jsonl
+queues/*.jsonl
+state/*.json
+out/*.md
+out/send_payloads/*.txt
+__pycache__/
+orchestrator/__pycache__/
+*.pyc
+
+.orchestrator.env
+gateway_inbox/
+run/*.pid

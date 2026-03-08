@@ -632,3 +632,391 @@ export interface AIMemory {
   created_at: string;
   updated_at: string;
 }
+
+// ─── Platform Redesign Schema Contracts ────────────────────────────────────
+
+export const PLATFORM_VISIBILITIES = ["private", "lab_shared"] as const;
+export type PlatformVisibility = (typeof PLATFORM_VISIBILITIES)[number];
+
+export const PLATFORM_OWNER_TYPES = ["user", "lab"] as const;
+export type PlatformOwnerType = (typeof PLATFORM_OWNER_TYPES)[number];
+
+export const PLATFORM_ASSIGNMENT_SCOPES = ["study", "cohort", "animal"] as const;
+export type PlatformAssignmentScope = (typeof PLATFORM_ASSIGNMENT_SCOPES)[number];
+
+export const PLATFORM_SLOT_KINDS = ["am", "pm", "midday", "evening", "custom", "exact_time"] as const;
+export type PlatformSlotKind = (typeof PLATFORM_SLOT_KINDS)[number];
+
+export const PLATFORM_LAB_ROLES = ["member", "manager", "admin"] as const;
+export type PlatformLabRole = (typeof PLATFORM_LAB_ROLES)[number];
+
+export const PLATFORM_SHARED_EDIT_POLICIES = ["open_edit", "manager_controlled"] as const;
+export type PlatformSharedEditPolicy = (typeof PLATFORM_SHARED_EDIT_POLICIES)[number];
+
+export const PLATFORM_RESULT_COLUMN_TYPES = [
+  "text",
+  "long_text",
+  "number",
+  "integer",
+  "boolean",
+  "date",
+  "time",
+  "datetime",
+  "select",
+  "multi_select",
+  "file",
+  "url",
+  "animal_ref",
+  "cohort_ref",
+  "batch_ref",
+] as const;
+export type PlatformResultColumnType = (typeof PLATFORM_RESULT_COLUMN_TYPES)[number];
+
+export const PLATFORM_RUN_STATUSES = [
+  "draft",
+  "planned",
+  "in_progress",
+  "completed",
+  "cancelled",
+] as const;
+export type PlatformRunStatus = (typeof PLATFORM_RUN_STATUSES)[number];
+
+export const PLATFORM_BOOKING_STATUSES = [
+  "draft",
+  "confirmed",
+  "in_use",
+  "completed",
+  "cancelled",
+] as const;
+export type PlatformBookingStatus = (typeof PLATFORM_BOOKING_STATUSES)[number];
+
+export const PLATFORM_INVENTORY_EVENT_TYPES = [
+  "receive",
+  "consume",
+  "adjust",
+  "reorder_request",
+  "reorder_placed",
+  "reorder_received",
+] as const;
+export type PlatformInventoryEventType = (typeof PLATFORM_INVENTORY_EVENT_TYPES)[number];
+
+export const PLATFORM_LINKED_OBJECT_TYPES = [
+  "experiment_template",
+  "experiment_run",
+  "lab_reagent",
+  "lab_reagent_stock_event",
+  "lab_equipment",
+  "lab_equipment_booking",
+  "task",
+] as const;
+export type PlatformLinkedObjectType = (typeof PLATFORM_LINKED_OBJECT_TYPES)[number];
+
+export const PLATFORM_MESSAGE_LINKED_OBJECT_TYPES = [
+  "experiment_template",
+  "experiment_run",
+  "lab",
+  "lab_reagent",
+  "lab_reagent_stock_event",
+  "lab_equipment",
+  "lab_equipment_booking",
+  "task",
+] as const;
+export type PlatformMessageLinkedObjectType = (typeof PLATFORM_MESSAGE_LINKED_OBJECT_TYPES)[number];
+
+export const PLATFORM_MESSAGE_RECIPIENT_SCOPES = ["lab", "participants"] as const;
+export type PlatformMessageRecipientScope = (typeof PLATFORM_MESSAGE_RECIPIENT_SCOPES)[number];
+
+export interface Lab {
+  id: string;
+  name: string;
+  slug: string | null;
+  description: string | null;
+  created_by: string | null;
+  shared_template_edit_policy: PlatformSharedEditPolicy;
+  shared_protocol_edit_policy: PlatformSharedEditPolicy;
+  timezone: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LabMember {
+  id: string;
+  lab_id: string;
+  user_id: string;
+  role: PlatformLabRole;
+  display_title: string | null;
+  is_active: boolean;
+  joined_at: string;
+  invited_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExperimentTemplate {
+  id: string;
+  owner_type: PlatformOwnerType;
+  owner_user_id: string | null;
+  owner_lab_id: string | null;
+  visibility: PlatformVisibility;
+  title: string;
+  description: string | null;
+  category: string | null;
+  default_assignment_scope: PlatformAssignmentScope | null;
+  is_archived: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TemplateProtocolLink {
+  id: string;
+  template_id: string;
+  protocol_id: string;
+  sort_order: number;
+  is_default: boolean;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResultSchema {
+  id: string;
+  template_id: string;
+  name: string;
+  description: string | null;
+  version: number;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResultSchemaColumn {
+  id: string;
+  schema_id: string;
+  key: string;
+  label: string;
+  column_type: PlatformResultColumnType;
+  required: boolean;
+  default_value: unknown;
+  options: unknown[];
+  unit: string | null;
+  help_text: string | null;
+  group_key: string | null;
+  sort_order: number;
+  is_system_default: boolean;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ResultSchemaColumnSnapshot = Omit<ResultSchemaColumn, "id" | "schema_id" | "created_at" | "updated_at">;
+
+export interface ScheduleTemplate {
+  id: string;
+  template_id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduleDay {
+  id: string;
+  schedule_template_id: string;
+  day_index: number;
+  label: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduleSlot {
+  id: string;
+  schedule_day_id: string;
+  slot_kind: PlatformSlotKind;
+  label: string | null;
+  start_time: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduledBlock {
+  id: string;
+  schedule_slot_id: string;
+  experiment_template_id: string;
+  protocol_id: string | null;
+  title_override: string | null;
+  notes: string | null;
+  sort_order: number;
+  repeat_key: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExperimentRun {
+  id: string;
+  template_id: string | null;
+  legacy_experiment_id: string | null;
+  owner_user_id: string | null;
+  owner_lab_id: string | null;
+  visibility: PlatformVisibility;
+  name: string;
+  description: string | null;
+  status: PlatformRunStatus;
+  selected_protocol_id: string | null;
+  result_schema_id: string | null;
+  schema_snapshot: ResultSchemaColumnSnapshot[];
+  schedule_template_id: string | null;
+  start_anchor_date: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunScheduleBlock {
+  id: string;
+  experiment_run_id: string;
+  source_scheduled_block_id: string | null;
+  day_index: number;
+  slot_kind: PlatformSlotKind;
+  slot_label: string | null;
+  scheduled_time: string | null;
+  sort_order: number;
+  experiment_template_id: string | null;
+  protocol_id: string | null;
+  title: string;
+  notes: string | null;
+  status: PlatformRunStatus;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunAssignment {
+  id: string;
+  experiment_run_id: string;
+  scope_type: PlatformAssignmentScope;
+  study_id: string | null;
+  cohort_id: string | null;
+  animal_id: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LabReagent {
+  id: string;
+  lab_id: string;
+  name: string;
+  catalog_number: string | null;
+  supplier: string | null;
+  lot_number: string | null;
+  quantity: number;
+  unit: string | null;
+  reorder_threshold: number | null;
+  needs_reorder: boolean;
+  last_ordered_at: string | null;
+  storage_location: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LabReagentStockEvent {
+  id: string;
+  lab_reagent_id: string;
+  event_type: PlatformInventoryEventType;
+  quantity_delta: number;
+  unit: string | null;
+  vendor: string | null;
+  reference_number: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface LabEquipment {
+  id: string;
+  lab_id: string;
+  name: string;
+  description: string | null;
+  location: string | null;
+  booking_requires_approval: boolean;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LabEquipmentBooking {
+  id: string;
+  equipment_id: string;
+  booked_by: string | null;
+  experiment_run_id: string | null;
+  task_id: string | null;
+  title: string;
+  notes: string | null;
+  starts_at: string;
+  ends_at: string;
+  status: PlatformBookingStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessageThread {
+  id: string;
+  lab_id: string | null;
+  owner_user_id: string | null;
+  recipient_scope: PlatformMessageRecipientScope;
+  subject: string | null;
+  linked_object_type: PlatformMessageLinkedObjectType;
+  linked_object_id: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessageThreadParticipant {
+  id: string;
+  thread_id: string;
+  user_id: string;
+  added_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Message {
+  id: string;
+  thread_id: string;
+  author_user_id: string | null;
+  body: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskLink {
+  id: string;
+  task_id: string;
+  linked_object_type: PlatformLinkedObjectType;
+  linked_object_id: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface MessageRead {
+  id: string;
+  message_id: string;
+  user_id: string;
+  read_at: string;
+  created_at: string;
+  updated_at: string;
+}

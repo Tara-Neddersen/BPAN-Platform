@@ -3,14 +3,25 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
+import { reconcileDataWithSchemaSnapshot } from "@/lib/results-run-adapters";
+import type { DatasetColumn } from "@/types";
 
 // ─── Datasets ────────────────────────────────────────────────────────────────
+
+function shouldRetryLegacyDatasetInsert(message: string) {
+  return ["experiment_run_id", "result_schema_id", "schema_snapshot"].some((field) =>
+    message.includes(field)
+  );
+}
 
 export async function createDataset(payload: {
   name: string;
   description?: string;
   experiment_id?: string;
-  columns: { name: string; type: string; unit?: string }[];
+  experiment_run_id?: string;
+  result_schema_id?: string;
+  schema_snapshot?: unknown;
+  columns: DatasetColumn[];
   data: Record<string, unknown>[];
   source: string;
   tags?: string[];
@@ -21,23 +32,74 @@ export async function createDataset(payload: {
   } = await supabase.auth.getUser();
   if (!user) throw new Error("Unauthorized");
 
-  const { data, error } = await supabase
-    .from("datasets")
-    .insert({
-      user_id: user.id,
-      name: payload.name,
-      description: payload.description || null,
-      experiment_id: payload.experiment_id || null,
-      columns: payload.columns,
-      data: payload.data,
-      row_count: payload.data.length,
-      source: payload.source,
-      tags: payload.tags || [],
-    })
-    .select("id")
-    .single();
+  const shouldApplyRunSnapshot =
+    Boolean(payload.experiment_run_id) || Boolean(payload.result_schema_id) || Boolean(payload.schema_snapshot);
 
-  if (error) throw new Error(error.message);
+  const reconciliation = shouldApplyRunSnapshot
+    ? reconcileDataWithSchemaSnapshot(payload.columns, payload.data, payload.schema_snapshot)
+    : null;
+
+  if (reconciliation && !reconciliation.canImport) {
+    const blockingColumns = [
+      ...reconciliation.guardrails.missingRequiredColumnsWithoutDefault,
+      ...reconciliation.guardrails.missingRequiredValuesWithoutDefault,
+    ];
+    throw new Error(
+      `Run schema requirements are missing data with no default: ${blockingColumns.join(", ")}`
+    );
+  }
+
+  const resolvedColumns = reconciliation?.columns || payload.columns;
+  const resolvedData = reconciliation?.data || payload.data;
+
+  const baseInsert = {
+    user_id: user.id,
+    name: payload.name,
+    description: payload.description || null,
+    experiment_id: payload.experiment_id || null,
+    columns: resolvedColumns,
+    data: resolvedData,
+    row_count: resolvedData.length,
+    source: payload.source,
+    tags: payload.tags || [],
+  };
+
+  const runAwareInsert = {
+    ...baseInsert,
+    experiment_run_id: payload.experiment_run_id || null,
+    result_schema_id: payload.result_schema_id || null,
+    schema_snapshot: Array.isArray(payload.schema_snapshot) ? payload.schema_snapshot : payload.schema_snapshot || [],
+  };
+
+  let data: { id: string } | null = null;
+
+  if (payload.experiment_run_id || payload.result_schema_id || payload.schema_snapshot) {
+    const runAwareResult = await supabase
+      .from("datasets")
+      .insert(runAwareInsert)
+      .select("id")
+      .single();
+
+    if (runAwareResult.error && !shouldRetryLegacyDatasetInsert(runAwareResult.error.message)) {
+      throw new Error(runAwareResult.error.message);
+    }
+
+    if (!runAwareResult.error) {
+      data = runAwareResult.data;
+    }
+  }
+
+  if (!data) {
+    const legacyResult = await supabase
+      .from("datasets")
+      .insert(baseInsert)
+      .select("id")
+      .single();
+
+    if (legacyResult.error) throw new Error(legacyResult.error.message);
+    data = legacyResult.data;
+  }
+
   revalidatePath("/results");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return data.id;

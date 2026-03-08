@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "backfill:platform-sync": "node scripts/backfill_platform_sync.mjs",
+    "quartzy:sync-orders": "node scripts/quartzy_sync_orders.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

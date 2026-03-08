@@ -1,0 +1,16 @@
+# Keep deployment payload focused on app source
+**/node_modules
+**/.next
+**/coverage
+**/.turbo
+
+# Local/dev artifacts not needed in Vercel builds
+.claude
+_safety_snapshots
+automation
+
+# VCS and editor files
+.git
+.vscode
+.idea
+.DS_Store

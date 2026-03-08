@@ -140,6 +140,28 @@
   .gradient-text {
     @apply bg-gradient-to-r from-primary via-primary/80 to-primary/60 bg-clip-text text-transparent;
   }
+  .page-shell {
+    @apply space-y-4 sm:space-y-5;
+  }
+  .page-header {
+    @apply flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between;
+  }
+  .section-card {
+    @apply rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm;
+  }
+  .card-density-compact {
+    @apply p-3 sm:p-4;
+  }
+  .card-density-comfy {
+    @apply p-4 sm:p-5;
+  }
+  .sticky-section-switcher {
+    @apply sticky z-20 overflow-x-auto rounded-xl border border-slate-200/80 bg-white/95 backdrop-blur;
+    top: 3.75rem;
+  }
+  .touch-target {
+    min-height: 2.75rem;
+  }
 }
 
 /* Smooth card hover effect */

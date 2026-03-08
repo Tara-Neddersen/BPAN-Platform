@@ -1,11 +1,15 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { HelpHint } from "@/components/ui/help-hint";
+import { ExperimentTemplateBuilder, type ExperimentTemplateRecord } from "@/components/experiment-template-builder";
+import { ScheduleBuilder } from "@/components/schedule-builder";
+import { RunExecutionBuilder } from "@/components/run-execution-builder";
 import {
   Calendar,
   BarChart3,
@@ -24,6 +28,8 @@ import {
   Loader2,
   GripVertical,
   Upload,
+  Layers3,
+  Play,
 } from "lucide-react";
 import {
   createExperiment,
@@ -52,11 +58,43 @@ import {
   batchUpdateAnimalExperimentStatusByIds,
 } from "@/app/(protected)/colony/actions";
 import { toast } from "sonner";
-import type { Experiment, ExperimentTimepoint, Protocol, Reagent, ProtocolStep, AnimalExperiment, Animal, Cohort, ColonyTimepoint, WorkspaceCalendarEvent } from "@/types";
+import type {
+  Experiment,
+  ExperimentTimepoint,
+  Protocol,
+  Reagent,
+  ProtocolStep,
+  AnimalExperiment,
+  Animal,
+  Cohort,
+  ColonyTimepoint,
+  WorkspaceCalendarEvent,
+  ScheduleTemplate,
+  ScheduleDay,
+  ScheduleSlot,
+  ScheduledBlock,
+  ExperimentRun,
+  RunScheduleBlock,
+  RunAssignment,
+} from "@/types";
+import { UI_SURFACE_TITLES } from "@/lib/ui-copy";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-type TabKey = "calendar" | "gantt" | "protocols" | "reagents";
+type TabKey = "calendar" | "gantt" | "schedule" | "runs" | "templates" | "protocols" | "reagents";
+
+const PRIMARY_TABS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
+  { key: "calendar", label: "Calendar", icon: <Calendar className="h-4 w-4" /> },
+  { key: "gantt", label: "Timeline", icon: <BarChart3 className="h-4 w-4" /> },
+  { key: "templates", label: "Templates", icon: <Layers3 className="h-4 w-4" /> },
+  { key: "runs", label: "Runs", icon: <Play className="h-4 w-4" /> },
+  { key: "schedule", label: "Schedule", icon: <GripVertical className="h-4 w-4" /> },
+];
+
+const OVERFLOW_TABS: Array<{ key: TabKey; label: string }> = [
+  { key: "protocols", label: "Protocols" },
+  { key: "reagents", label: "Reagents" },
+];
 
 const COLONY_EXP_LABELS: Record<string, string> = {
   handling: "Handling",
@@ -140,6 +178,18 @@ interface Props {
   cohorts?: Cohort[];
   colonyTimepoints?: ColonyTimepoint[];
   workspaceCalendarEvents?: WorkspaceCalendarEvent[];
+  experimentTemplates?: ExperimentTemplateRecord[];
+  templateBuilderPersistenceEnabled?: boolean;
+  scheduleTemplates?: ScheduleTemplate[];
+  scheduleDays?: ScheduleDay[];
+  scheduleSlots?: ScheduleSlot[];
+  scheduledBlocks?: ScheduledBlock[];
+  scheduleBuilderPersistenceEnabled?: boolean;
+  experimentRuns?: ExperimentRun[];
+  runScheduleBlocks?: RunScheduleBlock[];
+  runAssignments?: RunAssignment[];
+  runExecutionPersistenceEnabled?: boolean;
+  runExecutionWarning?: string | null;
 }
 
 export function ExperimentsClient({
@@ -152,64 +202,98 @@ export function ExperimentsClient({
   cohorts = [],
   colonyTimepoints = [],
   workspaceCalendarEvents = [],
+  experimentTemplates = [],
+  templateBuilderPersistenceEnabled = false,
+  scheduleTemplates = [],
+  scheduleDays = [],
+  scheduleSlots = [],
+  scheduledBlocks = [],
+  scheduleBuilderPersistenceEnabled = false,
+  experimentRuns = [],
+  runScheduleBlocks = [],
+  runAssignments = [],
+  runExecutionPersistenceEnabled = false,
+  runExecutionWarning = null,
 }: Props) {
   const [tab, setTab] = useState<TabKey>("calendar");
   const [showNewExperiment, setShowNewExperiment] = useState(false);
   const [editingExperiment, setEditingExperiment] = useState<Experiment | null>(null);
+  const activeOverflowTab =
+    OVERFLOW_TABS.find((overflowTab) => overflowTab.key === tab)?.key || "";
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="page-shell">
+      <div className="page-header">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Experiment Planner</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Plan experiments, track protocols, and manage reagents.
-          </p>
+          <div className="flex items-center gap-1.5">
+            <h1 className="text-2xl font-bold tracking-tight">{UI_SURFACE_TITLES.experiments}</h1>
+            <HelpHint text="Plan experiments, add protocols, create templates, and track supplies." />
+          </div>
         </div>
-        <Button onClick={() => setShowNewExperiment(true)} className="gap-2">
-          <Plus className="h-4 w-4" /> New Experiment
+        <Button onClick={() => setShowNewExperiment(true)} className="touch-target gap-2 self-start">
+          <Plus className="h-4 w-4" /> New experiment
         </Button>
       </div>
 
-      {/* Quick stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        {[
-          { label: "Planned", count: experiments.filter((e) => e.status === "planned").length, color: "text-blue-600" },
-          { label: "In Progress", count: experiments.filter((e) => e.status === "in_progress").length, color: "text-yellow-600" },
-          { label: "Completed", count: experiments.filter((e) => e.status === "completed").length, color: "text-green-600" },
-          { label: "Upcoming Timepoints", count: timepoints.filter((t) => !t.completed_at).length, color: "text-purple-600" },
-          { label: "Colony Scheduled", count: animalExperiments.filter((e) => e.status === "scheduled").length, color: "text-indigo-600" },
-          { label: "Colony In Progress", count: animalExperiments.filter((e) => e.status === "in_progress").length, color: "text-amber-600" },
-        ].map((s) => (
-          <Card key={s.label}>
-            <CardContent className="pt-4 pb-3 text-center">
-              <p className={`text-2xl font-bold ${s.color}`}>{s.count}</p>
-              <p className="text-xs text-muted-foreground">{s.label}</p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      <details className="group rounded-xl border border-border/70 bg-card/50 p-3">
+        <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium">
+          Experiment summary
+          <span className="text-xs text-muted-foreground transition-transform group-open:rotate-180">▾</span>
+        </summary>
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {[
+            { label: "Planned", count: experiments.filter((e) => e.status === "planned").length, color: "text-blue-600" },
+            { label: "In Progress", count: experiments.filter((e) => e.status === "in_progress").length, color: "text-yellow-600" },
+            { label: "Completed", count: experiments.filter((e) => e.status === "completed").length, color: "text-green-600" },
+            { label: "Upcoming Timepoints", count: timepoints.filter((t) => !t.completed_at).length, color: "text-purple-600" },
+            { label: "Colony Scheduled", count: animalExperiments.filter((e) => e.status === "scheduled").length, color: "text-indigo-600" },
+            { label: "Colony In Progress", count: animalExperiments.filter((e) => e.status === "in_progress").length, color: "text-amber-600" },
+          ].map((s) => (
+            <Card key={s.label}>
+              <CardContent className="pt-4 pb-3 text-center">
+                <p className={`text-2xl font-bold ${s.color}`}>{s.count}</p>
+                <p className="text-xs text-muted-foreground">{s.label}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </details>
 
       {/* Tab bar */}
-      <div className="flex border-b">
-        {[
-          { key: "calendar" as const, label: "Calendar", icon: <Calendar className="h-4 w-4" /> },
-          { key: "gantt" as const, label: "Timeline", icon: <BarChart3 className="h-4 w-4" /> },
-          { key: "protocols" as const, label: "Protocols", icon: <FileText className="h-4 w-4" /> },
-          { key: "reagents" as const, label: "Reagents", icon: <Beaker className="h-4 w-4" /> },
-        ].map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-              tab === t.key
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
+      <div className="sticky-section-switcher flex items-end justify-between gap-2 border-b px-2 pt-1.5">
+        <div className="flex overflow-x-auto">
+          {PRIMARY_TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`touch-target flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                tab === t.key
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="pb-2">
+          <select
+            value={activeOverflowTab}
+            onChange={(event) => {
+              const next = event.target.value as TabKey;
+              if (next) setTab(next);
+            }}
+            className="touch-target h-10 rounded-md border border-input bg-background px-3 text-sm"
+            aria-label="More experiments tabs"
           >
-            {t.icon} {t.label}
-          </button>
-        ))}
+            <option value="">More sections</option>
+            {OVERFLOW_TABS.map((overflowTab) => (
+              <option key={overflowTab.key} value={overflowTab.key}>
+                {overflowTab.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* New/Edit experiment form */}
@@ -246,6 +330,40 @@ export function ExperimentsClient({
           animals={animals}
           cohorts={cohorts}
           onEdit={setEditingExperiment}
+        />
+      )}
+      {tab === "schedule" && (
+        <ScheduleBuilder
+          experimentTemplates={experimentTemplates}
+          scheduleTemplates={scheduleTemplates}
+          scheduleDays={scheduleDays}
+          scheduleSlots={scheduleSlots}
+          scheduledBlocks={scheduledBlocks}
+          persistenceEnabled={scheduleBuilderPersistenceEnabled}
+        />
+      )}
+      {tab === "runs" && (
+        <RunExecutionBuilder
+          experimentTemplates={experimentTemplates}
+          scheduleTemplates={scheduleTemplates}
+          scheduleDays={scheduleDays}
+          scheduleSlots={scheduleSlots}
+          scheduledBlocks={scheduledBlocks}
+          runs={experimentRuns}
+          runScheduleBlocks={runScheduleBlocks}
+          runAssignments={runAssignments}
+          protocols={protocols}
+          cohorts={cohorts}
+          animals={animals}
+          persistenceEnabled={runExecutionPersistenceEnabled}
+          dataWarning={runExecutionWarning}
+        />
+      )}
+      {tab === "templates" && (
+        <ExperimentTemplateBuilder
+          templates={experimentTemplates}
+          protocols={protocols}
+          persistenceEnabled={templateBuilderPersistenceEnabled}
         />
       )}
       {tab === "protocols" && <ProtocolsView protocols={protocols} />}
@@ -407,6 +525,8 @@ function CalendarView({
   workspaceCalendarEvents?: WorkspaceCalendarEvent[];
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const calendarCallbackHandledRef = useRef<string | null>(null);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showColonyExps, setShowColonyExps] = useState(true);
   const [filterCohort, setFilterCohort] = useState<string>("all");
@@ -737,6 +857,29 @@ function CalendarView({
     }
   }, []);
 
+  useEffect(() => {
+    const status = searchParams.get("calendar");
+    if (!status) return;
+
+    const provider = searchParams.get("provider");
+    const msg = searchParams.get("msg");
+    const key = `${status}:${provider || ""}:${msg || ""}`;
+    if (calendarCallbackHandledRef.current === key) return;
+    calendarCallbackHandledRef.current = key;
+
+    setCalendarIntegrationsOpen(true);
+    void loadCalendarIntegrations();
+
+    const providerLabel = provider === "outlook" ? "Outlook Calendar" : "Google Calendar";
+    if (status === "connected") {
+      toast.success(msg || `${providerLabel} connected.`);
+    } else if (status === "error") {
+      toast.error(msg || `${providerLabel} connection failed. Please try again.`);
+    }
+
+    router.replace("/experiments", { scroll: false });
+  }, [loadCalendarIntegrations, router, searchParams]);
+
   return (
     <div className="space-y-4">
       {/* Month navigation + colony toggle */}
@@ -827,13 +970,17 @@ function CalendarView({
                   variant="outline"
                   className="h-8 text-xs"
                   onClick={async () => {
-                    const res = await fetch("/api/calendar/google/auth");
-                    const data = await res.json();
-                    if (!res.ok || !data.url) {
-                      toast.error(data.error || "Google Calendar auth not available");
-                      return;
+                    try {
+                      const res = await fetch("/api/calendar/google/auth");
+                      const data = await res.json();
+                      if (!res.ok || !data.url) {
+                        toast.error(data.error || "Google Calendar auth not available");
+                        return;
+                      }
+                      window.location.href = data.url;
+                    } catch {
+                      toast.error("Could not start Google Calendar connection. Please try again.");
                     }
-                    window.location.href = data.url;
                   }}
                 >
                   {googleCalendarStatus?.connected ? "Reconnect Google" : "Connect Google"}
@@ -849,6 +996,8 @@ function CalendarView({
                       const data = await res.json();
                       if (!res.ok) toast.error(data.error || "Sync failed");
                       else toast.success(`Synced ${data.synced || 0} workspace event${(data.synced || 0) === 1 ? "" : "s"} to Google Calendar`);
+                    } catch {
+                      toast.error("Could not sync to Google Calendar. Please try again.");
                     } finally {
                       setSyncingGoogleCalendar(false);
                     }
@@ -875,6 +1024,8 @@ function CalendarView({
                         );
                         router.refresh();
                       }
+                    } catch {
+                      toast.error("Could not import Google Calendar changes. Please try again.");
                     } finally {
                       setImportingGoogleCalendar(false);
                     }
@@ -924,13 +1075,17 @@ function CalendarView({
                   variant="outline"
                   className="h-8 text-xs"
                   onClick={async () => {
-                    const res = await fetch("/api/calendar/outlook/auth");
-                    const data = await res.json();
-                    if (!res.ok || !data.url) {
-                      toast.error(data.error || "Outlook Calendar auth not available");
-                      return;
+                    try {
+                      const res = await fetch("/api/calendar/outlook/auth");
+                      const data = await res.json();
+                      if (!res.ok || !data.url) {
+                        toast.error(data.error || "Outlook Calendar auth not available");
+                        return;
+                      }
+                      window.location.href = data.url;
+                    } catch {
+                      toast.error("Could not start Outlook connection. Please try again.");
                     }
-                    window.location.href = data.url;
                   }}
                 >
                   {outlookCalendarStatus?.connected ? "Reconnect Outlook" : "Connect Outlook"}
@@ -946,6 +1101,8 @@ function CalendarView({
                       const data = await res.json();
                       if (!res.ok) toast.error(data.error || "Sync failed");
                       else toast.success(`Synced ${data.synced || 0} BPAN event${(data.synced || 0) === 1 ? "" : "s"} to Outlook`);
+                    } catch {
+                      toast.error("Could not sync to Outlook Calendar. Please try again.");
                     } finally {
                       setSyncingOutlookCalendar(false);
                     }
@@ -972,6 +1129,8 @@ function CalendarView({
                         );
                         router.refresh();
                       }
+                    } catch {
+                      toast.error("Could not import Outlook Calendar changes. Please try again.");
                     } finally {
                       setImportingOutlookCalendar(false);
                     }
@@ -1062,7 +1221,7 @@ function CalendarView({
       {showColonyExps && (
         <div className="flex flex-wrap gap-3 text-[10px] text-muted-foreground">
           <span className="flex items-center gap-1">
-            <span className="h-2 w-2 rounded bg-blue-200 inline-block border border-blue-400" /> Planner experiments
+            <span className="h-2 w-2 rounded bg-blue-200 inline-block border border-blue-400" /> Planned experiments
           </span>
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded bg-indigo-200 inline-block border border-indigo-400" /> Colony scheduled
@@ -1369,7 +1528,7 @@ function CalendarView({
               {/* Regular planner experiments */}
               {dayExperiments.length > 0 && (
                 <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-1">Planner Experiments</p>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Planned Experiments</p>
                   {dayExperiments.map(e => (
                     <div key={e.id} className="flex items-center justify-between text-sm border rounded-md p-2 mb-1">
                       <div className="flex items-center gap-2">
@@ -1662,13 +1821,13 @@ function CalendarView({
       {/* Experiment list */}
       <div className="space-y-3">
         <div>
-          <h3 className="text-sm font-semibold">Planner Experiments</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">Custom lab experiments you track manually (Western blots, behavioral assays, etc.) — separate from the colony animal experiments shown in the calendar above.</p>
+          <h3 className="text-sm font-semibold">Planned Experiments</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">Custom experiments you track here, separate from colony tracker items.</p>
         </div>
         {experiments.length === 0 ? (
           <div className="rounded-lg border border-dashed p-8 text-center">
-            <p className="text-muted-foreground text-sm font-medium">No planner experiments yet</p>
-            <p className="text-xs text-muted-foreground mt-1.5 max-w-sm mx-auto">Hit <span className="font-semibold">+ New Experiment</span> above to log a custom experiment. Colony animal experiments are managed under <span className="font-semibold">Colony → Tracker</span>.</p>
+            <p className="text-muted-foreground text-sm font-medium">No planned experiments yet</p>
+            <p className="text-xs text-muted-foreground mt-1.5 max-w-sm mx-auto">Use <span className="font-semibold">+ New Experiment</span> to add one. Colony experiments stay in <span className="font-semibold">Colony → Tracker</span>.</p>
           </div>
         ) : (
           experiments.map((e) => (

@@ -1,27 +1,61 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/service";
+import { createClient } from "@/lib/supabase/server";
 import {
   exchangeOutlookCalendarCode,
   getOutlookCalendarEmail,
 } from "@/lib/outlook-calendar";
 
 export async function GET(req: NextRequest) {
+  const redirectToExperiments = (params: Record<string, string>) => {
+    const url = new URL("/experiments", req.url);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+    return NextResponse.redirect(url);
+  };
+
   try {
     const code = req.nextUrl.searchParams.get("code");
     const state = req.nextUrl.searchParams.get("state");
     const error = req.nextUrl.searchParams.get("error");
-    if (error) return NextResponse.redirect(new URL(`/experiments?calendar=error&msg=${encodeURIComponent(error)}`, req.url));
-    if (!code || !state) return NextResponse.redirect(new URL("/experiments?calendar=error&msg=missing_params", req.url));
+    if (error) {
+      return redirectToExperiments({
+        calendar: "error",
+        provider: "outlook",
+        msg: "Outlook connection was cancelled.",
+      });
+    }
+    if (!code || !state) {
+      return redirectToExperiments({
+        calendar: "error",
+        provider: "outlook",
+        msg: "Outlook connection is missing required callback data.",
+      });
+    }
+
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.redirect(
+        new URL(`/auth/login?next=${encodeURIComponent("/experiments")}&error=${encodeURIComponent("Sign in again to finish Outlook connection.")}`, req.url)
+      );
+    }
+    if (state !== user.id) {
+      return redirectToExperiments({
+        calendar: "error",
+        provider: "outlook",
+        msg: "Outlook connection could not be verified for this account.",
+      });
+    }
 
     const tokens = await exchangeOutlookCalendarCode(code);
     const outlookEmail = await getOutlookCalendarEmail(tokens.access_token);
     const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
 
-    const supabase = createServiceClient();
     const { error: dbError } = await supabase
       .from("outlook_calendar_tokens")
       .upsert({
-        user_id: state,
+        user_id: user.id,
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_at: expiresAt,
@@ -29,11 +63,23 @@ export async function GET(req: NextRequest) {
       }, { onConflict: "user_id" });
     if (dbError) {
       console.error(dbError);
-      return NextResponse.redirect(new URL("/experiments?calendar=error&msg=db_error", req.url));
+      return redirectToExperiments({
+        calendar: "error",
+        provider: "outlook",
+        msg: "Outlook connection could not be saved. Please try again.",
+      });
     }
-    return NextResponse.redirect(new URL("/experiments?calendar=connected", req.url));
+    return redirectToExperiments({
+      calendar: "connected",
+      provider: "outlook",
+      msg: "Outlook Calendar connected.",
+    });
   } catch (err) {
     console.error("Outlook Calendar callback error:", err);
-    return NextResponse.redirect(new URL("/experiments?calendar=error&msg=exchange_failed", req.url));
+    return redirectToExperiments({
+      calendar: "error",
+      provider: "outlook",
+      msg: "Outlook connection failed during authorization.",
+    });
   }
 }

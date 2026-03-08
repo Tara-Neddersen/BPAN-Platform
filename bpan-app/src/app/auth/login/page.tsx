@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { AuthShell } from "@/components/auth/auth-shell";
@@ -9,7 +9,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export default function LoginPage() {
+function LoginPageContent() {
+  const searchParams = useSearchParams();
+  const requestedNext = searchParams.get("next");
+  const nextPath =
+    requestedNext && requestedNext.startsWith("/") && !requestedNext.startsWith("//")
+      ? requestedNext
+      : "/dashboard";
+  const callbackError = searchParams.get("error");
+  const callbackErrorMessage = callbackError ? callbackError.replace(/\+/g, " ") : null;
   const hasSupabaseEnv = Boolean(
     process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   );
@@ -41,7 +49,7 @@ export default function LoginPage() {
         setError(error.message);
         setLoading(false);
       } else {
-        router.push("/dashboard");
+        router.push(nextPath);
         router.refresh();
       }
     } catch (err) {
@@ -92,6 +100,11 @@ export default function LoginPage() {
           {error && (
             <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
           )}
+          {!error && callbackErrorMessage && (
+            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {callbackErrorMessage}
+            </p>
+          )}
           <Button
             type="submit"
             className="h-11 w-full rounded-xl bg-[linear-gradient(135deg,#5aa5bb,#3d8397)] text-white shadow-[0_10px_20px_-12px_rgba(45,110,128,0.8)] hover:opacity-95"
@@ -119,5 +132,13 @@ export default function LoginPage() {
         )}
       </div>
     </AuthShell>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageContent />
+    </Suspense>
   );
 }

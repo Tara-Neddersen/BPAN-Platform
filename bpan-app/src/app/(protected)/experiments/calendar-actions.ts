@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
+import { notifyCalendarConflicts } from "@/lib/automation-workflows";
 
 type CalendarEventInput = {
   title: string;
@@ -31,6 +32,7 @@ function revalidateCalendarSurfaces() {
   revalidatePath("/experiments");
   revalidatePath("/dashboard");
   revalidatePath("/colony");
+  revalidatePath("/tasks");
 }
 
 export async function createWorkspaceCalendarEvent(input: CalendarEventInput) {
@@ -59,6 +61,16 @@ export async function createWorkspaceCalendarEvent(input: CalendarEventInput) {
     .single();
 
   if (error) return { error: error.message };
+  await notifyCalendarConflicts({
+    supabase,
+    userId: user.id,
+    eventId: String(data.id),
+    title,
+    startAt: input.startAt,
+    endAt: input.endAt || null,
+    status: "scheduled",
+    location: input.location || null,
+  });
   revalidateCalendarSurfaces();
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true, id: data.id as string };
@@ -80,12 +92,25 @@ export async function updateWorkspaceCalendarEvent(
   if (patch.status !== undefined) update.status = patch.status;
   if (patch.metadata !== undefined) update.metadata = patch.metadata || {};
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("workspace_calendar_events")
     .update(update)
     .eq("id", id)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .select("id,title,start_at,end_at,status,location")
+    .single();
   if (error) return { error: error.message };
+
+  await notifyCalendarConflicts({
+    supabase,
+    userId: user.id,
+    eventId: String(data.id),
+    title: String(data.title || "Untitled"),
+    startAt: String(data.start_at),
+    endAt: data.end_at ? String(data.end_at) : null,
+    status: data.status ? String(data.status) : null,
+    location: data.location ? String(data.location) : null,
+  });
 
   revalidateCalendarSurfaces();
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
@@ -117,15 +142,28 @@ export async function moveWorkspaceCalendarEvent(id: string, targetDate: string)
     newEnd = new Date(newStart.getTime() + diffMs).toISOString();
   }
 
-  const { error } = await supabase
+  const { data: movedEvent, error } = await supabase
     .from("workspace_calendar_events")
     .update({
       start_at: newStart.toISOString(),
       end_at: newEnd,
     })
     .eq("id", id)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .select("id,title,start_at,end_at,status,location")
+    .single();
   if (error) return { error: error.message };
+
+  await notifyCalendarConflicts({
+    supabase,
+    userId: user.id,
+    eventId: String(movedEvent.id),
+    title: String(movedEvent.title || "Untitled"),
+    startAt: String(movedEvent.start_at),
+    endAt: movedEvent.end_at ? String(movedEvent.end_at) : null,
+    status: movedEvent.status ? String(movedEvent.status) : null,
+    location: movedEvent.location ? String(movedEvent.location) : null,
+  });
 
   revalidateCalendarSurfaces();
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
@@ -145,4 +183,3 @@ export async function deleteWorkspaceCalendarEvent(id: string) {
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
-

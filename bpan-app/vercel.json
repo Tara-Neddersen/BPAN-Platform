@@ -8,6 +8,10 @@
     {
       "path": "/api/calendar/auto-sync",
       "schedule": "15 9 * * *"
+    },
+    {
+      "path": "/api/sheets/google/auto-sync",
+      "schedule": "30 10 * * *"
     }
   ]
 }

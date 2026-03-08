@@ -1,0 +1,61 @@
+# Orchestrator routing and gating overrides.
+# Any field omitted here falls back to built-in defaults.
+
+mode: auto
+transport: command
+send_cmd_template: "python3 /Users/tahouranedaee/Desktop/BPAN-Platform/automation/tools/send_prompt.py --agent {agent_id} --file {prompt_file} --outbox-id {outbox_id} --reason {reason}"
+
+dependencies:
+  "2": [1]
+  "5": [1]
+  "3": [2]
+  "4": [2]
+  "6": [1, 5]
+  "7": [6]
+  "8": [1]
+  "9": [1]
+
+severity:
+  priority:
+    P1: 1
+    P2: 2
+    P3: 3
+    NONE: 4
+  defer_p2_when_p1_open: true
+
+deploy_gate:
+  qa_agent_id: 10
+  migration_verifier_agent_id: 8
+  deploy_target_agent_id: 12
+  migration_clean_any_keywords:
+    - latest migration pass
+    - applied cleanly
+    - without sql apply errors
+    - remote database is up to date
+    - migration parity
+
+approval_rules:
+  deployment_prompts: false
+  destructive_keywords: false
+  cross_scope_reassignment: false
+
+retry_policy:
+  max_retries: 3
+  base_delay_seconds: 10
+  max_delay_seconds: 300
+
+dedupe_window_seconds: 1800
+
+high_risk_keywords:
+  - delete
+  - drop
+  - reset
+  - truncate
+
+qa_retest_followup_keywords:
+  - retest
+  - re-test
+  - fix attempt
+  - after fix
+  - post-fix
+  - verified

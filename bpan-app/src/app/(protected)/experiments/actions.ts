@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
+import { notifyProtocolChange, notifyReagentStock } from "@/lib/automation-workflows";
 
 function parseFileLinks(formData: FormData) {
   const raw = (formData.get("file_links") as string) || "";
@@ -279,6 +280,15 @@ export async function updateProtocol(formData: FormData) {
     steps = [];
   }
 
+  const { data: existingProtocol, error: existingProtocolError } = await supabase
+    .from("protocols")
+    .select("title,description,category,steps")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .single();
+
+  if (existingProtocolError) throw new Error(existingProtocolError.message);
+
   const { error } = await supabase
     .from("protocols")
     .update({ title, description, category, steps, figure_links: figureLinks, file_links: fileLinks })
@@ -286,7 +296,25 @@ export async function updateProtocol(formData: FormData) {
     .eq("user_id", user.id);
 
   if (error) throw new Error(error.message);
+  await notifyProtocolChange({
+    supabase,
+    userId: user.id,
+    protocolId: id,
+    previous: {
+      title: String(existingProtocol?.title || ""),
+      description: (existingProtocol?.description as string | null) || null,
+      category: (existingProtocol?.category as string | null) || null,
+      steps: existingProtocol?.steps ?? [],
+    },
+    next: {
+      title,
+      description,
+      category,
+      steps,
+    },
+  });
   revalidatePath("/experiments");
+  revalidatePath("/tasks");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
@@ -328,21 +356,34 @@ export async function createReagent(formData: FormData) {
   const storageLocation = (formData.get("storage_location") as string) || null;
   const notes = (formData.get("notes") as string) || null;
 
-  const { error } = await supabase.from("reagents").insert({
-    user_id: user.id,
-    name,
-    catalog_number: catalogNumber,
-    supplier,
-    lot_number: lotNumber,
-    quantity,
-    unit,
-    expiration_date: expirationDate || null,
-    storage_location: storageLocation,
-    notes,
-  });
+  const { data, error } = await supabase
+    .from("reagents")
+    .insert({
+      user_id: user.id,
+      name,
+      catalog_number: catalogNumber,
+      supplier,
+      lot_number: lotNumber,
+      quantity,
+      unit,
+      expiration_date: expirationDate || null,
+      storage_location: storageLocation,
+      notes,
+    })
+    .select("id")
+    .single();
 
-  if (error) throw new Error(error.message);
+  if (error || !data?.id) throw new Error(error?.message || "Failed to create reagent.");
+  await notifyReagentStock({
+    supabase,
+    userId: user.id,
+    reagentId: String(data.id),
+    name,
+    quantity,
+    reorderThreshold: null,
+  });
   revalidatePath("/experiments");
+  revalidatePath("/tasks");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
@@ -365,6 +406,15 @@ export async function updateReagent(formData: FormData) {
   const storageLocation = (formData.get("storage_location") as string) || null;
   const notes = (formData.get("notes") as string) || null;
 
+  const { data: existingReagent, error: existingReagentError } = await supabase
+    .from("reagents")
+    .select("name,quantity")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .single();
+
+  if (existingReagentError) throw new Error(existingReagentError.message);
+
   const { error } = await supabase
     .from("reagents")
     .update({
@@ -382,7 +432,17 @@ export async function updateReagent(formData: FormData) {
     .eq("user_id", user.id);
 
   if (error) throw new Error(error.message);
+  await notifyReagentStock({
+    supabase,
+    userId: user.id,
+    reagentId: id,
+    name,
+    quantity,
+    previousQuantity: typeof existingReagent?.quantity === "number" ? existingReagent.quantity : null,
+    reorderThreshold: null,
+  });
   revalidatePath("/experiments");
+  revalidatePath("/tasks");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
