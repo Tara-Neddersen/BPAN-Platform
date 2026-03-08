@@ -436,12 +436,16 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
                         <button
                           key={`${item.id}-${option}`}
                           type="button"
-                          onClick={() => void ask(
-                            item.actionPlan.kind === "clarification_required"
-                            && item.actionPlan.title.toLowerCase().includes("duration")
-                              ? `${item.question} for ${option}`
-                              : `${item.question}\nSelected equipment: ${option}`,
-                          )}
+                          onClick={() => {
+                            const isDurationPrompt =
+                              item.actionPlan?.kind === "clarification_required"
+                              && item.actionPlan.title.toLowerCase().includes("duration");
+                            return void ask(
+                              isDurationPrompt
+                                ? `${item.question} for ${option}`
+                                : `${item.question}\nSelected equipment: ${option}`,
+                            );
+                          }}
                           disabled={busy}
                           className="rounded-full border border-cyan-300 bg-cyan-100 px-2 py-0.5 text-[10px] text-cyan-900 hover:bg-cyan-200 disabled:opacity-60"
                         >
