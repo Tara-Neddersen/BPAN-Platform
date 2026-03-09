@@ -352,6 +352,7 @@ export async function updateLabMemberDisplayName(formData: FormData) {
   }
 
   revalidatePath("/labs");
+  revalidatePath("/labs/chat");
 }
 
 export async function updateLabMemberRole(formData: FormData) {

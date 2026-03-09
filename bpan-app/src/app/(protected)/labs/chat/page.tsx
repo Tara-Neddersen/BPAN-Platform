@@ -57,9 +57,28 @@ function classifyThreadType({
   participantUserIds: string[];
   currentUserId: string;
 }): "all_lab" | "dm" | "group" {
-  if (thread.recipient_scope !== "participants") return "all_lab";
+  if (participantUserIds.length === 0 && thread.recipient_scope !== "participants") return "all_lab";
   const others = participantUserIds.filter((id) => id !== currentUserId);
   return others.length <= 1 ? "dm" : "group";
+}
+
+function getParticipantThreadTitle({
+  participantUserIds,
+  currentUserId,
+  authorLabelById,
+}: {
+  participantUserIds: string[];
+  currentUserId: string;
+  authorLabelById: Map<string, string>;
+}) {
+  const others = participantUserIds.filter((id) => id !== currentUserId);
+  const labels = others
+    .map((id) => authorLabelById.get(id) || "Lab member")
+    .filter((label) => label.trim().length > 0);
+
+  if (labels.length === 0) return "Direct message";
+  if (labels.length === 1) return labels[0];
+  return `Group: ${labels.join(", ")}`;
 }
 
 export default async function LabsChatPage() {
@@ -229,7 +248,16 @@ export default async function LabsChatPage() {
     .map((thread) => {
       const threadMessages = messagesByThreadId.get(thread.id) || [];
       const participantUserIds = [...new Set(participantIdsByThreadId.get(thread.id) || [])];
+      const effectiveRecipientScope: "lab" | "participants" =
+        participantUserIds.length > 0 ? "participants" : thread.recipient_scope;
       const isGeneral = isGeneralThread(thread);
+      const uniqueOtherAuthorIds = [
+        ...new Set(
+          threadMessages
+            .map((msg) => msg.author_user_id)
+            .filter((authorId): authorId is string => Boolean(authorId) && authorId !== user.id),
+        ),
+      ];
       const threadType = classifyThreadType({
         thread,
         participantUserIds,
@@ -244,10 +272,19 @@ export default async function LabsChatPage() {
 
       return {
         id: thread.id,
-        title: normalizeSubject(thread.subject),
+        title:
+          effectiveRecipientScope === "participants"
+            ? getParticipantThreadTitle({
+                participantUserIds,
+                currentUserId: user.id,
+                authorLabelById,
+              })
+            : (!isGeneral && uniqueOtherAuthorIds.length === 1
+                ? authorLabelById.get(uniqueOtherAuthorIds[0]) || normalizeSubject(thread.subject)
+                : normalizeSubject(thread.subject)),
         isGeneral,
         threadType,
-        recipientScope: thread.recipient_scope,
+        recipientScope: effectiveRecipientScope,
         participantUserIds,
         participantLabels: participantUserIds
           .filter((participantUserId) => participantUserId !== user.id)
