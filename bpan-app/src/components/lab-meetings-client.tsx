@@ -246,6 +246,11 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
   const [boardFilter, setBoardFilter] = useState<"all" | "open" | "completed">("open");
   const [categoryFilter, setCategoryFilter] = useState<"all" | "general" | "inspection">("all");
   const [search, setSearch] = useState("");
+  const [manualActionMeetingId, setManualActionMeetingId] = useState(initialMeetings[0]?.id ?? "");
+  const [manualActionText, setManualActionText] = useState("");
+  const [manualActionDetails, setManualActionDetails] = useState("");
+  const [manualActionCategory, setManualActionCategory] = useState<"general" | "inspection">("general");
+  const [manualActionAssigneeMemberId, setManualActionAssigneeMemberId] = useState("");
   const [extractDraft, setExtractDraft] = useState<ExtractedActionDraft[]>([]);
   const insertedDictationPrefixRef = useRef(false);
 
@@ -257,6 +262,17 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
     mediaQuery.addEventListener("change", apply);
     return () => mediaQuery.removeEventListener("change", apply);
   }, []);
+
+  useEffect(() => {
+    if (meetings.length === 0) {
+      setManualActionMeetingId("");
+      return;
+    }
+    const stillExists = meetings.some((meeting) => meeting.id === manualActionMeetingId);
+    if (!manualActionMeetingId || !stillExists) {
+      setManualActionMeetingId(meetings[0]?.id ?? "");
+    }
+  }, [manualActionMeetingId, meetings]);
 
   function isMissingMeetingsTableError(error: unknown) {
     const message = error instanceof Error ? error.message : String(error ?? "");
@@ -589,6 +605,50 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
     }
   }
 
+  async function createManualActionItem() {
+    const text = manualActionText.trim();
+    if (!manualActionMeetingId) {
+      toast.error("Select a meeting first.");
+      return;
+    }
+    if (!text) {
+      toast.error("Action item text is required.");
+      return;
+    }
+
+    const assignee = memberOptions.find((option) => option.memberId === manualActionAssigneeMemberId);
+    try {
+      const rows = await runBusy("create-manual-action", async () => {
+        const formData = new FormData();
+        formData.set("lab_id", activeLabId);
+        formData.set("active_lab_id", activeLabId);
+        formData.set("meeting_id", manualActionMeetingId);
+        formData.set(
+          "items_json",
+          JSON.stringify([
+            {
+              text,
+              details: manualActionDetails.trim() || null,
+              category: manualActionCategory,
+              status: "open",
+              responsibleMemberId: assignee?.memberId || null,
+              responsibleLabel: assignee?.label || null,
+              source: "manual",
+            },
+          ]),
+        );
+        return await createLabMeetingActionItems(formData);
+      });
+
+      setActionItems((prev) => [...(rows as LabMeetingActionItemRecord[]), ...prev]);
+      setManualActionText("");
+      setManualActionDetails("");
+      toast.success("Action item added.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create action item.");
+    }
+  }
+
   function handleSelectMeeting(meetingId: string) {
     setSelectedMeetingId(meetingId);
     if (isNarrowMobile) setMobileView("detail");
@@ -868,6 +928,68 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                 <option value="general">General</option>
                 <option value="inspection">Inspection</option>
               </select>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 sm:p-3">
+            <p className="mb-2 text-xs font-medium text-slate-800">Add action item manually</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <select
+                value={manualActionMeetingId}
+                onChange={(event) => setManualActionMeetingId(event.target.value)}
+                className="h-9 rounded-md border border-input bg-white px-2 text-xs"
+              >
+                {meetings.length === 0 ? <option value="">No meetings available</option> : null}
+                {meetings.map((meeting) => (
+                  <option key={`manual-action-meeting-${meeting.id}`} value={meeting.id}>
+                    {meeting.title}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={manualActionAssigneeMemberId}
+                onChange={(event) => setManualActionAssigneeMemberId(event.target.value)}
+                className="h-9 rounded-md border border-input bg-white px-2 text-xs"
+              >
+                <option value="">Unassigned</option>
+                {memberOptions.map((member) => (
+                  <option key={`manual-action-member-${member.memberId}`} value={member.memberId}>
+                    {member.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Input
+              value={manualActionText}
+              onChange={(event) => setManualActionText(event.target.value)}
+              placeholder="Action item"
+              className="mt-2 h-9 text-sm"
+            />
+            <Textarea
+              value={manualActionDetails}
+              onChange={(event) => setManualActionDetails(event.target.value)}
+              placeholder="Optional details"
+              rows={2}
+              className="mt-2"
+            />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <select
+                value={manualActionCategory}
+                onChange={(event) => setManualActionCategory(event.target.value === "inspection" ? "inspection" : "general")}
+                className="h-9 rounded-md border border-input bg-white px-2 text-xs"
+              >
+                <option value="general">General</option>
+                <option value="inspection">Inspection</option>
+              </select>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void createManualActionItem()}
+                disabled={busy === "create-manual-action" || meetings.length === 0}
+              >
+                {busy === "create-manual-action" ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-1 h-3.5 w-3.5" />}
+                Add action item
+              </Button>
             </div>
           </div>
 
