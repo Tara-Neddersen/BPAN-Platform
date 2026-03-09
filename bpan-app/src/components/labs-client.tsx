@@ -312,6 +312,21 @@ function normalizeIncomingPanel(panel: string | null | undefined): LabHubSection
   return null;
 }
 
+function normalizeIncomingView(panel: string | null | undefined): LabsViewMode {
+  if (!panel) return "operations";
+  const normalized = panel.trim().toLowerCase();
+  if (
+    normalized === "administration"
+    || normalized === "admin"
+    || normalized === "lab-administration"
+    || normalized === "lab_administration"
+    || normalized === "team"
+  ) {
+    return "administration";
+  }
+  return "operations";
+}
+
 function getMemberPrimaryLabel(member: LabMemberWithIdentity) {
   return (
     member.display_title ||
@@ -414,8 +429,8 @@ export function LabsClient({
   const [selectedInspectionTaskIdByLab, setSelectedInspectionTaskIdByLab] = useState<Record<string, string>>({});
   const [opsPanelPulseKey, setOpsPanelPulseKey] = useState<string | null>(null);
   const effectiveActiveLabId = selectedLabId ?? workspaces[0]?.membership.lab.id ?? null;
+  const labsView = normalizeIncomingView(initialPanel);
   const normalizedInitialPanel = normalizeIncomingPanel(initialPanel);
-  const [labsView] = useState<LabsViewMode>("operations");
 
   function readStoredEvents<T>(key: string): T[] {
     if (typeof window === "undefined") return [];
@@ -1616,7 +1631,7 @@ export function LabsClient({
                 {labsView === "administration" ? (
                 <details
                   id={getTeamDetailsId(workspace.membership.lab.id)}
-                  open={openTeamPoliciesByLab[workspace.membership.lab.id] ?? false}
+                  open={labsView === "administration" || (openTeamPoliciesByLab[workspace.membership.lab.id] ?? false)}
                   onToggle={(event) => {
                     const detailsElement = event.currentTarget as HTMLDetailsElement;
                     setOpenTeamPoliciesByLab((current) => ({
