@@ -145,6 +145,17 @@ export default async function LabsChatPage() {
   }
 
   const threadIds = threads.map((thread) => thread.id);
+  const { data: activeLabMembersData } = await supabase
+    .from("lab_members")
+    .select("user_id,is_active")
+    .eq("lab_id", activeLabId)
+    .eq("is_active", true);
+  const activeLabMemberIds = new Set(
+    ((activeLabMembersData || []) as Array<{ user_id: string | null; is_active?: boolean }>)
+      .map((row) => row.user_id)
+      .filter((id): id is string => Boolean(id)),
+  );
+
   const { data: participantsData } = threadIds.length
     ? await supabase
         .from("message_thread_participants")
@@ -162,6 +173,77 @@ export default async function LabsChatPage() {
     : { data: [] };
 
   const messages = (messagesData || []) as Message[];
+  const messagesByThreadId = new Map<string, Message[]>();
+  for (const message of messages) {
+    const list = messagesByThreadId.get(message.thread_id) || [];
+    list.push(message);
+    messagesByThreadId.set(message.thread_id, list);
+  }
+
+  // Auto-convert legacy "all-lab" one-person chats into participant-scoped threads.
+  // This keeps DM-like threads private and enables title sync from current member names.
+  const legacyThreadConversions = threads
+    .filter((thread) => thread.recipient_scope === "lab" && !isGeneralThread(thread))
+    .map((thread) => {
+      const threadMessages = messagesByThreadId.get(thread.id) || [];
+      const uniqueOtherAuthorIds = [
+        ...new Set(
+          threadMessages
+            .map((msg) => msg.author_user_id)
+            .filter((authorId): authorId is string => Boolean(authorId) && authorId !== user.id),
+        ),
+      ];
+      if (uniqueOtherAuthorIds.length !== 1) return null;
+      const targetUserId = uniqueOtherAuthorIds[0];
+      if (!activeLabMemberIds.has(targetUserId)) return null;
+      return { threadId: thread.id, targetUserId };
+    })
+    .filter((value): value is { threadId: string; targetUserId: string } => Boolean(value));
+
+  if (legacyThreadConversions.length > 0) {
+    const convertedThreadIds = legacyThreadConversions.map((item) => item.threadId);
+    await supabase
+      .from("message_threads")
+      .update({ recipient_scope: "participants" })
+      .in("id", convertedThreadIds);
+
+    const existingParticipantKeySet = new Set(
+      participants.map((row) => `${row.thread_id}:${row.user_id}`),
+    );
+    const participantRowsToInsert: Array<{ thread_id: string; user_id: string; added_by: string }> = [];
+    for (const conversion of legacyThreadConversions) {
+      const participantUserIds = [user.id, conversion.targetUserId];
+      for (const participantUserId of participantUserIds) {
+        const key = `${conversion.threadId}:${participantUserId}`;
+        if (existingParticipantKeySet.has(key)) continue;
+        existingParticipantKeySet.add(key);
+        participantRowsToInsert.push({
+          thread_id: conversion.threadId,
+          user_id: participantUserId,
+          added_by: user.id,
+        });
+      }
+    }
+    if (participantRowsToInsert.length > 0) {
+      await supabase.from("message_thread_participants").insert(participantRowsToInsert);
+    }
+
+    threads = threads.map((thread) =>
+      convertedThreadIds.includes(thread.id)
+        ? { ...thread, recipient_scope: "participants" as const }
+        : thread,
+    );
+    participants.push(
+      ...participantRowsToInsert.map((row) => ({
+        id: `synthetic-${row.thread_id}-${row.user_id}`,
+        thread_id: row.thread_id,
+        user_id: row.user_id,
+        added_by: row.added_by,
+        created_at: new Date().toISOString(),
+      })),
+    );
+  }
+
   const messageIds = messages.map((message) => message.id);
 
   const { data: messageReadsData } = messageIds.length
@@ -237,13 +319,6 @@ export default async function LabsChatPage() {
     participantIdsByThreadId.set(participant.thread_id, list);
   }
 
-  const messagesByThreadId = new Map<string, Message[]>();
-  for (const message of messages) {
-    const list = messagesByThreadId.get(message.thread_id) || [];
-    list.push(message);
-    messagesByThreadId.set(message.thread_id, list);
-  }
-
   const threadItems: ChatThreadItem[] = threads
     .map((thread) => {
       const threadMessages = messagesByThreadId.get(thread.id) || [];
@@ -251,13 +326,6 @@ export default async function LabsChatPage() {
       const effectiveRecipientScope: "lab" | "participants" =
         participantUserIds.length > 0 ? "participants" : thread.recipient_scope;
       const isGeneral = isGeneralThread(thread);
-      const uniqueOtherAuthorIds = [
-        ...new Set(
-          threadMessages
-            .map((msg) => msg.author_user_id)
-            .filter((authorId): authorId is string => Boolean(authorId) && authorId !== user.id),
-        ),
-      ];
       const threadType = classifyThreadType({
         thread,
         participantUserIds,
@@ -279,9 +347,7 @@ export default async function LabsChatPage() {
                 currentUserId: user.id,
                 authorLabelById,
               })
-            : (!isGeneral && uniqueOtherAuthorIds.length === 1
-                ? authorLabelById.get(uniqueOtherAuthorIds[0]) || normalizeSubject(thread.subject)
-                : normalizeSubject(thread.subject)),
+            : normalizeSubject(thread.subject),
         isGeneral,
         threadType,
         recipientScope: effectiveRecipientScope,
