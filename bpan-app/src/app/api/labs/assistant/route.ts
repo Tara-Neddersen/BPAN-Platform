@@ -1494,6 +1494,23 @@ export async function POST(req: NextRequest) {
           });
         }
 
+        const announcementType: "general" | "inspection" =
+          /\binspection\b/i.test(`${actionPlanRaw.title} ${actionPlanRaw.body}`) ? "inspection" : "general";
+        const { data: announcementRow, error: announcementError } = await supabase
+          .from("lab_announcements")
+          .insert({
+            lab_id: labId,
+            type: announcementType,
+            title: actionPlanRaw.title,
+            body: actionPlanRaw.body,
+            created_by: user.id,
+          })
+          .select("id")
+          .single();
+        if (announcementError || !announcementRow?.id) {
+          return NextResponse.json({ error: announcementError?.message || "Failed to post announcement." }, { status: 400 });
+        }
+
         const threadId = await ensureGeneralLabThread(supabase, labId, user.id);
         if (!threadId) {
           return NextResponse.json({ error: "Could not find or create General lab thread." }, { status: 400 });
@@ -1515,6 +1532,7 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: error?.message || "Failed to post announcement." }, { status: 400 });
         }
 
+        citations.push({ kind: "announcement", id: String(announcementRow.id), label: actionPlanRaw.title });
         citations.push({ kind: "thread", id: threadId, label: "General" });
         citations.push({ kind: "message", id: String(msg.id), label: actionPlanRaw.title });
         await logAssistantAction(supabase, {
@@ -1523,16 +1541,17 @@ export async function POST(req: NextRequest) {
           actionKind: actionPlanRaw.kind,
           payload: actionPlanRaw as unknown as Record<string, unknown>,
           outcome: "executed",
-          outcomeMessage: `Posted announcement message ${String(msg.id)}`,
+          outcomeMessage: `Posted announcement ${String(announcementRow.id)} and message ${String(msg.id)}`,
         }).catch(() => undefined);
         const answer = await composeExecutedReply(
           [
             "Execution result: announcement posted",
+            `Announcement id: ${String(announcementRow.id)}`,
             `Thread: General`,
             `Title: ${actionPlanRaw.title}`,
             `Message id: ${String(msg.id)}`,
           ].join("\n"),
-          `Posted announcement to the General lab chat thread: ${actionPlanRaw.title}`,
+          `Posted announcement and shared it in General chat: ${actionPlanRaw.title}`,
         );
 
         return NextResponse.json({
