@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type 
 import { useRouter } from "next/navigation";
 import { Search, Send, MessageSquarePlus, CheckCircle2, Circle, Edit3, Users, UserRound, ChevronLeft, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
 
 export type ChatLabMemberOption = {
   userId: string;
@@ -91,6 +92,7 @@ export function LabsChatClient({
     deleteThread: (formData: FormData) => Promise<{ success?: boolean; error?: string; threadId?: string }>;
   };
 }) {
+  const supabaseRef = useRef(createBrowserClient());
   const [isNarrowMobile, setIsNarrowMobile] = useState(false);
   const [mobileView, setMobileView] = useState<"threads" | "chat">("threads");
   const [threadItems, setThreadItems] = useState<ChatThreadItem[]>(threads);
@@ -108,6 +110,14 @@ export function LabsChatClient({
   const [isPending, startTransition] = useTransition();
   const autoReadThreadIdsRef = useRef<Set<string>>(new Set());
   const router = useRouter();
+
+  useEffect(() => {
+    setThreadItems(threads);
+  }, [threads]);
+
+  useEffect(() => {
+    setMessageItems(messages);
+  }, [messages]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -497,6 +507,94 @@ export function LabsChatClient({
     }
     return map;
   }, [messageItems]);
+
+  useEffect(() => {
+    const supabase = supabaseRef.current;
+    const threadIds = new Set(threadItems.map((thread) => thread.id));
+    if (threadIds.size === 0) return;
+
+    const channel = supabase
+      .channel(`labs-chat-live-${activeLabId}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "messages" },
+        (payload) => {
+          const row = payload.new as Record<string, unknown>;
+          const id = String(row.id || "");
+          const threadId = String(row.thread_id || "");
+          if (!id || !threadId || !threadIds.has(threadId)) return;
+          const authorUserId = row.author_user_id ? String(row.author_user_id) : null;
+          const createdAt = String(row.created_at || new Date().toISOString());
+          const updatedAt = String(row.updated_at || createdAt);
+          const body = String(row.body || "");
+
+          setMessageItems((prev) => {
+            if (prev.some((message) => message.id === id)) return prev;
+            const authorLabel =
+              authorUserId === currentUserId
+                ? "You"
+                : memberById.get(authorUserId || "")?.label || "Lab member";
+            return [
+              ...prev,
+              {
+                id,
+                threadId,
+                body,
+                authorUserId,
+                authorLabel,
+                createdAt,
+                updatedAt,
+                isOwn: authorUserId === currentUserId,
+                isRead: authorUserId === currentUserId || threadId === activeThreadId,
+              },
+            ];
+          });
+
+          setThreadItems((prev) =>
+            prev.map((thread) =>
+              thread.id === threadId
+                ? {
+                    ...thread,
+                    messageCount: thread.messageCount + 1,
+                    lastMessageAt: createdAt,
+                    unreadCount:
+                      authorUserId !== currentUserId && threadId !== activeThreadId
+                        ? thread.unreadCount + 1
+                        : thread.unreadCount,
+                  }
+                : thread,
+            ),
+          );
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "messages" },
+        (payload) => {
+          const row = payload.new as Record<string, unknown>;
+          const id = String(row.id || "");
+          if (!id) return;
+          const body = String(row.body || "");
+          const updatedAt = String(row.updated_at || new Date().toISOString());
+          setMessageItems((prev) =>
+            prev.map((message) =>
+              message.id === id
+                ? {
+                    ...message,
+                    body,
+                    updatedAt,
+                  }
+                : message,
+            ),
+          );
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [activeLabId, activeThreadId, currentUserId, memberById, threadItems]);
 
   function handleSelectThread(threadId: string) {
     setSelectedThreadId(threadId);
