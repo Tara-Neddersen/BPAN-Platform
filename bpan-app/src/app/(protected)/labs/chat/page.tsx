@@ -240,6 +240,7 @@ export default async function LabsChatPage() {
         user_id: row.user_id,
         added_by: row.added_by,
         created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       })),
     );
   }
