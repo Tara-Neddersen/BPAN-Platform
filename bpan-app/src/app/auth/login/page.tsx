@@ -61,7 +61,7 @@ function LoginPageContent() {
 
   return (
     <AuthShell mode="login">
-      <div className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-[0_10px_20px_-16px_rgba(15,23,42,0.35)] sm:p-6">
+      <div className="rounded-2xl border border-white/80 bg-white/84 p-5 shadow-[0_16px_30px_-20px_rgba(15,23,42,0.36)] backdrop-blur-xl sm:p-6">
         <div className="mb-5">
           <h2 className="text-xl font-semibold text-slate-900">Sign in</h2>
           <p className="mt-1 text-sm text-slate-600">Continue to your BPAN dashboard</p>
@@ -107,7 +107,7 @@ function LoginPageContent() {
           )}
           <Button
             type="submit"
-            className="h-11 w-full rounded-xl bg-[linear-gradient(135deg,#5aa5bb,#3d8397)] text-white shadow-[0_10px_20px_-12px_rgba(45,110,128,0.8)] hover:opacity-95"
+            className="h-11 w-full rounded-xl border border-primary/70 bg-primary text-white shadow-[0_14px_30px_-22px_color-mix(in_oklch,var(--primary)_70%,black)] hover:bg-primary/92"
             disabled={loading}
           >
             {loading ? "Signing in..." : hasSupabaseEnv ? "Sign in" : "Sign in (Preview only)"}
@@ -116,7 +116,7 @@ function LoginPageContent() {
 
         <p className="mt-5 text-center text-sm text-slate-600">
           Don&apos;t have an account?{" "}
-          <Link href="/auth/signup" className="font-semibold text-cyan-700 hover:text-cyan-800">
+          <Link href="/auth/signup" className="font-semibold text-primary hover:text-primary/90">
             Sign up
           </Link>
         </p>

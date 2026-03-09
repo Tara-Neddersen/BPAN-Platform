@@ -13,17 +13,17 @@ export function AuthShell({ mode, children }: AuthShellProps) {
   const isLogin = mode === "login";
 
   return (
-    <div className="auth-gradient relative min-h-screen overflow-hidden px-4 py-8 sm:px-6 lg:px-8">
+    <div className="native-preview relative min-h-screen overflow-hidden px-4 py-8 sm:px-6 lg:px-8">
       <div className="pointer-events-none absolute inset-0 opacity-60 [background-image:radial-gradient(rgba(64,112,126,0.08)_1px,transparent_1px)] [background-size:26px_26px]" />
       <div className="relative mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-5xl items-center justify-center">
-        <section className="relative w-full max-w-xl rounded-3xl border border-white/70 bg-white/82 p-4 shadow-[0_20px_60px_-30px_rgba(34,62,77,0.32)] backdrop-blur-xl sm:p-6">
+        <section className="relative w-full max-w-xl rounded-3xl border border-white/75 bg-white/76 p-4 shadow-[0_26px_56px_-34px_rgba(15,23,42,0.38)] backdrop-blur-2xl sm:p-6">
           <div className="space-y-5">
             <div className="space-y-4">
-              <div className="inline-flex items-center gap-3 rounded-2xl border border-slate-200/70 bg-white/85 px-4 py-2 shadow-sm">
+              <div className="inline-flex items-center gap-3 rounded-2xl border border-white/75 bg-white/84 px-4 py-2 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.8)]">
                 <BrandLogo
                   className="h-10 w-10"
                   imageClassName="drop-shadow-[0_4px_8px_rgba(15,23,42,0.12)]"
-                  fallbackClassName="shadow-lg shadow-cyan-900/20"
+                  fallbackClassName="shadow-lg shadow-slate-900/20"
                   alt="BPAN mouse scientist logo"
                 />
                 <div>
@@ -53,7 +53,7 @@ export function AuthShell({ mode, children }: AuthShellProps) {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200/70 bg-white/90 p-2 shadow-sm">
+            <div className="rounded-2xl border border-white/75 bg-white/84 p-2 shadow-[0_10px_28px_-24px_rgba(15,23,42,0.42)]">
               {children}
             </div>
 

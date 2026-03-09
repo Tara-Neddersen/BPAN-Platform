@@ -5,6 +5,7 @@ import { UnifiedSearch } from "@/components/unified-search";
 import { fetchLabShellSummary } from "@/lib/labs";
 import { getRequestedActiveLabId, resolveActiveLabContext } from "@/lib/active-lab-context";
 import { isNotificationRead, isNotificationTask, normalizeTags } from "@/lib/notifications";
+import { PwaBootstrap } from "@/components/pwa-bootstrap";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +41,8 @@ export default async function ProtectedLayout({
     : 0;
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_10%_-10%,rgba(124,196,214,0.14),transparent_35%),radial-gradient(circle_at_100%_0%,rgba(239,210,171,0.12),transparent_38%),linear-gradient(180deg,#f7faf8,#eef6f5)]">
+    <div className="native-app-bg min-h-screen">
+      {user ? <PwaBootstrap /> : null}
       <Nav
         userEmail={user?.email ?? null}
         labMemberships={labSummary?.memberships ?? []}
@@ -48,7 +50,9 @@ export default async function ProtectedLayout({
         unreadNotificationCount={unreadNotificationCount}
       />
       <main className="mx-auto min-h-[calc(100vh-3.5rem)] max-w-[1400px] px-2.5 py-3 pb-20 sm:px-6 sm:py-8 sm:pb-8">
-        {children}
+        <div className="native-main-surface min-h-[calc(100vh-7.5rem)] rounded-[1.65rem] px-2 py-2 sm:px-3 sm:py-3">
+          {children}
+        </div>
       </main>
       {user && <AdvisorSidebar />}
       {user && <UnifiedSearch />}

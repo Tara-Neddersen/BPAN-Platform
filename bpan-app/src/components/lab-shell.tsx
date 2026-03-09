@@ -26,11 +26,11 @@ export function LabShell({ summary, activeLab, hasInvalidSelection }: LabShellPr
   const warning = summary?.warning ?? null;
 
   return (
-    <section className="mb-6 rounded-3xl border border-white/80 bg-white/70 px-4 py-4 shadow-[0_16px_32px_-28px_rgba(15,23,42,0.24)] backdrop-blur-xl sm:px-5">
+    <section className="mb-6 rounded-3xl border border-white/75 bg-white/72 px-4 py-4 shadow-[0_22px_40px_-30px_rgba(15,23,42,0.34)] backdrop-blur-2xl sm:px-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="gap-1 border-cyan-200 bg-cyan-50 text-cyan-800">
+            <Badge variant="outline" className="gap-1 border-primary/30 bg-primary/10 text-primary">
               <Building2 className="h-3 w-3" />
               Labs
             </Badge>
@@ -62,7 +62,7 @@ export function LabShell({ summary, activeLab, hasInvalidSelection }: LabShellPr
           </Badge>
           <Link
             href="/labs"
-            className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+            className="inline-flex items-center rounded-full border border-white/80 bg-white/82 px-3 py-1.5 text-sm font-medium text-slate-700 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.8)] transition-colors hover:bg-white"
           >
             Manage labs
           </Link>
@@ -70,12 +70,12 @@ export function LabShell({ summary, activeLab, hasInvalidSelection }: LabShellPr
       </div>
 
       {warning ? (
-        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div className="mt-3 rounded-2xl border border-amber-200/70 bg-amber-50/85 px-4 py-3 text-sm text-amber-900 backdrop-blur-sm">
           {warning}
         </div>
       ) : null}
       {hasInvalidSelection ? (
-        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div className="mt-3 rounded-2xl border border-amber-200/70 bg-amber-50/85 px-4 py-3 text-sm text-amber-900 backdrop-blur-sm">
           Your previous lab selection is no longer available. Choose another lab from the switcher.
         </div>
       ) : null}

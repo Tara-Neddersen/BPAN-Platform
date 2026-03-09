@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NotificationsCenterClient, type NotificationItem } from "@/components/notifications-center-client";
 import { ChatNotificationPreferencesCard } from "@/components/chat-notification-preferences-card";
+import { WebPushSettingsCard } from "@/components/web-push-settings-card";
 import {
   bulkDismissNotifications,
   bulkMarkNotificationsRead,
@@ -119,6 +120,7 @@ export default async function NotificationsPage() {
 
   return (
     <div className="page-shell">
+      <WebPushSettingsCard />
       <ChatNotificationPreferencesCard
         initialPreferences={chatNotificationPreferences}
         smsFeatureEnabled={smsFeatureEnabled}

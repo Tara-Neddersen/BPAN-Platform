@@ -56,6 +56,11 @@ const SECONDARY_NAV_ITEMS: NavItem[] = [
     label: "Lab chat",
   },
   {
+    type: "link",
+    href: "/labs?panel=administration",
+    label: "Lab administration",
+  },
+  {
     type: "group",
     label: "Literature",
     basePaths: ["/dashboard", "/library", "/scout"],
@@ -134,7 +139,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
         return (
             <DropdownMenuSub key={item.label}>
               <DropdownMenuSubTrigger>{item.label}</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-56 border-white/80 bg-white/95 backdrop-blur-xl">
+              <DropdownMenuSubContent className="w-56">
                 {item.items.map((subItem) =>
                   subItem.type === "section" ? (
                     <div key={`${item.label}-${subItem.label}`} className="py-1">
@@ -175,7 +180,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
     });
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-white/70 bg-white/75 backdrop-blur-xl supports-[backdrop-filter]:bg-white/65">
+    <header className="sticky top-0 z-50 w-full border-b border-white/65 bg-white/72 backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58">
       <div className="mx-auto flex h-12 max-w-7xl items-center justify-between gap-2 px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2.5 sm:gap-4">
           {userEmail && (
@@ -192,7 +197,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
             <BrandLogo
               className="h-7 w-7 shrink-0 transition-transform group-hover:scale-[1.03]"
               imageClassName="drop-shadow-[0_4px_8px_rgba(15,23,42,0.12)]"
-              fallbackClassName="text-xs shadow-sm shadow-cyan-900/20 group-hover:shadow-md group-hover:shadow-cyan-900/25"
+              fallbackClassName="text-xs shadow-sm shadow-slate-900/20 group-hover:shadow-md group-hover:shadow-slate-900/25"
               alt="BPAN mouse scientist logo"
             />
             <span className="truncate text-sm font-semibold tracking-tight text-slate-900">BPAN</span>
@@ -201,13 +206,13 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
           {userEmail && (
             <div className="hidden md:block lg:hidden">
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-slate-900">
+                <DropdownMenuTrigger asChild id="nav-mobile-menu-trigger">
+                  <button className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-slate-600 transition-colors hover:bg-white/85 hover:text-slate-900">
                     Menu
                     <ChevronDown className="h-3.5 w-3.5 opacity-60" />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-64 border-white/80 bg-white/95 backdrop-blur-xl">
+                <DropdownMenuContent align="start" className="w-64">
                   {PRIMARY_NAV_ITEMS.map((item) => (
                     <DropdownMenuItem key={item.href} asChild>
                       <Link href={item.href} className="cursor-pointer">
@@ -230,32 +235,32 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`relative whitespace-nowrap rounded-md px-2 py-1.5 text-[13px] font-medium transition-colors ${
+                    className={`relative whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
                       isActive
-                        ? "bg-cyan-100/70 text-cyan-900"
-                        : "text-slate-600 hover:bg-white hover:text-slate-900"
+                        ? "bg-primary/14 text-primary"
+                        : "text-slate-600 hover:bg-white/85 hover:text-slate-900"
                     }`}
                   >
                     {item.label}
-                    {isActive ? <span className="absolute inset-x-2 -bottom-[1px] h-[2px] rounded-full bg-cyan-600" /> : null}
+                    {isActive ? <span className="absolute inset-x-2.5 -bottom-[1px] h-[2px] rounded-full bg-primary/80" /> : null}
                   </Link>
                 );
               })}
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
+                <DropdownMenuTrigger asChild id="nav-desktop-more-trigger">
                   <button
-                    className={`relative inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1.5 text-[13px] font-medium transition-colors ${
+                    className={`relative inline-flex items-center gap-1 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
                       moreIsActive
-                        ? "bg-cyan-100/70 text-cyan-900"
-                        : "text-slate-600 hover:bg-white hover:text-slate-900"
+                        ? "bg-primary/14 text-primary"
+                        : "text-slate-600 hover:bg-white/85 hover:text-slate-900"
                     }`}
                   >
                     More
                     <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-                    {moreIsActive ? <span className="absolute inset-x-2 -bottom-[1px] h-[2px] rounded-full bg-cyan-600" /> : null}
+                    {moreIsActive ? <span className="absolute inset-x-2.5 -bottom-[1px] h-[2px] rounded-full bg-primary/80" /> : null}
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-64 border-white/80 bg-white/95 backdrop-blur-xl">
+                <DropdownMenuContent align="start" className="w-64">
                   {renderSecondaryDropdownItems()}
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -266,9 +271,9 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           {userEmail && <div className="hidden sm:block"><SearchTrigger /></div>}
           {userEmail && (
-            <Button asChild variant="ghost" size="sm" className="relative h-8 w-8 rounded-lg p-0 hover:bg-white/90">
+            <Button asChild variant="ghost" size="sm" className="relative h-8 w-8 rounded-xl border border-transparent p-0 hover:bg-white/88">
               <Link href="/notifications" aria-label="Notifications">
-                <Bell className={`h-4 w-4 ${notificationsActive ? "text-cyan-700" : "text-slate-600"}`} />
+                <Bell className={`h-4 w-4 ${notificationsActive ? "text-primary" : "text-slate-600"}`} />
                 {unreadNotificationCount > 0 ? (
                   <span className="absolute -right-0.5 -top-0.5 inline-flex min-h-[16px] min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold leading-none text-white">
                     {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
@@ -279,15 +284,15 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
           )}
           {userEmail && (
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-8 w-8 rounded-lg p-0 hover:bg-white/90">
-                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-cyan-100 text-cyan-700">
+              <DropdownMenuTrigger asChild id="nav-workspace-trigger">
+                <Button variant="ghost" size="sm" className="h-8 w-8 rounded-xl border border-transparent p-0 hover:bg-white/88">
+                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/15 text-primary">
                     <Building2 className="h-3.5 w-3.5" />
                   </div>
                   <span className="sr-only">{workspaceLabel}</span>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64 border-white/80 bg-white/95 backdrop-blur-xl">
+              <DropdownMenuContent align="end" className="w-64">
                 <DropdownMenuItem disabled>
                   Personal workspace
                 </DropdownMenuItem>
@@ -310,15 +315,15 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
 
           {userEmail ? (
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-8 w-8 rounded-lg p-0 hover:bg-white/90">
-                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-cyan-100 text-cyan-700">
+              <DropdownMenuTrigger asChild id="nav-user-trigger">
+                <Button variant="ghost" size="sm" className="h-8 w-8 rounded-xl border border-transparent p-0 hover:bg-white/88">
+                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/15 text-primary">
                     <User className="h-3.5 w-3.5" />
                   </div>
                   <span className="sr-only">{userEmail}</span>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 border-white/80 bg-white/95 backdrop-blur-xl">
+              <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuItem disabled className="text-xs text-slate-500">
                   {userEmail}
                 </DropdownMenuItem>
@@ -334,10 +339,10 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
             </DropdownMenu>
           ) : (
             <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" asChild className="rounded-lg">
-                <Link href="/auth/login">Sign in</Link>
-              </Button>
-              <Button size="sm" asChild className="rounded-lg shadow-sm shadow-primary/25">
+                <Button variant="ghost" size="sm" asChild className="rounded-xl">
+                  <Link href="/auth/login">Sign in</Link>
+                </Button>
+              <Button size="sm" asChild className="rounded-xl shadow-[0_12px_26px_-18px_color-mix(in_oklch,var(--primary)_75%,black)]">
                 <Link href="/auth/signup">Sign up</Link>
               </Button>
             </div>
@@ -347,7 +352,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
 
       {/* Mobile drawer */}
       {userEmail && mobileOpen && (
-        <div className="sm:hidden border-t border-white/70 bg-white/90 backdrop-blur-lg">
+        <div className="sm:hidden border-t border-white/65 bg-white/86 backdrop-blur-xl">
           <nav className="max-h-[calc(100vh-3rem)] space-y-1.5 overflow-y-auto px-3 py-2">
             <div className="pb-1">
               <SearchTrigger />
@@ -360,10 +365,10 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
                     key={link.href}
                     href={link.href}
                     onClick={() => setMobileOpen(false)}
-                    className={`block rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors ${
+                    className={`block rounded-xl px-2.5 py-2 text-[13px] font-medium transition-colors ${
                       isActive
-                        ? "bg-cyan-100/70 text-cyan-900"
-                        : "text-slate-700 hover:bg-white hover:text-slate-900"
+                        ? "bg-primary/14 text-primary"
+                        : "text-slate-700 hover:bg-white/88 hover:text-slate-900"
                     }`}
                   >
                     {link.label}
@@ -371,7 +376,7 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
                 );
               })}
             </div>
-            <details className="rounded-lg border border-slate-200 bg-white/80">
+            <details className="rounded-xl border border-white/70 bg-white/78 backdrop-blur-md">
               <summary className="cursor-pointer list-none px-2.5 py-2 text-[13px] font-medium text-slate-700">
                 More
               </summary>
@@ -383,10 +388,10 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
                       key={link.href}
                       href={link.href}
                       onClick={() => setMobileOpen(false)}
-                      className={`block rounded-md px-2 py-1.5 text-[13px] transition-colors ${
+                      className={`block rounded-lg px-2 py-1.5 text-[13px] transition-colors ${
                         isActive
-                          ? "bg-cyan-100/70 text-cyan-900"
-                          : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                          ? "bg-primary/14 text-primary"
+                          : "text-slate-600 hover:bg-white/88 hover:text-slate-900"
                       }`}
                     >
                       {link.mobileLabel}
@@ -398,10 +403,10 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
             <Link
               href="/notifications"
               onClick={() => setMobileOpen(false)}
-              className={`block rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors ${
+              className={`block rounded-xl px-2.5 py-2 text-[13px] font-medium transition-colors ${
                 notificationsActive
-                  ? "bg-cyan-100/70 text-cyan-900"
-                  : "text-slate-700 hover:bg-white hover:text-slate-900"
+                  ? "bg-primary/14 text-primary"
+                  : "text-slate-700 hover:bg-white/88 hover:text-slate-900"
               }`}
             >
               Notifications

@@ -24,3 +24,15 @@ public/uploads/
 # Debug
 *.log
 npm-debug.log*
+
+# Local snapshots, traces, backups, and generated artifacts
+.playwright-cli/
+.vercel/
+.claude/worktrees/
+_safety_snapshots/
+bpan-app/backups/
+bpan-app/.playwright-cli/
+bpan-app/supabase/.temp/
+bpan-app/test-results/
+bpan-app/tmp/
+bpan-app/scripts/__pycache__/

@@ -537,7 +537,7 @@ export async function createEquipmentBooking(formData: FormData): Promise<Action
 
     const { data: equipmentRecord, error: equipmentError } = await supabase
       .from("lab_equipment")
-      .select("id,lab_id")
+      .select("id,lab_id,booking_requires_approval")
       .eq("id", equipmentId)
       .maybeSingle();
 
@@ -570,6 +570,9 @@ export async function createEquipmentBooking(formData: FormData): Promise<Action
       return { error: "That time window overlaps an existing active booking." };
     }
 
+    const initialStatus: PlatformBookingStatus =
+      equipmentRecord.booking_requires_approval === true ? "draft" : "confirmed";
+
     const { data: booking, error } = await supabase
       .from("lab_equipment_bookings")
       .insert({
@@ -581,7 +584,7 @@ export async function createEquipmentBooking(formData: FormData): Promise<Action
         notes: normalizeOptionalString(formData.get("notes")),
         starts_at: startsAtIso,
         ends_at: endsAtIso,
-        status: "draft",
+        status: initialStatus,
       })
       .select("id,equipment_id,booked_by,title,starts_at,ends_at,status,task_id,notes")
       .single();
@@ -885,7 +888,7 @@ export async function updateEquipmentBookingStatus(
 
     const { data: equipmentRecord, error: equipmentLookupError } = await supabase
       .from("lab_equipment")
-      .select("id,lab_id")
+      .select("id,lab_id,booking_requires_approval")
       .eq("id", bookingRecord.equipment_id)
       .maybeSingle();
 
@@ -902,6 +905,11 @@ export async function updateEquipmentBookingStatus(
     const isOwner = bookingRecord.booked_by === userId;
     if (!isOwner && !isManagerOrAdmin) {
       return { error: "Only booking owners, lab managers, or admins can change booking status." };
+    }
+
+    const requiresApproval = equipmentRecord.booking_requires_approval === true;
+    if (requiresApproval && status === "confirmed" && !isManagerOrAdmin) {
+      return { error: "Only lab managers or admins can approve this booking." };
     }
 
     const { data: booking, error } = await supabase

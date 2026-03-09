@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { callAI } from "@/lib/ai";
+import {
+  actionPlanSchema,
+  actionPlannerLayerSchema,
+  assistantPostBodySchema,
+  chatHistoryTurnSchema,
+  conversationLayerSchema,
+  citationSchema,
+} from "@/lib/labs-assistant/contracts";
+import { routeLabsAssistantIntent, type LabsAssistantIntent } from "@/lib/labs-assistant/intent-router";
 
 type ReagentRow = {
   id: string;
@@ -36,6 +46,7 @@ type EquipmentRow = {
 type BookingRow = {
   id: string;
   equipment_id: string;
+  booked_by: string | null;
   title: string;
   starts_at: string;
   ends_at: string;
@@ -45,7 +56,7 @@ type BookingRow = {
 type Citation = {
   id: string;
   label: string;
-  kind: "reagent" | "stock_event" | "equipment" | "booking" | "thread" | "message";
+  kind: "reagent" | "stock_event" | "equipment" | "booking" | "thread" | "message" | "announcement" | "shared_task" | "meeting";
 };
 
 type LabMemberOption = {
@@ -60,6 +71,39 @@ type LabNoteSnippet = {
   threadSubject: string | null;
   createdAt: string;
   body: string;
+};
+
+type LabAnnouncementRow = {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  created_at: string;
+};
+
+type LabSharedTaskRow = {
+  id: string;
+  list_type: string;
+  title: string;
+  details: string | null;
+  done: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type LabMeetingRow = {
+  id: string;
+  title: string;
+  meeting_date: string;
+  ai_summary: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ChatHistoryTurn = {
+  question: string;
+  answer: string;
+  citations: Citation[];
 };
 
 type ActionLogRow = {
@@ -144,6 +188,13 @@ type ActionPlan =
       status: "cancelled" | "confirmed" | "completed" | "in_use";
     }
   | {
+      kind: "update_booking_time";
+      bookingId: string;
+      equipmentName: string;
+      startsAt: string;
+      endsAt: string;
+    }
+  | {
       kind: "create_meeting";
       title: string;
       meetingDate: string;
@@ -160,6 +211,7 @@ const HIGH_IMPACT_ACTIONS = new Set<ActionPlan["kind"]>([
   "remove_reagent",
   "remove_equipment",
   "update_booking_status",
+  "update_booking_time",
   "direct_message",
   "group_message",
   "create_group_chat",
@@ -169,254 +221,55 @@ function requiresConfirmation(action: ActionPlan) {
   return HIGH_IMPACT_ACTIONS.has(action.kind);
 }
 
-function normalizeName(input: string) {
-  return input.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function normalizeWordsToDigits(input: string) {
-  return input
-    .toLowerCase()
-    .replace(/\bone\b/g, "1")
-    .replace(/\btwo\b/g, "2")
-    .replace(/\bthree\b/g, "3")
-    .replace(/\bfour\b/g, "4")
-    .replace(/\bfive\b/g, "5")
-    .replace(/\bsix\b/g, "6")
-    .replace(/\bseven\b/g, "7")
-    .replace(/\beight\b/g, "8")
-    .replace(/\bnine\b/g, "9")
-    .replace(/\bten\b/g, "10");
-}
-
-function tokenizeName(input: string) {
-  return normalizeWordsToDigits(input)
-    .replace(/[^a-z0-9]+/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-}
-
-function levenshtein(a: string, b: string) {
-  if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  const dp = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0));
-  for (let i = 0; i <= a.length; i += 1) dp[i][0] = i;
-  for (let j = 0; j <= b.length; j += 1) dp[0][j] = j;
-  for (let i = 1; i <= a.length; i += 1) {
-    for (let j = 1; j <= b.length; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,
-        dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + cost,
-      );
-    }
-  }
-  return dp[a.length][b.length];
-}
-
-function fuzzyFindEquipment(question: string, equipment: EquipmentRow[]) {
-  const qTokens = tokenizeName(question);
-  if (qTokens.length === 0 || equipment.length === 0) return [];
-  const scored = equipment.map((item) => {
-    const eTokens = tokenizeName(item.name);
-    let score = 0;
-    for (const eToken of eTokens) {
-      if (eToken.length < 2) continue;
-      for (const qToken of qTokens) {
-        if (qToken === eToken) {
-          score += 3;
-          break;
-        }
-        if (qToken.length >= 4 && eToken.length >= 4 && levenshtein(qToken, eToken) <= 1) {
-          score += 2;
-          break;
-        }
-      }
-    }
-    return { item, score };
-  });
-  const best = scored.reduce((max, current) => Math.max(max, current.score), 0);
-  if (best < 2) return [];
-  return scored
-    .filter((entry) => entry.score >= best - 1)
-    .sort((a, b) => b.score - a.score)
-    .map((entry) => entry.item)
-    .slice(0, 8);
-}
-
-function resolveEntityByName<T extends { id: string; name: string }>(
-  items: T[],
-  requestedName: string,
-) {
-  const needle = normalizeName(requestedName);
-  if (!needle) return { exact: null as T | null, partial: [] as T[] };
-  const exact = items.find((item) => normalizeName(item.name) === needle) ?? null;
-  if (exact) return { exact, partial: [exact] };
-  const partial = items.filter((item) => normalizeName(item.name).includes(needle));
-  return { exact: null, partial };
-}
-
 function parseActionPlan(raw: unknown): ActionPlan | null {
-  if (!raw || typeof raw !== "object") return null;
-  const payload = raw as Record<string, unknown>;
-  const kind = typeof payload.kind === "string" ? payload.kind : "";
-  switch (kind) {
-    case "create_booking":
-      if (
-        typeof payload.equipmentId !== "string" ||
-        typeof payload.equipmentName !== "string" ||
-        typeof payload.title !== "string" ||
-        typeof payload.startsAt !== "string" ||
-        typeof payload.endsAt !== "string"
-      ) return null;
-      return {
-        kind,
-        equipmentId: payload.equipmentId,
-        equipmentName: payload.equipmentName,
-        title: payload.title,
-        startsAt: payload.startsAt,
-        endsAt: payload.endsAt,
-        notes: typeof payload.notes === "string" ? payload.notes : null,
-      };
-    case "announcement_draft":
-    case "announcement_post":
-      if (typeof payload.title !== "string" || typeof payload.body !== "string") return null;
-      return { kind, title: payload.title, body: payload.body };
-    case "direct_message":
-    case "group_message":
-      if (
-        !Array.isArray(payload.recipientUserIds) ||
-        !Array.isArray(payload.recipientLabels) ||
-        typeof payload.title !== "string" ||
-        typeof payload.body !== "string"
-      ) return null;
-      return {
-        kind,
-        recipientUserIds: payload.recipientUserIds.filter((v): v is string => typeof v === "string"),
-        recipientLabels: payload.recipientLabels.filter((v): v is string => typeof v === "string"),
-        title: payload.title,
-        body: payload.body,
-      };
-    case "create_group_chat":
-      if (
-        !Array.isArray(payload.recipientUserIds) ||
-        !Array.isArray(payload.recipientLabels) ||
-        typeof payload.title !== "string"
-      ) return null;
-      return {
-        kind,
-        recipientUserIds: payload.recipientUserIds.filter((v): v is string => typeof v === "string"),
-        recipientLabels: payload.recipientLabels.filter((v): v is string => typeof v === "string"),
-        title: payload.title,
-      };
-    case "add_reagent":
-      if (typeof payload.name !== "string") return null;
-      return {
-        kind,
-        name: payload.name,
-        quantity: typeof payload.quantity === "number" ? payload.quantity : Number(payload.quantity ?? 0) || 0,
-        unit: typeof payload.unit === "string" ? payload.unit : null,
-        supplier: typeof payload.supplier === "string" ? payload.supplier : null,
-        storageLocation: typeof payload.storageLocation === "string" ? payload.storageLocation : null,
-        notes: typeof payload.notes === "string" ? payload.notes : null,
-      };
-    case "remove_reagent":
-      if (typeof payload.reagentId !== "string" || typeof payload.reagentName !== "string") return null;
-      return { kind, reagentId: payload.reagentId, reagentName: payload.reagentName };
-    case "add_equipment":
-      if (typeof payload.name !== "string") return null;
-      return {
-        kind,
-        name: payload.name,
-        location: typeof payload.location === "string" ? payload.location : null,
-        description: typeof payload.description === "string" ? payload.description : null,
-        bookingRequiresApproval: payload.bookingRequiresApproval === true,
-      };
-    case "remove_equipment":
-      if (typeof payload.equipmentId !== "string" || typeof payload.equipmentName !== "string") return null;
-      return { kind, equipmentId: payload.equipmentId, equipmentName: payload.equipmentName };
-    case "update_booking_status":
-      if (
-        typeof payload.bookingId !== "string" ||
-        typeof payload.equipmentName !== "string" ||
-        (payload.status !== "cancelled" &&
-          payload.status !== "confirmed" &&
-          payload.status !== "completed" &&
-          payload.status !== "in_use")
-      ) return null;
-      return { kind, bookingId: payload.bookingId, equipmentName: payload.equipmentName, status: payload.status };
-    case "create_meeting":
-      if (typeof payload.title !== "string" || typeof payload.meetingDate !== "string") return null;
-      return { kind, title: payload.title, meetingDate: payload.meetingDate };
-    case "clarification_required":
-      if (typeof payload.title !== "string" || typeof payload.body !== "string" || !Array.isArray(payload.options)) return null;
-      return {
-        kind,
-        title: payload.title,
-        body: payload.body,
-        options: payload.options.filter((v): v is string => typeof v === "string"),
-      };
-    default:
-      return null;
-  }
+  const parsed = actionPlanSchema.safeParse(raw);
+  return parsed.success ? (parsed.data as ActionPlan) : null;
 }
 
-function looksLikeLocationQuestion(input: string) {
-  return /\b(where|location|stored|store|shelf|freezer|fridge|rack)\b/i.test(input);
+function parseChatHistory(raw: unknown): ChatHistoryTurn[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => chatHistoryTurnSchema.safeParse(item))
+    .filter((result): result is { success: true; data: ChatHistoryTurn } => result.success)
+    .map((result) => ({
+      question: result.data.question.trim(),
+      answer: result.data.answer.trim(),
+      citations: result.data.citations
+        .map((citation) => citationSchema.safeParse(citation))
+        .filter((citation): citation is { success: true; data: Citation } => citation.success)
+        .map((citation) => citation.data),
+    }))
+    .filter((item) => item.question.length > 0 || item.answer.length > 0)
+    .slice(-12);
 }
 
-function looksLikeArrivalQuestion(input: string) {
-  return /\b(arrive|arrival|eta|when|ordered|order|delivery|delivered|receive|received)\b/i.test(input);
+function looksLikeFollowUpQuestion(input: string) {
+  const q = input.trim().toLowerCase();
+  if (!q) return false;
+  if (q.length <= 20) return true;
+  if (/^(and|also|what about|how about|same|that one|this one|it)\b/.test(q)) return true;
+  if (/^(for|until|from)\b/.test(q)) return true;
+  if (/\b(it|that|this|those|them|same one|same thing|there)\b/.test(q)) return true;
+  return false;
 }
 
-function looksLikeEquipmentQuestion(input: string) {
-  return /\b(equipment|microscope|centrifuge|incubator|hood|book|booking|available|free|calendar)\b/i.test(input);
+function buildContextualQuestion(question: string, history: ChatHistoryTurn[]) {
+  const q = question.trim();
+  if (!q) return q;
+  const latest = [...history].reverse().find((item) => item.question.trim().length > 0);
+  if (!latest) return q;
+  if (!looksLikeFollowUpQuestion(q)) return q;
+  const priorQ = latest.question.trim();
+  const priorA = latest.answer.trim().slice(0, 220);
+  return `${q}\nPrevious user question: ${priorQ}\nPrevious assistant answer: ${priorA}`;
 }
 
-function looksLikeBookingRequest(input: string) {
-  return /\b(book|booking|reserve|schedule)\b/i.test(input);
+function looksLikeCorrectionMessage(input: string) {
+  return /\b(not correct|not right|wrong|doesn'?t sound correct|that is wrong|this is wrong)\b/i.test(input);
 }
 
-function looksLikeAnnouncementRequest(input: string) {
-  return /\b(announcement|announce|post update|lab update|notice)\b/i.test(input);
-}
-
-function looksLikeDraftRequest(input: string) {
-  return /\b(draft|prepare|write)\b/i.test(input);
-}
-
-function looksLikeMessageRequest(input: string) {
-  return /\b(message|dm|direct message|group chat|chat with|tell)\b/i.test(input);
-}
-
-function looksLikeGroupChatCreate(input: string) {
-  return /\b(create|start|open)\b.*\b(group chat|group thread|chat thread)\b/i.test(input);
-}
-
-function looksLikeAddReagent(input: string) {
-  return /\b(add|create|new)\b.*\breagent\b/i.test(input);
-}
-
-function looksLikeRemoveReagent(input: string) {
-  return /\b(remove|delete)\b.*\breagent\b/i.test(input);
-}
-
-function looksLikeAddEquipment(input: string) {
-  return /\b(add|create|new)\b.*\bequipment\b/i.test(input);
-}
-
-function looksLikeRemoveEquipment(input: string) {
-  return /\b(remove|delete)\b.*\bequipment\b/i.test(input);
-}
-
-function looksLikeBookingStatusChange(input: string) {
-  return /\b(cancel|confirm|complete|mark in use)\b.*\bbooking\b/i.test(input);
-}
-
-function looksLikeMeetingCreateRequest(input: string) {
-  return /\b(create|start|schedule|add|open)\b.*\bmeeting\b/i.test(input);
+function hasBookingCitationInHistory(history: ChatHistoryTurn[]) {
+  return history.some((turn) => turn.citations.some((citation) => citation.kind === "booking"));
 }
 
 function findReagentMentions(question: string, reagents: ReagentRow[]) {
@@ -449,40 +302,48 @@ function formatDateTime(value: string | null) {
   });
 }
 
-async function callHuggingFace(prompt: string) {
-  const apiKey = process.env.HUGGINGFACE_API_KEY || process.env.HF_API_KEY;
-  if (!apiKey) return null;
-
-  const model = process.env.HUGGINGFACE_MODEL || "Qwen/Qwen3.5-27B";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
-  let res: Response;
+async function callLabsModel(prompt: string) {
   try {
-    res = await fetch("https://router.huggingface.co/v1/chat/completions", {
+    const text = await callAI(
+      "You are a reliable lab assistant model. Follow instructions exactly. If asked to return JSON only, return valid JSON only.",
+      prompt,
+      900,
+    );
+    if (text) return text;
+  } catch {
+    // fall through to Hugging Face fallback
+  }
+
+  const hfKey = process.env.HUGGINGFACE_API_KEY || process.env.HF_API_KEY;
+  if (!hfKey) return null;
+  const hfModel = process.env.HUGGINGFACE_MODEL || "Qwen/Qwen3.5-27B";
+  try {
+    const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${hfKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 180,
+        model: hfModel,
+        messages: [
+          {
+            role: "system",
+            content: "You are a reliable lab assistant model. Follow instructions exactly. If asked to return JSON only, return valid JSON only.",
+          },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 900,
         temperature: 0.2,
       }),
-      signal: controller.signal,
     });
+    if (!response.ok) return null;
+    const json = await response.json();
+    const content = json?.choices?.[0]?.message?.content;
+    return typeof content === "string" ? content.trim() : null;
   } catch {
-    clearTimeout(timeout);
     return null;
   }
-  clearTimeout(timeout);
-
-  if (!res.ok) return null;
-  const json = await res.json();
-  const content = json?.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content.trim();
-  return null;
 }
 
 function enforceConciseAnswer(answer: string) {
@@ -494,120 +355,67 @@ function enforceConciseAnswer(answer: string) {
   return `${cleaned.slice(0, 320).trimEnd()}...`;
 }
 
-function parseRequestedBookingWindow(question: string, now: Date) {
-  const q = question.toLowerCase();
-  const match = q.match(/\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
-  const minute = match?.[2] ? Number(match[2]) : 0;
-  let hour = match?.[1] ? Number(match[1]) : NaN;
-  const meridiem = match?.[3];
-  if (Number.isFinite(hour)) {
-    if (meridiem === "pm" && hour < 12) hour += 12;
-    if (meridiem === "am" && hour === 12) hour = 0;
+function validateBookingWindow(startsAt: string, endsAt: string, now: Date) {
+  const start = new Date(startsAt);
+  const end = new Date(endsAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return { ok: false as const, error: "Invalid booking time format." };
   }
-
-  const start = new Date(now);
-  if (q.includes("tomorrow")) {
-    start.setDate(start.getDate() + 1);
+  if (end.getTime() <= start.getTime()) {
+    return { ok: false as const, error: "End time must be after start time." };
   }
-  if (q.includes("tonight") && (!Number.isFinite(hour) || hour < 12)) {
-    hour = 19;
+  if (start.getTime() < now.getTime() - 60 * 1000) {
+    return { ok: false as const, error: "Start time cannot be in the past." };
   }
-
-  if (!Number.isFinite(hour)) {
-    const fallbackStart = new Date(now.getTime() + 60 * 60 * 1000);
-    const fallbackEnd = new Date(fallbackStart.getTime() + 60 * 60 * 1000);
-    return { startsAt: fallbackStart.toISOString(), endsAt: fallbackEnd.toISOString() };
+  const durationMs = end.getTime() - start.getTime();
+  if (durationMs > 12 * 60 * 60 * 1000) {
+    return { ok: false as const, error: "Booking duration must be 12 hours or less." };
   }
-
-  start.setHours(hour, Number.isFinite(minute) ? minute : 0, 0, 0);
-  if (start.getTime() <= now.getTime()) {
-    start.setDate(start.getDate() + 1);
-  }
-  const end = new Date(start.getTime() + 60 * 60 * 1000);
-  return { startsAt: start.toISOString(), endsAt: end.toISOString() };
+  return { ok: true as const };
 }
 
-function parseRequestedDurationMinutes(question: string) {
-  const q = question.toLowerCase();
-  const hours = q.match(/for\s+(\d+(?:\.\d+)?)\s*(hour|hours|hr|hrs)\b/);
-  if (hours) {
-    const value = Number(hours[1]);
-    if (Number.isFinite(value) && value > 0) return Math.round(value * 60);
-  }
-  const minutes = q.match(/for\s+(\d+)\s*(minute|minutes|min|mins)\b/);
-  if (minutes) {
-    const value = Number(minutes[1]);
-    if (Number.isFinite(value) && value > 0) return value;
-  }
-  return null;
+function hasBookingConflict(
+  bookings: BookingRow[],
+  startsAt: string,
+  endsAt: string,
+  excludeBookingId?: string,
+) {
+  const startMs = new Date(startsAt).getTime();
+  const endMs = new Date(endsAt).getTime();
+  return bookings.some((booking) => {
+    if (excludeBookingId && booking.id === excludeBookingId) return false;
+    if (booking.status === "cancelled" || booking.status === "completed") return false;
+    const bookingStart = new Date(booking.starts_at).getTime();
+    const bookingEnd = new Date(booking.ends_at).getTime();
+    return startMs < bookingEnd && endMs > bookingStart;
+  });
 }
 
-function inferMeetingDate(question: string) {
-  const q = question.toLowerCase();
-  const explicit = q.match(/\bon\s+(\d{4}-\d{2}-\d{2})\b/);
-  if (explicit?.[1]) return explicit[1];
-  const now = new Date();
-  if (q.includes("tomorrow")) {
-    const d = new Date(now);
-    d.setDate(d.getDate() + 1);
-    return d.toISOString().slice(0, 10);
-  }
-  return now.toISOString().slice(0, 10);
-}
-
-function inferMeetingTitle(question: string) {
-  const cleaned = question
-    .replace(/^(please\s+)?(can you\s+)?/i, "")
-    .replace(/\b(create|start|schedule|add|open)\b\s+(a\s+|new\s+)?(lab\s+)?meeting(\s+(called|titled))?/i, "")
-    .replace(/\bon\s+\d{4}-\d{2}-\d{2}\b/i, "")
-    .replace(/\b(today|tomorrow)\b/i, "")
-    .replace(/[.?!]+$/g, "")
-    .trim();
-  return cleaned.length > 0 ? cleaned : "";
-}
-
-function hasExplicitBookingEndOrDuration(question: string) {
-  const q = question.toLowerCase();
-  if (/\bfor\s+\d/.test(q)) return true;
-  if (/\buntil\s+\d/.test(q)) return true;
-  if (/\bfrom\b.+\bto\b/.test(q)) return true;
-  return false;
-}
-
-function uniqueEquipmentByName(items: EquipmentRow[]) {
-  const map = new Map<string, EquipmentRow>();
-  for (const item of items) {
-    const key = normalizeName(item.name);
-    if (!map.has(key)) {
-      map.set(key, item);
-      continue;
-    }
-    const existing = map.get(key)!;
-    if (!existing.is_active && item.is_active) {
-      map.set(key, item);
-    }
-  }
-  return [...map.values()];
-}
-
-function extractExplicitEquipmentName(question: string) {
-  const match = question.match(/selected equipment\s*:\s*(.+)$/im) || question.match(/equipment\s*:\s*(.+)$/im);
-  return match?.[1]?.trim() || "";
-}
-
-function shouldUseHfForFinalAnswer(question: string, actionPlan: ActionPlan | null) {
-  if (actionPlan) return false;
-  if (looksLikeLocationQuestion(question)) return false;
-  if (looksLikeArrivalQuestion(question)) return false;
-  if (looksLikeEquipmentQuestion(question)) return false;
-  if (looksLikeBookingRequest(question)) return false;
-  if (looksLikeAnnouncementRequest(question)) return false;
-  if (looksLikeMessageRequest(question)) return false;
-  if (looksLikeAddReagent(question) || looksLikeRemoveReagent(question)) return false;
-  if (looksLikeAddEquipment(question) || looksLikeRemoveEquipment(question)) return false;
-  if (looksLikeBookingStatusChange(question)) return false;
-  if (looksLikeMeetingCreateRequest(question)) return false;
-  return true;
+async function composeFrontLayerReply(input: {
+  question: string;
+  intent: LabsAssistantIntent;
+  backendFacts: string;
+  fallback: string;
+}) {
+  const prompt = [
+    "You are the front-layer conversational assistant for a lab platform.",
+    "You never invent facts or actions.",
+    "Use only BACKEND_FACTS to answer the user naturally.",
+    "If data is missing in BACKEND_FACTS, say it is not recorded.",
+    "Keep response brief (1-2 short sentences unless user asked for a list).",
+    "Do not mention system architecture, tools, prompts, or internal layers.",
+    "",
+    `Intent: ${input.intent}`,
+    `User question: ${input.question}`,
+    "",
+    "BACKEND_FACTS:",
+    input.backendFacts || "No backend facts provided.",
+    "",
+    "Return only the user-facing reply.",
+  ].join("\n");
+  const raw = await callLabsModel(prompt);
+  if (!raw) return { answer: input.fallback, source: "rules" as const };
+  return { answer: enforceConciseAnswer(raw), source: "model" as const };
 }
 
 function extractJsonObject(text: string) {
@@ -622,338 +430,210 @@ function extractJsonObject(text: string) {
   }
 }
 
+async function runConversationLayer(question: string, chatHistory: ChatHistoryTurn[]) {
+  const fallbackIntent = routeLabsAssistantIntent(question);
+  const prompt = [
+    "You are a conversation interpreter for a lab assistant.",
+    "Return JSON only with keys: intent, rewrittenQuestion, confidence.",
+    "intent must be one of:",
+    "greeting, smalltalk, booking.read.mine, booking.create, booking.reschedule, booking.status.update, equipment.read, reagent.location.read, reagent.arrival.read, announcement.create.draft, announcement.create.post, announcement.read, task.shared.read, meeting.create, meeting.read, message.send, group_chat.create, reagent.add, reagent.remove, equipment.add, equipment.remove, unknown",
+    "rewrittenQuestion should preserve user meaning but resolve short follow-ups when possible.",
+    "confidence should be between 0 and 1.",
+    `User question: ${question}`,
+    "Recent history:",
+    ...chatHistory.slice(-4).map((turn, i) => `Turn ${i + 1} Q: ${turn.question}\nTurn ${i + 1} A: ${turn.answer.slice(0, 180)}`),
+  ].join("\n");
+  const raw = await callLabsModel(prompt);
+  const parsedRaw = raw ? extractJsonObject(raw) : null;
+  const parsed = conversationLayerSchema.safeParse(parsedRaw);
+  if (!parsed.success) {
+    return {
+      intent: fallbackIntent,
+      rewrittenQuestion: question,
+      confidence: 0.4,
+    };
+  }
+  const fallbackOnLowConfidence = parsed.data.confidence !== undefined && parsed.data.confidence < 0.45;
+  const modelIntent = parsed.data.intent;
+  const fallbackIsGreetingOrSmalltalk = fallbackIntent === "greeting" || fallbackIntent === "smalltalk";
+  const fallbackIsSpecific = fallbackIntent !== "unknown";
+  const modelCollapsedToUnknown = modelIntent === "unknown";
+  const shouldPreferFallbackIntent =
+    fallbackIsGreetingOrSmalltalk
+    || (fallbackIsSpecific && modelCollapsedToUnknown);
+  return {
+    intent: fallbackOnLowConfidence || shouldPreferFallbackIntent ? fallbackIntent : modelIntent,
+    rewrittenQuestion: parsed.data.rewrittenQuestion?.trim() || question,
+    confidence: parsed.data.confidence ?? 0.7,
+  };
+}
+
+async function runActionPlannerLayer(
+  intent: LabsAssistantIntent,
+  question: string,
+  chatHistory: ChatHistoryTurn[],
+) {
+  const actionIntents = new Set<LabsAssistantIntent>([
+    "booking.create",
+    "booking.reschedule",
+    "booking.status.update",
+    "meeting.create",
+    "message.send",
+    "group_chat.create",
+    "reagent.add",
+    "reagent.remove",
+    "equipment.add",
+    "equipment.remove",
+    "announcement.create.draft",
+    "announcement.create.post",
+  ]);
+  if (!actionIntents.has(intent)) return null;
+
+  const prompt = [
+    "You are an action planner extractor for a lab assistant.",
+    "Return JSON only with keys:",
+    "intent, equipmentName, bookingId, startsAtIso, endsAtIso, durationMinutes",
+    `Intent: ${intent}`,
+    `User question: ${question}`,
+    "Recent history:",
+    ...chatHistory.slice(-4).map((turn, i) => `Turn ${i + 1} Q: ${turn.question}\nTurn ${i + 1} A: ${turn.answer.slice(0, 180)}`),
+  ].join("\n");
+  const raw = await callLabsModel(prompt);
+  const parsedRaw = raw ? extractJsonObject(raw) : null;
+  const parsed = actionPlannerLayerSchema.safeParse(parsedRaw);
+  if (!parsed.success) return null;
+  if (parsed.data.intent !== intent) return null;
+  return parsed.data;
+}
+
+async function proposeActionPlanFromModel(
+  question: string,
+  equipment: EquipmentRow[],
+  members: LabMemberOption[],
+  reagents: ReagentRow[],
+  bookingsByEquipment: Map<string, BookingRow[]>,
+  chatHistory: ChatHistoryTurn[],
+) {
+  const equipmentFacts = equipment
+    .slice(0, 80)
+    .map((item) => `- id=${item.id} | name=${item.name} | location=${item.location || "n/a"}`)
+    .join("\n");
+  const reagentFacts = reagents
+    .slice(0, 100)
+    .map((item) => `- id=${item.id} | name=${item.name}`)
+    .join("\n");
+  const memberFacts = members
+    .slice(0, 80)
+    .map((member) => `- userId=${member.userId} | label=${member.label}${member.email ? ` | email=${member.email}` : ""}`)
+    .join("\n");
+  const bookingFacts = [...bookingsByEquipment.values()]
+    .flat()
+    .slice(0, 120)
+    .map((booking) => `- id=${booking.id} | equipmentId=${booking.equipment_id} | startsAt=${booking.starts_at} | endsAt=${booking.ends_at} | status=${booking.status}`)
+    .join("\n");
+  const recentHistory = chatHistory
+    .slice(-6)
+    .map((turn, index) => `Turn ${index + 1} Q: ${turn.question}\nTurn ${index + 1} A: ${turn.answer.slice(0, 180)}`)
+    .join("\n");
+
+  const prompt = [
+    "You are an action planner for a lab assistant backend.",
+    "Decide if the user is asking to perform an operation.",
+    "Return JSON only.",
+    "If no operation is requested, return: {\"kind\":\"none\"}.",
+    "If operation is requested, return one valid ActionPlan JSON with one of these kinds:",
+    "create_booking, announcement_draft, announcement_post, direct_message, group_message, create_group_chat, add_reagent, remove_reagent, add_equipment, remove_equipment, update_booking_status, update_booking_time, create_meeting, clarification_required",
+    "Never invent ids. Use ids only from the provided lists.",
+    "If required details are missing or ambiguous, return clarification_required with title/body/options.",
+    "For direct/group messages and group chat: recipientUserIds and recipientLabels must align to member list.",
+    "For booking update actions: bookingId must exist in BOOKINGS.",
+    "For booking create: equipmentId must exist in EQUIPMENT and include equipmentName.",
+    "",
+    `User question: ${question}`,
+    "",
+    "Recent chat history:",
+    recentHistory || "None.",
+    "",
+    "EQUIPMENT:",
+    equipmentFacts || "None.",
+    "",
+    "REAGENTS:",
+    reagentFacts || "None.",
+    "",
+    "MEMBERS:",
+    memberFacts || "None.",
+    "",
+    "BOOKINGS:",
+    bookingFacts || "None.",
+  ].join("\n");
+
+  const raw = await callLabsModel(prompt);
+  const parsedRaw = raw ? extractJsonObject(raw) : null;
+  if (!parsedRaw || typeof parsedRaw !== "object") return null;
+  if ((parsedRaw as Record<string, unknown>).kind === "none") return null;
+  const parsed = parseActionPlan(parsedRaw);
+  if (!parsed) return null;
+
+  const equipmentById = new Map(equipment.map((item) => [item.id, item]));
+  const reagentById = new Map(reagents.map((item) => [item.id, item]));
+  const memberById = new Map(members.map((member) => [member.userId, member]));
+  const bookingById = new Map([...bookingsByEquipment.values()].flat().map((booking) => [booking.id, booking]));
+
+  if (parsed.kind === "create_booking") {
+    const equip = equipmentById.get(parsed.equipmentId);
+    if (!equip) return null;
+    return { ...parsed, equipmentName: equip.name };
+  }
+  if (parsed.kind === "remove_reagent") {
+    const reagent = reagentById.get(parsed.reagentId);
+    if (!reagent) return null;
+    return { ...parsed, reagentName: reagent.name };
+  }
+  if (parsed.kind === "remove_equipment") {
+    const equip = equipmentById.get(parsed.equipmentId);
+    if (!equip) return null;
+    return { ...parsed, equipmentName: equip.name };
+  }
+  if (parsed.kind === "update_booking_status" || parsed.kind === "update_booking_time") {
+    const booking = bookingById.get(parsed.bookingId);
+    if (!booking) return null;
+    const equipName = equipmentById.get(booking.equipment_id)?.name || parsed.equipmentName;
+    return { ...parsed, equipmentName: equipName };
+  }
+  if (parsed.kind === "direct_message" || parsed.kind === "group_message" || parsed.kind === "create_group_chat") {
+    const matched = parsed.recipientUserIds
+      .map((id) => memberById.get(id))
+      .filter((member): member is LabMemberOption => Boolean(member));
+    const minimum = parsed.kind === "direct_message" ? 1 : 2;
+    if (matched.length < minimum) return null;
+    return {
+      ...parsed,
+      recipientUserIds: matched.map((member) => member.userId),
+      recipientLabels: matched.map((member) => member.label),
+    };
+  }
+
+  return parsed;
+}
+
 async function buildActionPlan(
   question: string,
   equipment: EquipmentRow[],
   members: LabMemberOption[],
   reagents: ReagentRow[],
   bookingsByEquipment: Map<string, BookingRow[]>,
+  _currentUserId: string,
+  chatHistory: ChatHistoryTurn[],
 ): Promise<ActionPlan | null> {
-  const mentionedEquipment = findEquipmentMentions(question, equipment);
-  const mentionedReagents = findReagentMentions(question, reagents);
-
-  if (looksLikeAnnouncementRequest(question) && looksLikeDraftRequest(question)) {
-    const draftPrompt = [
-      "Draft a concise lab announcement.",
-      "Return JSON with keys: title, body.",
-      `Request: ${question}`,
-    ].join("\n");
-    const draft = await callHuggingFace(draftPrompt);
-    const parsed = draft ? extractJsonObject(draft) : null;
-    const title = typeof parsed?.title === "string" ? parsed.title.trim() : "Lab update";
-    const body = typeof parsed?.body === "string" ? parsed.body.trim() : question;
-    return { kind: "announcement_draft", title, body };
-  }
-
-  if (looksLikeAnnouncementRequest(question) && /\b(post|publish|send)\b/i.test(question)) {
-    const draftPrompt = [
-      "Convert this into a clear lab announcement.",
-      "Return JSON with keys: title, body.",
-      `Request: ${question}`,
-    ].join("\n");
-    const draft = await callHuggingFace(draftPrompt);
-    const parsed = draft ? extractJsonObject(draft) : null;
-    const title = typeof parsed?.title === "string" ? parsed.title.trim() : "Lab update";
-    const body = typeof parsed?.body === "string" ? parsed.body.trim() : question;
-    return { kind: "announcement_post", title, body };
-  }
-
-  if (looksLikeBookingRequest(question)) {
-    const explicitEquipmentName = extractExplicitEquipmentName(question);
-    const explicitResolved = explicitEquipmentName
-      ? resolveEntityByName(equipment, explicitEquipmentName)
-      : { exact: null as EquipmentRow | null, partial: [] as EquipmentRow[] };
-    const fuzzyMatches = mentionedEquipment.length > 0 ? mentionedEquipment : fuzzyFindEquipment(question, equipment);
-    const uniqueMatches = uniqueEquipmentByName(fuzzyMatches);
-    if (!explicitResolved.exact && uniqueMatches.length > 1) {
-      return {
-        kind: "clarification_required",
-        title: "Multiple equipment matches",
-        body: "Which equipment did you mean?",
-        options: uniqueMatches.slice(0, 8).map((item) => item.name),
-      };
-    }
-
-    const now = new Date();
-    const parsePrompt = [
-      "Extract booking intent as JSON.",
-      "Return JSON only with keys: equipmentName, title, startsAtIso, endsAtIso, notes.",
-      "Use timezone from the user locale and if missing, choose startsAtIso=now+1h and endsAtIso=startsAtIso+1h.",
-      `Now: ${now.toISOString()}`,
-      `Request: ${question}`,
-    ].join("\n");
-
-    const parsedRaw = await callHuggingFace(parsePrompt);
-    const parsed = parsedRaw ? extractJsonObject(parsedRaw) : null;
-    const parsedEquipmentName = typeof parsed?.equipmentName === "string" ? parsed.equipmentName.trim() : "";
-    const resolvedFromParsed = parsedEquipmentName ? resolveEntityByName(equipment, parsedEquipmentName) : { exact: null, partial: [] };
-    const parsedWindow = parseRequestedBookingWindow(question, now);
-    const equip =
-      explicitResolved.exact ||
-      uniqueMatches[0] ||
-      resolvedFromParsed.exact ||
-      (resolvedFromParsed.partial.length === 1 ? resolvedFromParsed.partial[0] : null);
-    if (!equip) {
-      if (resolvedFromParsed.partial.length > 1) {
-        return {
-          kind: "clarification_required",
-          title: "Equipment not unique",
-          body: `I found multiple matches for "${parsedEquipmentName}". Which one should I use?`,
-          options: resolvedFromParsed.partial.slice(0, 8).map((item) => item.name),
-        };
-      }
-      return null;
-    }
-
-    if (!hasExplicitBookingEndOrDuration(question)) {
-      return {
-        kind: "clarification_required",
-        title: "Booking duration needed",
-        body: `How long should I book ${equip.name} for?`,
-        options: ["30 minutes", "1 hour", "2 hours"],
-      };
-    }
-
-    const startsRaw = typeof parsed?.startsAtIso === "string" ? parsed.startsAtIso : null;
-    const endsRaw = typeof parsed?.endsAtIso === "string" ? parsed.endsAtIso : null;
-
-    const fallbackStart = parsedWindow.startsAt;
-    const requestedDuration = parseRequestedDurationMinutes(question);
-    const fallbackEnd = requestedDuration
-      ? new Date(new Date(fallbackStart).getTime() + requestedDuration * 60 * 1000).toISOString()
-      : parsedWindow.endsAt;
-
-    const starts = startsRaw && !Number.isNaN(new Date(startsRaw).getTime()) ? new Date(startsRaw).toISOString() : fallbackStart;
-    const ends = endsRaw && !Number.isNaN(new Date(endsRaw).getTime()) ? new Date(endsRaw).toISOString() : fallbackEnd;
-
-    const title = typeof parsed?.title === "string" && parsed.title.trim().length > 0
-      ? parsed.title.trim()
-      : `Booking: ${equip.name}`;
-
-    const notes = typeof parsed?.notes === "string" ? parsed.notes.trim() : null;
-
-    return {
-      kind: "create_booking",
-      equipmentId: equip.id,
-      equipmentName: equip.name,
-      title,
-      startsAt: starts,
-      endsAt: ends,
-      notes,
-    };
-  }
-
-  if (looksLikeMeetingCreateRequest(question)) {
-    const title = inferMeetingTitle(question);
-    if (!title) {
-      return {
-        kind: "clarification_required",
-        title: "Meeting title needed",
-        body: "What should I call this meeting?",
-        options: ["Weekly Lab Meeting", "PI Sync", "Project Update"],
-      };
-    }
-    return {
-      kind: "create_meeting",
-      title,
-      meetingDate: inferMeetingDate(question),
-    };
-  }
-
-  if (looksLikeMessageRequest(question) && members.length > 0) {
-    const parserPrompt = [
-      "Extract a chat action from this request as JSON.",
-      "Allowed keys: recipientLabels(array), title(string), body(string).",
-      "Use recipient labels from this list only:",
-      members.map((m) => `- ${m.label}${m.email ? ` (${m.email})` : ""}`).join("\n"),
-      `Request: ${question}`,
-      "If no message intent exists, return {}.",
-    ].join("\n");
-    const raw = await callHuggingFace(parserPrompt);
-    const parsed = raw ? extractJsonObject(raw) : null;
-    const recipientLabelsRaw = Array.isArray(parsed?.recipientLabels)
-      ? (parsed?.recipientLabels as unknown[]).filter((v): v is string => typeof v === "string")
-      : [];
-    const normalizedRecipients = recipientLabelsRaw.map((v) => v.toLowerCase().trim());
-    const matched = members.filter((m) =>
-      normalizedRecipients.some((label) =>
-        m.label.toLowerCase() === label || (m.email ? m.email.toLowerCase() === label : false)
-      )
-    );
-
-    const fallbackMatched = matched.length > 0
-      ? matched
-      : members.filter((m) => question.toLowerCase().includes(m.label.toLowerCase()));
-
-    if (fallbackMatched.length > 0) {
-      const title = typeof parsed?.title === "string" && parsed.title.trim()
-        ? parsed.title.trim()
-        : fallbackMatched.length > 1
-          ? "Group chat"
-          : `DM: ${fallbackMatched[0].label}`;
-      const body = typeof parsed?.body === "string" && parsed.body.trim()
-        ? parsed.body.trim()
-        : question;
-
-      if (fallbackMatched.length === 1) {
-        return {
-          kind: "direct_message",
-          recipientUserIds: [fallbackMatched[0].userId],
-          recipientLabels: [fallbackMatched[0].label],
-          title,
-          body,
-        };
-      }
-
-      return {
-        kind: "group_message",
-        recipientUserIds: fallbackMatched.map((m) => m.userId),
-        recipientLabels: fallbackMatched.map((m) => m.label),
-        title,
-        body,
-      };
-    }
-  }
-
-  if (looksLikeGroupChatCreate(question) && members.length > 0) {
-    const parserPrompt = [
-      "Extract a group chat creation request as JSON.",
-      "Return JSON with keys: recipientLabels(array), title(string).",
-      "Use recipient labels from this list only:",
-      members.map((m) => `- ${m.label}${m.email ? ` (${m.email})` : ""}`).join("\n"),
-      `Request: ${question}`,
-    ].join("\n");
-    const raw = await callHuggingFace(parserPrompt);
-    const parsed = raw ? extractJsonObject(raw) : null;
-    const recipientLabelsRaw = Array.isArray(parsed?.recipientLabels)
-      ? (parsed?.recipientLabels as unknown[]).filter((v): v is string => typeof v === "string")
-      : [];
-    const normalized = recipientLabelsRaw.map((v) => v.toLowerCase().trim());
-    const matched = members.filter((m) => normalized.includes(m.label.toLowerCase()) || (m.email ? normalized.includes(m.email.toLowerCase()) : false));
-    const fallbackMatched = matched.length > 0
-      ? matched
-      : members.filter((m) => question.toLowerCase().includes(m.label.toLowerCase()));
-    if (fallbackMatched.length >= 2) {
-      return {
-        kind: "create_group_chat",
-        recipientUserIds: fallbackMatched.map((m) => m.userId),
-        recipientLabels: fallbackMatched.map((m) => m.label),
-        title: typeof parsed?.title === "string" && parsed.title.trim() ? parsed.title.trim() : "Group chat",
-      };
-    }
-  }
-
-  if (looksLikeAddReagent(question)) {
-    const parsePrompt = [
-      "Extract reagent creation fields as JSON.",
-      "Return JSON keys: name, quantity, unit, supplier, storageLocation, notes.",
-      `Request: ${question}`,
-    ].join("\n");
-    const raw = await callHuggingFace(parsePrompt);
-    const parsed = raw ? extractJsonObject(raw) : null;
-    const name = typeof parsed?.name === "string" ? parsed.name.trim() : "";
-    if (name) {
-      const quantity = typeof parsed?.quantity === "number" ? parsed.quantity : Number(parsed?.quantity ?? 0) || 0;
-      return {
-        kind: "add_reagent",
-        name,
-        quantity,
-        unit: typeof parsed?.unit === "string" ? parsed.unit.trim() : null,
-        supplier: typeof parsed?.supplier === "string" ? parsed.supplier.trim() : null,
-        storageLocation: typeof parsed?.storageLocation === "string" ? parsed.storageLocation.trim() : null,
-        notes: typeof parsed?.notes === "string" ? parsed.notes.trim() : null,
-      };
-    }
-  }
-
-  if (looksLikeRemoveReagent(question)) {
-    if (mentionedReagents.length > 1) {
-      return {
-        kind: "clarification_required",
-        title: "Multiple reagents matched",
-        body: "I found multiple reagent names in your request. Choose one and resend.",
-        options: mentionedReagents.slice(0, 8).map((item) => item.name),
-      };
-    }
-    if (mentionedReagents.length === 0) return null;
-    return {
-      kind: "remove_reagent",
-      reagentId: mentionedReagents[0].id,
-      reagentName: mentionedReagents[0].name,
-    };
-  }
-
-  if (looksLikeAddEquipment(question)) {
-    const parsePrompt = [
-      "Extract equipment creation fields as JSON.",
-      "Return JSON keys: name, location, description, bookingRequiresApproval.",
-      `Request: ${question}`,
-    ].join("\n");
-    const raw = await callHuggingFace(parsePrompt);
-    const parsed = raw ? extractJsonObject(raw) : null;
-    const name = typeof parsed?.name === "string" ? parsed.name.trim() : "";
-    if (name) {
-      return {
-        kind: "add_equipment",
-        name,
-        location: typeof parsed?.location === "string" ? parsed.location.trim() : null,
-        description: typeof parsed?.description === "string" ? parsed.description.trim() : null,
-        bookingRequiresApproval: parsed?.bookingRequiresApproval === true,
-      };
-    }
-  }
-
-  if (looksLikeRemoveEquipment(question)) {
-    if (mentionedEquipment.length > 1) {
-      return {
-        kind: "clarification_required",
-        title: "Multiple equipment matched",
-        body: "I found multiple equipment names in your request. Choose one and resend.",
-        options: mentionedEquipment.slice(0, 8).map((item) => item.name),
-      };
-    }
-    if (mentionedEquipment.length === 0) return null;
-    return {
-      kind: "remove_equipment",
-      equipmentId: mentionedEquipment[0].id,
-      equipmentName: mentionedEquipment[0].name,
-    };
-  }
-
-  if (looksLikeBookingStatusChange(question)) {
-    if (mentionedEquipment.length > 1) {
-      return {
-        kind: "clarification_required",
-        title: "Multiple equipment matched",
-        body: "I found multiple equipment names in your request. Choose one and resend.",
-        options: mentionedEquipment.slice(0, 8).map((item) => item.name),
-      };
-    }
-    if (mentionedEquipment.length === 0) return null;
-    const equip = mentionedEquipment[0];
-    const list = (bookingsByEquipment.get(equip.id) ?? [])
-      .filter((b) => b.status !== "cancelled" && b.status !== "completed")
-      .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
-    const target = list[0];
-    if (target) {
-      const q = question.toLowerCase();
-      const status: "cancelled" | "confirmed" | "completed" | "in_use" =
-        q.includes("cancel")
-          ? "cancelled"
-          : q.includes("confirm")
-          ? "confirmed"
-          : q.includes("in use")
-          ? "in_use"
-          : "completed";
-      return {
-        kind: "update_booking_status",
-        bookingId: target.id,
-        equipmentName: equip.name,
-        status,
-      };
-    }
-  }
-
+  const modelFirstPlan = await proposeActionPlanFromModel(
+    question,
+    equipment,
+    members,
+    reagents,
+    bookingsByEquipment,
+    chatHistory,
+  );
+  if (modelFirstPlan) return modelFirstPlan;
   return null;
 }
 
@@ -991,6 +671,9 @@ function actionPlanPreview(actionPlan: ActionPlan) {
   if (actionPlan.kind === "update_booking_status") {
     return `Ready to set ${actionPlan.equipmentName} booking to "${actionPlan.status}".`;
   }
+  if (actionPlan.kind === "update_booking_time") {
+    return `Ready to move ${actionPlan.equipmentName} booking to ${formatDateTime(actionPlan.startsAt)} - ${formatDateTime(actionPlan.endsAt)}. Click Review Action to confirm.`;
+  }
   if (actionPlan.kind === "create_meeting") {
     return `Ready to create meeting "${actionPlan.title}" on ${actionPlan.meetingDate}. Click Execute to confirm.`;
   }
@@ -1002,14 +685,79 @@ function answerFromStructuredData(
   reagents: ReagentRow[],
   eventsByReagent: Map<string, StockEventRow[]>,
   equipment: EquipmentRow[],
-  bookingsByEquipment: Map<string, BookingRow[]>
+  bookingsByEquipment: Map<string, BookingRow[]>,
+  currentUserId: string,
+  forcedIntent?: LabsAssistantIntent,
 ) {
+  const routedIntent = forcedIntent ?? routeLabsAssistantIntent(question);
   const citations: Citation[] = [];
   const mentioned = findReagentMentions(question, reagents);
   const mentionedEquipment = findEquipmentMentions(question, equipment);
-  const targets = mentioned.length > 0 ? mentioned : reagents.slice(0, 4);
+  const equipmentById = new Map(equipment.map((item) => [item.id, item]));
 
-  if (looksLikeEquipmentQuestion(question) && mentionedEquipment.length > 0) {
+  if (routedIntent === "greeting") {
+    return {
+      answer: "Hey, good to see you. I can chat naturally, and I can also help with bookings, equipment, reagents, meetings, announcements, and shared tasks.",
+      citations,
+    };
+  }
+  if (routedIntent === "smalltalk") {
+    return {
+      answer: "I am doing well, thanks for asking. If you want, we can chat, or I can jump into any lab task for you.",
+      citations,
+    };
+  }
+
+  if (routedIntent === "booking.read.mine") {
+    const now = Date.now();
+    const mineRaw = [...bookingsByEquipment.values()]
+      .flat()
+      .filter((booking) => booking.booked_by === currentUserId)
+      .filter((booking) => booking.status !== "cancelled" && booking.status !== "completed")
+      .filter((booking) => new Date(booking.ends_at).getTime() > now)
+      .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
+    const maxExpectedDurationMs = 12 * 60 * 60 * 1000;
+    const anomalous = mineRaw.filter(
+      (booking) => new Date(booking.ends_at).getTime() - new Date(booking.starts_at).getTime() > maxExpectedDurationMs,
+    );
+    const mine = mineRaw.filter(
+      (booking) => new Date(booking.ends_at).getTime() - new Date(booking.starts_at).getTime() <= maxExpectedDurationMs,
+    );
+
+    if (mine.length === 0 && anomalous.length === 0) {
+      return {
+        answer: "You have no upcoming active bookings recorded.",
+        citations,
+      };
+    }
+    if (mine.length === 0 && anomalous.length > 0) {
+      const anomaly = anomalous[0];
+      const equipmentName = equipmentById.get(anomaly.equipment_id)?.name || "Equipment";
+      citations.push({ kind: "booking", id: anomaly.id, label: anomaly.title || "Booking" });
+      return {
+        answer: `I found an anomalous booking for ${equipmentName} from ${formatDateTime(anomaly.starts_at)} to ${formatDateTime(anomaly.ends_at)}. Please reschedule or delete it in Equipment booking.`,
+        citations,
+      };
+    }
+
+    const top = mine.slice(0, 3);
+    const lines = top.map((booking, index) => {
+      const equipmentName = equipmentById.get(booking.equipment_id)?.name || "Equipment";
+      citations.push({ kind: "booking", id: booking.id, label: booking.title || "Booking" });
+      if (equipmentById.get(booking.equipment_id)) {
+        citations.push({ kind: "equipment", id: booking.equipment_id, label: equipmentName });
+      }
+      const prefix = index === 0 ? "Next" : `Then ${index + 1}`;
+      return `${prefix}: ${equipmentName} from ${formatDateTime(booking.starts_at)} to ${formatDateTime(booking.ends_at)}.`;
+    });
+
+    return {
+      answer: anomalous.length > 0 ? `${lines.join("\n")}\nNote: I excluded ${anomalous.length} anomalous long booking(s).` : lines.join("\n"),
+      citations,
+    };
+  }
+
+  if (routedIntent === "equipment.read" && mentionedEquipment.length > 0) {
     const lines = mentionedEquipment.map((item) => {
       citations.push({ kind: "equipment", id: item.id, label: item.name });
       const list = (bookingsByEquipment.get(item.id) ?? [])
@@ -1032,7 +780,7 @@ function answerFromStructuredData(
     return { answer: lines.join("\n"), citations };
   }
 
-  if (looksLikeEquipmentQuestion(question) && mentionedEquipment.length === 0) {
+  if (routedIntent === "equipment.read" && mentionedEquipment.length === 0) {
     const names = equipment.slice(0, 8).map((e) => e.name).join(", ");
     return {
       answer: names
@@ -1042,7 +790,7 @@ function answerFromStructuredData(
     };
   }
 
-  if (looksLikeLocationQuestion(question) && mentioned.length > 0) {
+  if (routedIntent === "reagent.location.read" && mentioned.length > 0) {
     const lines = mentioned.map((r) => {
       citations.push({ kind: "reagent", id: r.id, label: r.name });
       return `- ${r.name}: ${r.storage_location || "no storage location recorded"}`;
@@ -1050,7 +798,7 @@ function answerFromStructuredData(
     return { answer: `Here are the recorded storage locations:\n${lines.join("\n")}`, citations };
   }
 
-  if (looksLikeArrivalQuestion(question) && mentioned.length > 0) {
+  if (routedIntent === "reagent.arrival.read" && mentioned.length > 0) {
     const lines = mentioned.map((r) => {
       citations.push({ kind: "reagent", id: r.id, label: r.name });
       const events = eventsByReagent.get(r.id) ?? [];
@@ -1076,21 +824,17 @@ function answerFromStructuredData(
     return { answer: `From the reorder timeline:\n${lines.join("\n")}`, citations };
   }
 
-  if (mentioned.length === 0 && (looksLikeLocationQuestion(question) || looksLikeArrivalQuestion(question))) {
+  if (mentioned.length === 0 && (routedIntent === "reagent.location.read" || routedIntent === "reagent.arrival.read")) {
     return {
       answer: "I can answer that precisely if you include the reagent name (for example: \"Where is DMEM High Glucose?\").",
       citations,
     };
   }
 
-  const snapshot = targets.map((r) => {
-    citations.push({ kind: "reagent", id: r.id, label: r.name });
-    const events = eventsByReagent.get(r.id) ?? [];
-    const latest = events[0];
-    if (latest) citations.push({ kind: "stock_event", id: latest.id, label: `${r.name} latest event` });
-    return `- ${r.name}: qty ${r.quantity}${r.unit ? ` ${r.unit}` : ""}, location ${r.storage_location || "n/a"}, reorder ${r.needs_reorder ? "needed" : "not needed"}${latest ? `, latest event ${latest.event_type} (${formatDate(latest.created_at)})` : ""}`;
-  });
-  return { answer: `Here is a quick inventory snapshot for this lab:\n${snapshot.join("\n")}`, citations };
+  return {
+    answer: "Got it. I can still chat, and for lab work I can handle bookings, equipment, reagents, meetings, announcements, and shared tasks. Tell me what you want next.",
+    citations,
+  };
 }
 
 async function ensureGeneralLabThread(
@@ -1237,6 +981,63 @@ function canExecuteAction(
   }
 }
 
+function answerFromLabOpsData(
+  question: string,
+  announcements: LabAnnouncementRow[],
+  sharedTasks: LabSharedTaskRow[],
+  meetings: LabMeetingRow[],
+  forcedIntent?: LabsAssistantIntent,
+) {
+  const routedIntent = forcedIntent ?? routeLabsAssistantIntent(question);
+  const citations: Citation[] = [];
+  const now = Date.now();
+
+  if (routedIntent === "announcement.read") {
+    if (announcements.length === 0) {
+      return { answer: "No lab announcements are recorded yet.", citations };
+    }
+    const latest = announcements[0];
+    citations.push({ kind: "announcement", id: latest.id, label: latest.title });
+    return {
+      answer: `Latest announcement: ${latest.title} (${formatDateTime(latest.created_at)}).`,
+      citations,
+    };
+  }
+
+  if (routedIntent === "task.shared.read") {
+    const openTasks = sharedTasks.filter((task) => !task.done);
+    if (openTasks.length === 0) {
+      return { answer: "No open shared inspection tasks are recorded.", citations };
+    }
+    const top = openTasks.slice(0, 3);
+    const lines = top.map((task) => {
+      citations.push({ kind: "shared_task", id: task.id, label: task.title });
+      return `- ${task.title}`;
+    });
+    return {
+      answer: `Open shared tasks:\n${lines.join("\n")}`,
+      citations,
+    };
+  }
+
+  if (routedIntent === "meeting.read") {
+    const upcoming = meetings
+      .filter((meeting) => new Date(meeting.meeting_date).getTime() >= now)
+      .sort((a, b) => new Date(a.meeting_date).getTime() - new Date(b.meeting_date).getTime());
+    const target = upcoming[0] ?? meetings[0];
+    if (!target) {
+      return { answer: "No lab meetings are recorded yet.", citations };
+    }
+    citations.push({ kind: "meeting", id: target.id, label: target.title });
+    return {
+      answer: `Next meeting: ${target.title} on ${formatDate(target.meeting_date)}.`,
+      citations,
+    };
+  }
+
+  return null;
+}
+
 function answerFromLabNotes(question: string, notes: LabNoteSnippet[]) {
   if (notes.length === 0) return null;
   const q = question.toLowerCase();
@@ -1379,12 +1180,31 @@ export async function POST(req: NextRequest) {
 
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const body = await req.json().catch(() => ({}));
-    const labId = typeof body.labId === "string" ? body.labId : "";
-    const question = typeof body.question === "string" ? body.question.trim() : "";
+    const bodyRaw = await req.json().catch(() => ({}));
+    const bodyParsed = assistantPostBodySchema.safeParse(bodyRaw);
+    if (!bodyParsed.success) {
+      return NextResponse.json({ error: "Invalid request payload." }, { status: 400 });
+    }
+    const body = bodyParsed.data;
+    const labId = body.labId;
+    const question = body.question.trim();
+    const chatHistory = parseChatHistory(body.chatHistory ?? []);
     const execute = body.execute === true;
     const confirm = body.confirm === true;
     const actionPlanRaw = parseActionPlan(body.actionPlan);
+    const contextualQuestion = buildContextualQuestion(question, chatHistory);
+    const conversationLayer = !execute
+      ? await runConversationLayer(contextualQuestion, chatHistory)
+      : { intent: routeLabsAssistantIntent(contextualQuestion), rewrittenQuestion: contextualQuestion, confidence: 1 };
+    let effectiveIntent = conversationLayer.intent;
+    let effectiveQuestion = conversationLayer.rewrittenQuestion.trim() || contextualQuestion;
+    if (!execute && looksLikeCorrectionMessage(question) && hasBookingCitationInHistory(chatHistory)) {
+      effectiveIntent = "booking.read.mine";
+      effectiveQuestion = "List my upcoming bookings separately with exact start and end times.";
+    }
+    const plannerLayer = !execute
+      ? await runActionPlannerLayer(effectiveIntent, effectiveQuestion, chatHistory)
+      : null;
 
     if (!labId) return NextResponse.json({ error: "labId is required" }, { status: 400 });
     if (!question && !execute) return NextResponse.json({ error: "question is required" }, { status: 400 });
@@ -1403,7 +1223,15 @@ export async function POST(req: NextRequest) {
     if (!membership) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     const canManage = membership.role === "manager" || membership.role === "admin";
 
-    const [{ data: reagentsRaw }, { data: equipmentRaw }, { data: membersRaw }, { data: noteThreadsRaw }] = await Promise.all([
+    const [
+      { data: reagentsRaw },
+      { data: equipmentRaw },
+      { data: membersRaw },
+      { data: noteThreadsRaw },
+      { data: announcementsRaw },
+      { data: sharedTasksRaw },
+      { data: meetingsRaw },
+    ] = await Promise.all([
       supabase
         .from("lab_reagents")
         .select("id,name,quantity,unit,needs_reorder,last_ordered_at,storage_location,supplier,notes")
@@ -1429,6 +1257,24 @@ export async function POST(req: NextRequest) {
         .eq("linked_object_id", labId)
         .order("updated_at", { ascending: false })
         .limit(30),
+      supabase
+        .from("lab_announcements")
+        .select("id,type,title,body,created_at")
+        .eq("lab_id", labId)
+        .order("created_at", { ascending: false })
+        .limit(80),
+      supabase
+        .from("lab_shared_tasks")
+        .select("id,list_type,title,details,done,created_at,updated_at")
+        .eq("lab_id", labId)
+        .order("updated_at", { ascending: false })
+        .limit(120),
+      supabase
+        .from("lab_meetings")
+        .select("id,title,meeting_date,ai_summary,created_at,updated_at")
+        .eq("lab_id", labId)
+        .order("meeting_date", { ascending: true })
+        .limit(80),
     ]);
 
     const reagents = (reagentsRaw || []) as ReagentRow[];
@@ -1445,6 +1291,9 @@ export async function POST(req: NextRequest) {
       return { userId: row.user_id, label, email: profile?.email || null };
     });
     const noteThreads = (noteThreadsRaw || []) as Array<{ id: string; subject: string | null }>;
+    const announcements = (announcementsRaw || []) as LabAnnouncementRow[];
+    const sharedTasks = (sharedTasksRaw || []) as LabSharedTaskRow[];
+    const meetings = (meetingsRaw || []) as LabMeetingRow[];
     const noteThreadIds = noteThreads.map((row) => row.id);
     const { data: noteMessagesRaw } = noteThreadIds.length > 0
       ? await supabase
@@ -1481,7 +1330,7 @@ export async function POST(req: NextRequest) {
       equipmentIds.length
         ? supabase
             .from("lab_equipment_bookings")
-            .select("id,equipment_id,title,starts_at,ends_at,status")
+            .select("id,equipment_id,booked_by,title,starts_at,ends_at,status")
             .in("equipment_id", equipmentIds)
             .order("starts_at", { ascending: true })
             .limit(3000)
@@ -1504,6 +1353,15 @@ export async function POST(req: NextRequest) {
 
     if (execute && actionPlanRaw) {
       const citations: Citation[] = [];
+      async function composeExecutedReply(backendFacts: string, fallback: string) {
+        const composed = await composeFrontLayerReply({
+          question: effectiveQuestion,
+          intent: effectiveIntent,
+          backendFacts,
+          fallback,
+        });
+        return composed.answer;
+      }
       const access = canExecuteAction(actionPlanRaw, { canManage });
       if (!access.ok) {
         await logAssistantAction(supabase, {
@@ -1553,6 +1411,17 @@ export async function POST(req: NextRequest) {
         if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
           return NextResponse.json({ error: "Invalid booking times." }, { status: 400 });
         }
+        const createValidity = validateBookingWindow(actionPlanRaw.startsAt, actionPlanRaw.endsAt, new Date());
+        if (!createValidity.ok) {
+          return NextResponse.json({ error: createValidity.error }, { status: 400 });
+        }
+        const equipmentBookings = bookingsByEquipment.get(actionPlanRaw.equipmentId) ?? [];
+        if (hasBookingConflict(equipmentBookings, actionPlanRaw.startsAt, actionPlanRaw.endsAt)) {
+          return NextResponse.json({ error: "Booking conflicts with an existing reservation for this equipment." }, { status: 409 });
+        }
+
+        const initialStatus: "draft" | "confirmed" =
+          equipmentMatch.booking_requires_approval === true ? "draft" : "confirmed";
 
         const { data: booking, error } = await supabase
           .from("lab_equipment_bookings")
@@ -1563,7 +1432,7 @@ export async function POST(req: NextRequest) {
             notes: actionPlanRaw.notes || null,
             starts_at: start.toISOString(),
             ends_at: end.toISOString(),
-            status: "draft",
+            status: initialStatus,
           })
           .select("id,equipment_id,title,starts_at,ends_at,status")
           .single();
@@ -1582,10 +1451,20 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Created booking ${String(booking.id)}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: booking created",
+            `Equipment: ${actionPlanRaw.equipmentName}`,
+            `Starts at: ${formatDateTime(String(booking.starts_at))}`,
+            `Ends at: ${formatDateTime(String(booking.ends_at))}`,
+            `Status: ${String(booking.status)}`,
+          ].join("\n"),
+          `Booked ${actionPlanRaw.equipmentName} from ${formatDateTime(String(booking.starts_at))} to ${formatDateTime(String(booking.ends_at))} as ${String(booking.status)} status.`,
+        );
 
         return NextResponse.json({
           executed: true,
-          answer: `Booked ${actionPlanRaw.equipmentName} from ${formatDateTime(String(booking.starts_at))} to ${formatDateTime(String(booking.ends_at))} as draft status.`,
+          answer,
           citations,
         });
       }
@@ -1600,9 +1479,17 @@ export async function POST(req: NextRequest) {
             outcome: "executed",
             outcomeMessage: "Draft generated",
           }).catch(() => undefined);
+          const answer = await composeExecutedReply(
+            [
+              "Execution result: announcement draft prepared",
+              `Title: ${actionPlanRaw.title}`,
+              `Body: ${actionPlanRaw.body}`,
+            ].join("\n"),
+            `Draft prepared:\n\n${actionPlanRaw.title}\n${actionPlanRaw.body}`,
+          );
           return NextResponse.json({
             executed: true,
-            answer: `Draft prepared:\n\n${actionPlanRaw.title}\n${actionPlanRaw.body}`,
+            answer,
             citations,
           });
         }
@@ -1638,10 +1525,19 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Posted announcement message ${String(msg.id)}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: announcement posted",
+            `Thread: General`,
+            `Title: ${actionPlanRaw.title}`,
+            `Message id: ${String(msg.id)}`,
+          ].join("\n"),
+          `Posted announcement to the General lab chat thread: ${actionPlanRaw.title}`,
+        );
 
         return NextResponse.json({
           executed: true,
-          answer: `Posted announcement to the General lab chat thread: ${actionPlanRaw.title}`,
+          answer,
           citations,
         });
       }
@@ -1682,12 +1578,21 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Sent message ${String(msg.id)}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: message sent",
+            `Type: ${actionPlanRaw.kind}`,
+            `Recipients: ${actionPlanRaw.recipientLabels.join(", ")}`,
+            `Title: ${actionPlanRaw.title}`,
+            `Message id: ${String(msg.id)}`,
+          ].join("\n"),
+          actionPlanRaw.kind === "group_message"
+            ? `Sent group message to ${actionPlanRaw.recipientLabels.join(", ")}.`
+            : `Sent direct message to ${actionPlanRaw.recipientLabels[0]}.`,
+        );
         return NextResponse.json({
           executed: true,
-          answer:
-            actionPlanRaw.kind === "group_message"
-              ? `Sent group message to ${actionPlanRaw.recipientLabels.join(", ")}.`
-              : `Sent direct message to ${actionPlanRaw.recipientLabels[0]}.`,
+          answer,
           citations,
         });
       }
@@ -1717,9 +1622,18 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Created thread ${threadId}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: group chat created",
+            `Thread id: ${threadId}`,
+            `Title: ${actionPlanRaw.title || "Group chat"}`,
+            `Members: ${actionPlanRaw.recipientLabels.join(", ")}`,
+          ].join("\n"),
+          `Created group chat "${actionPlanRaw.title || "Group chat"}" with ${actionPlanRaw.recipientLabels.join(", ")}.`,
+        );
         return NextResponse.json({
           executed: true,
-          answer: `Created group chat "${actionPlanRaw.title || "Group chat"}" with ${actionPlanRaw.recipientLabels.join(", ")}.`,
+          answer,
           citations,
         });
       }
@@ -1753,9 +1667,17 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Added reagent ${String(reagent.id)}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: reagent added",
+            `Reagent: ${String(reagent.name)}`,
+            `Quantity: ${actionPlanRaw.quantity}${actionPlanRaw.unit ? ` ${actionPlanRaw.unit}` : ""}`,
+          ].join("\n"),
+          `Added reagent "${String(reagent.name)}" with quantity ${actionPlanRaw.quantity}${actionPlanRaw.unit ? ` ${actionPlanRaw.unit}` : ""}.`,
+        );
         return NextResponse.json({
           executed: true,
-          answer: `Added reagent "${String(reagent.name)}" with quantity ${actionPlanRaw.quantity}${actionPlanRaw.unit ? ` ${actionPlanRaw.unit}` : ""}.`,
+          answer,
           citations,
         });
       }
@@ -1788,9 +1710,17 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Removed reagent ${actionPlanRaw.reagentId}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: reagent removed",
+            `Reagent: ${actionPlanRaw.reagentName}`,
+            `Reagent id: ${actionPlanRaw.reagentId}`,
+          ].join("\n"),
+          `Removed reagent "${actionPlanRaw.reagentName}".`,
+        );
         return NextResponse.json({
           executed: true,
-          answer: `Removed reagent "${actionPlanRaw.reagentName}".`,
+          answer,
           citations,
         });
       }
@@ -1826,9 +1756,17 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Added equipment ${String(equipmentItem.id)}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: equipment added",
+            `Equipment: ${String(equipmentItem.name)}`,
+            `Location: ${actionPlanRaw.location || "not recorded"}`,
+          ].join("\n"),
+          `Added equipment "${String(equipmentItem.name)}"${actionPlanRaw.location ? ` at ${actionPlanRaw.location}` : ""}.`,
+        );
         return NextResponse.json({
           executed: true,
-          answer: `Added equipment "${String(equipmentItem.name)}"${actionPlanRaw.location ? ` at ${actionPlanRaw.location}` : ""}.`,
+          answer,
           citations,
         });
       }
@@ -1861,9 +1799,17 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Removed equipment ${actionPlanRaw.equipmentId}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: equipment removed",
+            `Equipment: ${actionPlanRaw.equipmentName}`,
+            `Equipment id: ${actionPlanRaw.equipmentId}`,
+          ].join("\n"),
+          `Removed equipment "${actionPlanRaw.equipmentName}".`,
+        );
         return NextResponse.json({
           executed: true,
-          answer: `Removed equipment "${actionPlanRaw.equipmentName}".`,
+          answer,
           citations,
         });
       }
@@ -1880,7 +1826,7 @@ export async function POST(req: NextRequest) {
 
         const { data: equipmentItem } = await supabase
           .from("lab_equipment")
-          .select("id,lab_id,name")
+          .select("id,lab_id,name,booking_requires_approval")
           .eq("id", String(booking.equipment_id))
           .maybeSingle();
         if (!equipmentItem || String(equipmentItem.lab_id) !== labId) {
@@ -1891,6 +1837,13 @@ export async function POST(req: NextRequest) {
         if (!isOwner && !canManage) {
           return NextResponse.json(
             { error: "Only booking owners, lab managers, or admins can update booking status." },
+            { status: 403 },
+          );
+        }
+
+        if (equipmentItem.booking_requires_approval === true && actionPlanRaw.status === "confirmed" && !canManage) {
+          return NextResponse.json(
+            { error: "Only lab managers or admins can approve this booking." },
             { status: 403 },
           );
         }
@@ -1915,9 +1868,99 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Updated booking ${String(updated.id)} to ${actionPlanRaw.status}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: booking status updated",
+            `Equipment: ${actionPlanRaw.equipmentName}`,
+            `Booking id: ${String(updated.id)}`,
+            `New status: ${actionPlanRaw.status}`,
+          ].join("\n"),
+          `Updated ${actionPlanRaw.equipmentName} booking to status "${actionPlanRaw.status}".`,
+        );
         return NextResponse.json({
           executed: true,
-          answer: `Updated ${actionPlanRaw.equipmentName} booking to status "${actionPlanRaw.status}".`,
+          answer,
+          citations,
+        });
+      }
+
+      if (actionPlanRaw.kind === "update_booking_time") {
+        const { data: booking } = await supabase
+          .from("lab_equipment_bookings")
+          .select("id,equipment_id,booked_by,status")
+          .eq("id", actionPlanRaw.bookingId)
+          .maybeSingle();
+        if (!booking) {
+          return NextResponse.json({ error: "Booking no longer available." }, { status: 400 });
+        }
+
+        const { data: equipmentItem } = await supabase
+          .from("lab_equipment")
+          .select("id,lab_id,name")
+          .eq("id", String(booking.equipment_id))
+          .maybeSingle();
+        if (!equipmentItem || String(equipmentItem.lab_id) !== labId) {
+          return NextResponse.json({ error: "Booking does not belong to this lab." }, { status: 400 });
+        }
+
+        const isOwner = String(booking.booked_by || "") === user.id;
+        if (!isOwner && !canManage) {
+          return NextResponse.json(
+            { error: "Only booking owners, lab managers, or admins can reschedule this booking." },
+            { status: 403 },
+          );
+        }
+
+        const start = new Date(actionPlanRaw.startsAt);
+        const end = new Date(actionPlanRaw.endsAt);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+          return NextResponse.json({ error: "Invalid booking time range." }, { status: 400 });
+        }
+        const rescheduleValidity = validateBookingWindow(actionPlanRaw.startsAt, actionPlanRaw.endsAt, new Date());
+        if (!rescheduleValidity.ok) {
+          return NextResponse.json({ error: rescheduleValidity.error }, { status: 400 });
+        }
+        const equipmentBookings = bookingsByEquipment.get(String(booking.equipment_id)) ?? [];
+        if (hasBookingConflict(equipmentBookings, actionPlanRaw.startsAt, actionPlanRaw.endsAt, actionPlanRaw.bookingId)) {
+          return NextResponse.json({ error: "New time conflicts with an existing booking for this equipment." }, { status: 409 });
+        }
+
+        const { data: updated, error } = await supabase
+          .from("lab_equipment_bookings")
+          .update({
+            starts_at: start.toISOString(),
+            ends_at: end.toISOString(),
+          })
+          .eq("id", actionPlanRaw.bookingId)
+          .select("id,equipment_id,starts_at,ends_at")
+          .single();
+        if (error || !updated?.id) {
+          return NextResponse.json({ error: error?.message || "Failed to reschedule booking." }, { status: 400 });
+        }
+
+        citations.push({ kind: "equipment", id: String(updated.equipment_id), label: actionPlanRaw.equipmentName });
+        citations.push({ kind: "booking", id: String(updated.id), label: `${actionPlanRaw.equipmentName} booking` });
+        await logAssistantAction(supabase, {
+          labId,
+          actorUserId: user.id,
+          actionKind: actionPlanRaw.kind,
+          payload: actionPlanRaw as unknown as Record<string, unknown>,
+          outcome: "executed",
+          outcomeMessage: `Rescheduled booking ${String(updated.id)}`,
+        }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: booking rescheduled",
+            `Equipment: ${actionPlanRaw.equipmentName}`,
+            `Booking id: ${String(updated.id)}`,
+            `Starts at: ${formatDateTime(String(updated.starts_at))}`,
+            `Ends at: ${formatDateTime(String(updated.ends_at))}`,
+          ].join("\n"),
+          `Rescheduled ${actionPlanRaw.equipmentName} booking to ${formatDateTime(String(updated.starts_at))} - ${formatDateTime(String(updated.ends_at))}.`,
+        );
+        return NextResponse.json({
+          executed: true,
+          answer,
           citations,
         });
       }
@@ -1951,22 +1994,58 @@ export async function POST(req: NextRequest) {
           outcome: "executed",
           outcomeMessage: `Created meeting ${String(meeting.id)}`,
         }).catch(() => undefined);
+        const answer = await composeExecutedReply(
+          [
+            "Execution result: meeting created",
+            `Title: ${String(meeting.title)}`,
+            `Date: ${String(meeting.meeting_date)}`,
+            `Meeting id: ${String(meeting.id)}`,
+          ].join("\n"),
+          `Created meeting "${String(meeting.title)}" on ${String(meeting.meeting_date)}.`,
+        );
         return NextResponse.json({
           executed: true,
-          answer: `Created meeting "${String(meeting.title)}" on ${String(meeting.meeting_date)}.`,
+          answer,
           citations,
         });
       }
     }
 
-    const grounded = answerFromStructuredData(question, reagents, eventsByReagent, equipment, bookingsByEquipment);
-    const noteGrounded = answerFromLabNotes(question, noteSnippets);
-    const actionPlan = await buildActionPlan(question, equipment, members, reagents, bookingsByEquipment);
+    const grounded = answerFromStructuredData(
+      effectiveQuestion,
+      reagents,
+      eventsByReagent,
+      equipment,
+      bookingsByEquipment,
+      user.id,
+      effectiveIntent,
+    );
+    const noteGrounded = answerFromLabNotes(effectiveQuestion, noteSnippets);
+    const opsGrounded = answerFromLabOpsData(effectiveQuestion, announcements, sharedTasks, meetings, effectiveIntent);
+    const actionPlan = await buildActionPlan(
+      effectiveQuestion,
+      equipment,
+      members,
+      reagents,
+      bookingsByEquipment,
+      user.id,
+      chatHistory,
+    );
     if (actionPlan && actionPlan.kind === "clarification_required") {
+      const clarificationReply = await composeFrontLayerReply({
+        question: effectiveQuestion,
+        intent: effectiveIntent,
+        backendFacts: [
+          `Clarification title: ${actionPlan.title}`,
+          `Clarification body: ${actionPlan.body}`,
+          `Options: ${actionPlan.options.join(" | ") || "none"}`,
+        ].join("\n"),
+        fallback: actionPlan.body,
+      });
       return NextResponse.json({
-        answer: actionPlan.body,
-        source: "rules",
-        citations: noteGrounded?.citations || [],
+        answer: clarificationReply.answer,
+        source: clarificationReply.source,
+        citations: [...(noteGrounded?.citations || []), ...(opsGrounded?.citations || [])],
         actionPlan,
       });
     }
@@ -1978,10 +2057,21 @@ export async function POST(req: NextRequest) {
         payload: actionPlan as unknown as Record<string, unknown>,
         outcome: "planned",
       }).catch(() => undefined);
+      const actionPreview = actionPlanPreview(actionPlan);
+      const actionReply = await composeFrontLayerReply({
+        question: effectiveQuestion,
+        intent: effectiveIntent,
+        backendFacts: [
+          `Action kind: ${actionPlan.kind}`,
+          `Action preview: ${actionPreview}`,
+          `Action payload: ${JSON.stringify(actionPlan)}`,
+        ].join("\n"),
+        fallback: actionPreview,
+      });
       return NextResponse.json({
-        answer: actionPlanPreview(actionPlan),
-        source: "rules",
-        citations: [...grounded.citations, ...(noteGrounded?.citations || [])],
+        answer: actionReply.answer,
+        source: actionReply.source,
+        citations: [...grounded.citations, ...(noteGrounded?.citations || []), ...(opsGrounded?.citations || [])],
         actionPlan,
       });
     }
@@ -2006,38 +2096,46 @@ export async function POST(req: NextRequest) {
       .slice(0, 20)
       .map((note) => `${note.threadSubject || "Lab thread"} | ${formatDateTime(note.createdAt)} | ${note.body.slice(0, 180)}`)
       .join("\n");
+    const announcementFacts = announcements
+      .slice(0, 20)
+      .map((item) => `${item.type || "general"} | ${formatDateTime(item.created_at)} | ${item.title}: ${item.body.slice(0, 180)}`)
+      .join("\n");
+    const sharedTaskFacts = sharedTasks
+      .slice(0, 30)
+      .map((item) => `${item.list_type || "general"} | done=${item.done} | ${item.title}${item.details ? `: ${item.details.slice(0, 120)}` : ""}`)
+      .join("\n");
+    const meetingFacts = meetings
+      .slice(0, 20)
+      .map((item) => `${item.title} | date=${item.meeting_date} | summary=${item.ai_summary ? item.ai_summary.slice(0, 160) : "none"}`)
+      .join("\n");
+    const recentConversationFacts = chatHistory
+      .slice(-6)
+      .map((turn, index) => `Turn ${index + 1} Q: ${turn.question}\nTurn ${index + 1} A: ${turn.answer.slice(0, 160)}`)
+      .join("\n");
 
-    const prompt = [
-      "You are a lab operations assistant. Use only the provided lab data and do not invent facts.",
-      "If data is missing, say 'not recorded'.",
-      "Respond in plain language with max 2 short sentences.",
-      "Do not include long lists unless explicitly asked.",
-      "If the request is ambiguous, ask exactly 1 clarifying question.",
-      "",
-      "Reagent data:",
-      reagentFacts || "No reagents found.",
-      "",
-      "Equipment data:",
-      equipmentFacts || "No equipment found.",
-      "",
-      "Recent lab communications:",
-      labNoteFacts || "No recent lab messages found.",
-      "",
-      `Question: ${question}`,
-      "",
-      `Structured answer draft: ${noteGrounded ? `${noteGrounded.answer}\n\n${grounded.answer}` : grounded.answer}`,
-      actionPlan ? `Potential action plan detected: ${JSON.stringify(actionPlan)}` : "No action plan detected.",
-      "",
-      "Return only the user-facing answer text.",
-    ].join("\n");
-
-    const hfAnswer = shouldUseHfForFinalAnswer(question, actionPlan) ? await callHuggingFace(prompt) : null;
-    const answer = enforceConciseAnswer(hfAnswer || noteGrounded?.answer || grounded.answer);
-    const citations = [...grounded.citations, ...(noteGrounded?.citations || [])];
+    const backendFacts = [
+      `Reagent data:\n${reagentFacts || "No reagents found."}`,
+      `Equipment data:\n${equipmentFacts || "No equipment found."}`,
+      `Recent lab communications:\n${labNoteFacts || "No recent lab messages found."}`,
+      `Recent announcements:\n${announcementFacts || "No announcements found."}`,
+      `Shared tasks:\n${sharedTaskFacts || "No shared tasks found."}`,
+      `Lab meetings:\n${meetingFacts || "No meetings found."}`,
+      `Recent conversation history:\n${recentConversationFacts || "No prior turns."}`,
+      `Conversation layer confidence: ${conversationLayer.confidence}`,
+      plannerLayer ? `Planner layer draft: ${JSON.stringify(plannerLayer)}` : "Planner layer draft: none",
+      `Structured answer draft:\n${[opsGrounded?.answer, noteGrounded?.answer, grounded.answer].filter(Boolean).join("\n\n")}`,
+    ].join("\n\n");
+    const answer = await composeFrontLayerReply({
+      question: effectiveQuestion,
+      intent: effectiveIntent,
+      backendFacts,
+      fallback: grounded.answer || opsGrounded?.answer || noteGrounded?.answer || "I could not generate a response from available lab data.",
+    });
+    const citations = [...grounded.citations, ...(noteGrounded?.citations || []), ...(opsGrounded?.citations || [])];
 
     return NextResponse.json({
-      answer,
-      source: hfAnswer ? "huggingface" : "rules",
+      answer: answer.answer,
+      source: answer.source,
       citations,
       actionPlan,
     });

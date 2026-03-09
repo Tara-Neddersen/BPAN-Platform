@@ -25,10 +25,12 @@ import {
   getWorkspaceBackstageIndexStats,
 } from "@/lib/workspace-integration";
 
+type DashboardPanel = "overview" | "watchlists" | "activity";
+
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ activityKind?: string; activityWindow?: string }>;
+  searchParams?: Promise<{ activityKind?: string; activityWindow?: string; panel?: string }>;
 }) {
   const params = searchParams ? await searchParams : undefined;
   const supabase = await createClient();
@@ -144,6 +146,7 @@ export default async function DashboardPage({
   });
   const activityKindFilter = (params?.activityKind || "all") as ActivityKindFilter;
   const activityWindowFilter = (params?.activityWindow || "7d") as ActivityWindowFilter;
+  const activePanel = resolveDashboardPanel(params?.panel);
   const activityFeed = filterWorkspaceActivityFeed(allActivityFeed, activityKindFilter, activityWindowFilter);
 
   const focusItems = [
@@ -161,7 +164,7 @@ export default async function DashboardPage({
       detail: digestEnabled
         ? `Email digest is enabled${profile?.last_digest_at ? ` • last sent ${new Date(profile.last_digest_at).toLocaleDateString()}` : ""}`
         : "Email digest is paused",
-      href: "#digest-settings",
+      href: "/dashboard?panel=overview#digest-settings",
       actionLabel: "Review digest",
       tone: "amber" as const,
     },
@@ -238,111 +241,164 @@ export default async function DashboardPage({
         </div>
       </section>
 
-      <section className="rounded-3xl border border-white/80 bg-white/75 p-4 shadow-[0_16px_36px_-28px_rgba(15,23,42,0.26)] backdrop-blur-sm sm:p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Search</p>
-            <p className="text-sm text-slate-700">Start with PubMed and your saved watchlists</p>
-          </div>
-          <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600 sm:flex">
-            <ArrowUpRight className="h-3.5 w-3.5" />
-            Research flow
-          </div>
+      <section className="sticky-section-switcher px-2 py-2">
+        <div className="grid grid-cols-3 gap-1.5 rounded-2xl border border-white/75 bg-white/80 p-1 backdrop-blur-xl">
+          <DashboardPanelChip panel="overview" activePanel={activePanel} label="Overview" />
+          <DashboardPanelChip panel="watchlists" activePanel={activePanel} label="Watchlists" />
+          <DashboardPanelChip panel="activity" activePanel={activePanel} label="Activity" />
         </div>
-        <SearchBar />
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[1.55fr_0.85fr]">
-        <div className="space-y-5">
-          <div className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.24)] sm:p-5">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold tracking-tight text-slate-900">Your Watchlists</h2>
-                <p className="text-sm text-slate-600">
-                  {hasWatchlists ? "Track active topics and review incoming literature" : "Create a watchlist to start monitoring keywords"}
-                </p>
-              </div>
-              <WatchlistForm action={createWatchlist} />
-            </div>
-
-            {hasWatchlists ? (
-              <div className="grid gap-4 sm:grid-cols-2">
-                {typedWatchlists.map((watchlist) => (
-                  <WatchlistCard
-                    key={watchlist.id}
-                    watchlist={watchlist}
-                    updateAction={updateWatchlist}
-                    deleteAction={deleteWatchlist}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-cyan-200 bg-cyan-50/35 p-10 text-center">
-                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-200 bg-white text-cyan-700">
-                  <BookOpen className="h-5 w-5" />
-                </div>
-                <p className="font-medium text-slate-900">No watchlists yet</p>
-                <p className="mt-1 text-sm text-slate-600">
-                  Create one to start tracking keywords across PubMed and receiving AI summaries.
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="space-y-5">
-          <div id="digest-settings" className="scroll-mt-24 rounded-3xl border border-white/80 bg-white/80 p-4 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.24)] sm:p-5">
-            <div className="mb-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Digest</p>
-              <p className="text-sm text-slate-700">Control your research update cadence</p>
-            </div>
-            <DigestToggle
-              enabled={profile?.digest_enabled ?? true}
-              updateAction={updateDigestPreference}
-            />
-          </div>
-
-          <div className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.24)] sm:p-5">
+      {activePanel === "overview" ? (
+        <>
+          <section className="rounded-3xl border border-white/80 bg-white/75 p-4 shadow-[0_16px_36px_-28px_rgba(15,23,42,0.26)] backdrop-blur-sm sm:p-5">
             <div className="mb-3 flex items-center justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Missing Data Detector</p>
-                <p className="text-sm text-slate-700">Find incomplete links before they break your workflow</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Search</p>
+                <p className="text-sm text-slate-700">Start with PubMed and your saved watchlists</p>
               </div>
-              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600 sm:flex">
+                <ArrowUpRight className="h-3.5 w-3.5" />
+                Research flow
+              </div>
             </div>
-            {missingDataAlerts.length === 0 ? (
-              <p className="rounded-2xl border border-emerald-200/70 bg-emerald-50/50 px-3 py-2 text-sm text-emerald-800">
-                No obvious data gaps detected right now.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {missingDataAlerts.map((alert) => (
-                  <div
-                    key={alert.key}
-                    className={`rounded-2xl border px-3 py-2 ${
-                      alert.severity === "warn"
-                        ? "border-amber-200 bg-amber-50/45"
-                        : "border-slate-200 bg-slate-50/45"
-                    }`}
-                  >
-                    <Link href={alert.href} className="block">
-                      <p className="text-sm font-medium text-slate-900">{alert.title}</p>
-                      <p className="mt-0.5 text-xs leading-5 text-slate-600">{alert.detail}</p>
-                    </Link>
-                    {alert.fix && (
-                      <div className="mt-2">
-                        <MissingDataFixButton alert={alert} />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
+            <SearchBar />
+          </section>
 
-      <section className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.24)] sm:p-5">
+          <section className="grid gap-6 xl:grid-cols-[1.55fr_0.85fr]">
+            <div className="space-y-5">
+              <div className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.24)] sm:p-5">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold tracking-tight text-slate-900">Your Watchlists</h2>
+                    <p className="text-sm text-slate-600">
+                      {hasWatchlists ? "Track active topics and review incoming literature" : "Create a watchlist to start monitoring keywords"}
+                    </p>
+                  </div>
+                  <WatchlistForm action={createWatchlist} />
+                </div>
+
+                {hasWatchlists ? (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {typedWatchlists.slice(0, 4).map((watchlist) => (
+                      <WatchlistCard
+                        key={watchlist.id}
+                        watchlist={watchlist}
+                        updateAction={updateWatchlist}
+                        deleteAction={deleteWatchlist}
+                      />
+                    ))}
+                    {typedWatchlists.length > 4 ? (
+                      <Link
+                        href="/dashboard?panel=watchlists"
+                        className="sm:col-span-2 inline-flex items-center justify-center rounded-2xl border border-slate-200 bg-white/75 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-white"
+                      >
+                        View all {typedWatchlists.length} watchlists
+                      </Link>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-cyan-200 bg-cyan-50/35 p-10 text-center">
+                    <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-200 bg-white text-cyan-700">
+                      <BookOpen className="h-5 w-5" />
+                    </div>
+                    <p className="font-medium text-slate-900">No watchlists yet</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Create one to start tracking keywords across PubMed and receiving AI summaries.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-5">
+              <div id="digest-settings" className="scroll-mt-24 rounded-3xl border border-white/80 bg-white/80 p-4 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.24)] sm:p-5">
+                <div className="mb-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Digest</p>
+                  <p className="text-sm text-slate-700">Control your research update cadence</p>
+                </div>
+                <DigestToggle
+                  enabled={profile?.digest_enabled ?? true}
+                  updateAction={updateDigestPreference}
+                />
+              </div>
+
+              <div className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.24)] sm:p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Missing Data Detector</p>
+                    <p className="text-sm text-slate-700">Find incomplete links before they break your workflow</p>
+                  </div>
+                  <AlertTriangle className="h-4 w-4 text-amber-500" />
+                </div>
+                {missingDataAlerts.length === 0 ? (
+                  <p className="rounded-2xl border border-emerald-200/70 bg-emerald-50/50 px-3 py-2 text-sm text-emerald-800">
+                    No obvious data gaps detected right now.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {missingDataAlerts.map((alert) => (
+                      <div
+                        key={alert.key}
+                        className={`rounded-2xl border px-3 py-2 ${
+                          alert.severity === "warn"
+                            ? "border-amber-200 bg-amber-50/45"
+                            : "border-slate-200 bg-slate-50/45"
+                        }`}
+                      >
+                        <Link href={alert.href} className="block">
+                          <p className="text-sm font-medium text-slate-900">{alert.title}</p>
+                          <p className="mt-0.5 text-xs leading-5 text-slate-600">{alert.detail}</p>
+                        </Link>
+                        {alert.fix && (
+                          <div className="mt-2">
+                            <MissingDataFixButton alert={alert} />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      {activePanel === "watchlists" ? (
+        <section className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.24)] sm:p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Watchlist Workspace</p>
+              <h2 className="text-lg font-semibold tracking-tight text-slate-900">All watchlists</h2>
+              <p className="text-sm text-slate-600">Manage literature topics in one focused panel.</p>
+            </div>
+            <WatchlistForm action={createWatchlist} />
+          </div>
+          {hasWatchlists ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {typedWatchlists.map((watchlist) => (
+                <WatchlistCard
+                  key={watchlist.id}
+                  watchlist={watchlist}
+                  updateAction={updateWatchlist}
+                  deleteAction={deleteWatchlist}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-cyan-200 bg-cyan-50/35 p-10 text-center">
+              <p className="font-medium text-slate-900">No watchlists yet</p>
+              <p className="mt-1 text-sm text-slate-600">
+                Create one to start tracking keywords across PubMed and receiving AI summaries.
+              </p>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {activePanel === "activity" ? (
+        <section className="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.24)] sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Activity Feed</p>
@@ -369,15 +425,15 @@ export default async function DashboardPage({
           </div>
         </div>
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <ActivityFilterPill label="All" active={activityKindFilter === "all"} href={buildDashboardQueryHref({ kind: "all", window: activityWindowFilter })} />
-          <ActivityFilterPill label="Tasks" active={activityKindFilter === "task"} href={buildDashboardQueryHref({ kind: "task", window: activityWindowFilter })} />
-          <ActivityFilterPill label="Meetings" active={activityKindFilter === "meeting"} href={buildDashboardQueryHref({ kind: "meeting", window: activityWindowFilter })} />
-          <ActivityFilterPill label="Notes" active={activityKindFilter === "note"} href={buildDashboardQueryHref({ kind: "note", window: activityWindowFilter })} />
-          <ActivityFilterPill label="Results" active={activityKindFilter === "results"} href={buildDashboardQueryHref({ kind: "results", window: activityWindowFilter })} />
+          <ActivityFilterPill label="All" active={activityKindFilter === "all"} href={buildDashboardQueryHref({ panel: activePanel, kind: "all", window: activityWindowFilter })} />
+          <ActivityFilterPill label="Tasks" active={activityKindFilter === "task"} href={buildDashboardQueryHref({ panel: activePanel, kind: "task", window: activityWindowFilter })} />
+          <ActivityFilterPill label="Meetings" active={activityKindFilter === "meeting"} href={buildDashboardQueryHref({ panel: activePanel, kind: "meeting", window: activityWindowFilter })} />
+          <ActivityFilterPill label="Notes" active={activityKindFilter === "note"} href={buildDashboardQueryHref({ panel: activePanel, kind: "note", window: activityWindowFilter })} />
+          <ActivityFilterPill label="Results" active={activityKindFilter === "results"} href={buildDashboardQueryHref({ panel: activePanel, kind: "results", window: activityWindowFilter })} />
           <div className="mx-1 h-4 w-px bg-slate-200" />
-          <ActivityFilterPill label="24h" active={activityWindowFilter === "24h"} href={buildDashboardQueryHref({ kind: activityKindFilter, window: "24h" })} />
-          <ActivityFilterPill label="7d" active={activityWindowFilter === "7d"} href={buildDashboardQueryHref({ kind: activityKindFilter, window: "7d" })} />
-          <ActivityFilterPill label="30d" active={activityWindowFilter === "30d"} href={buildDashboardQueryHref({ kind: activityKindFilter, window: "30d" })} />
+          <ActivityFilterPill label="24h" active={activityWindowFilter === "24h"} href={buildDashboardQueryHref({ panel: activePanel, kind: activityKindFilter, window: "24h" })} />
+          <ActivityFilterPill label="7d" active={activityWindowFilter === "7d"} href={buildDashboardQueryHref({ panel: activePanel, kind: activityKindFilter, window: "7d" })} />
+          <ActivityFilterPill label="30d" active={activityWindowFilter === "30d"} href={buildDashboardQueryHref({ panel: activePanel, kind: activityKindFilter, window: "30d" })} />
         </div>
         {activityFeed.length === 0 ? (
           <p className="text-sm text-slate-600">No activity yet.</p>
@@ -402,17 +458,48 @@ export default async function DashboardPage({
             ))}
           </div>
         )}
-      </section>
+        </section>
+      ) : null}
     </div>
   );
 }
 
-function buildDashboardQueryHref({ kind, window }: { kind: ActivityKindFilter; window: ActivityWindowFilter }) {
+function resolveDashboardPanel(value?: string): DashboardPanel {
+  if (value === "watchlists" || value === "activity") return value;
+  return "overview";
+}
+
+function buildDashboardQueryHref({ panel, kind, window }: { panel: DashboardPanel; kind: ActivityKindFilter; window: ActivityWindowFilter }) {
   const qs = new URLSearchParams();
+  if (panel !== "overview") qs.set("panel", panel);
   if (kind !== "all") qs.set("activityKind", kind);
   if (window !== "7d") qs.set("activityWindow", window);
   const q = qs.toString();
   return q ? `/dashboard?${q}` : "/dashboard";
+}
+
+function DashboardPanelChip({
+  panel,
+  activePanel,
+  label,
+}: {
+  panel: DashboardPanel;
+  activePanel: DashboardPanel;
+  label: string;
+}) {
+  const active = panel === activePanel;
+  return (
+    <Link
+      href={panel === "overview" ? "/dashboard" : `/dashboard?panel=${panel}`}
+      className={`inline-flex h-10 items-center justify-center rounded-xl px-3 text-sm font-medium transition-all ${
+        active
+          ? "border border-white/85 bg-white/95 text-slate-900 shadow-[0_10px_24px_-20px_rgba(15,23,42,0.45)]"
+          : "border border-transparent bg-transparent text-slate-600 hover:bg-white/70 hover:text-slate-900"
+      }`}
+    >
+      {label}
+    </Link>
+  );
 }
 
 function formatRelativeWorkspaceTime(iso: string) {

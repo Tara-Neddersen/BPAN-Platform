@@ -1,7 +1,7 @@
 "use client";
 
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Check, Loader2, Mic, Plus, Sparkles, Trash2, User } from "lucide-react";
+import { CalendarDays, Check, ChevronLeft, Loader2, Mic, Plus, Sparkles, Trash2, User } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -232,6 +232,9 @@ function uniqueAttendees(raw: string) {
 }
 
 export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, actionItems: initialActionItems, memberOptions }: LabMeetingsClientProps) {
+  const [isNarrowMobile, setIsNarrowMobile] = useState(false);
+  const [mobileView, setMobileView] = useState<"meetings" | "detail">("meetings");
+  const [meetingPanelMode, setMeetingPanelMode] = useState<"existing" | "new">("existing");
   const [meetings, setMeetings] = useState<LabMeetingRecord[]>(initialMeetings);
   const [actionItems, setActionItems] = useState<LabMeetingActionItemRecord[]>(initialActionItems);
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(initialMeetings[0]?.id ?? null);
@@ -245,6 +248,15 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
   const [search, setSearch] = useState("");
   const [extractDraft, setExtractDraft] = useState<ExtractedActionDraft[]>([]);
   const insertedDictationPrefixRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(max-width: 640px)");
+    const apply = () => setIsNarrowMobile(mediaQuery.matches);
+    apply();
+    mediaQuery.addEventListener("change", apply);
+    return () => mediaQuery.removeEventListener("change", apply);
+  }, []);
 
   function isMissingMeetingsTableError(error: unknown) {
     const message = error instanceof Error ? error.message : String(error ?? "");
@@ -322,6 +334,8 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
       setMeetings((prev) => [row as LabMeetingRecord, ...prev]);
       setSelectedMeetingId(String((row as LabMeetingRecord).id));
       setNewMeetingTitle("");
+      setMeetingPanelMode("existing");
+      if (isNarrowMobile) setMobileView("detail");
       toast.success("Lab meeting created.");
     } catch (error) {
       if (isMissingMeetingsTableError(error)) {
@@ -339,6 +353,8 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
         setMeetings((prev) => [localRow, ...prev]);
         setSelectedMeetingId(localRow.id);
         setNewMeetingTitle("");
+        setMeetingPanelMode("existing");
+        if (isNarrowMobile) setMobileView("detail");
         toast.warning("Meetings table is unavailable, so this meeting is local-only and won't persist after refresh.");
         return;
       }
@@ -384,6 +400,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
       if (selectedMeetingId === meetingId) {
         const nextMeeting = meetings.find((meeting) => meeting.id !== meetingId);
         setSelectedMeetingId(nextMeeting?.id ?? null);
+        if (isNarrowMobile && !nextMeeting) setMobileView("meetings");
       }
       toast.success("Meeting deleted.");
     } catch (error) {
@@ -572,56 +589,101 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
     }
   }
 
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <Card className="border-slate-200">
-          <CardContent className="space-y-3 p-3">
-            <div className="space-y-2">
-              <Label className="text-xs">New lab meeting</Label>
-              <Input value={newMeetingTitle} onChange={(e) => setNewMeetingTitle(e.target.value)} placeholder="Weekly Lab Meeting" />
-              <Input type="date" value={newMeetingDate} onChange={(e) => setNewMeetingDate(e.target.value)} />
-              <Button type="button" className="w-full" onClick={createMeeting} disabled={busy === "create-meeting"}>
-                {busy === "create-meeting" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
-                Create meeting
-              </Button>
-            </div>
+  function handleSelectMeeting(meetingId: string) {
+    setSelectedMeetingId(meetingId);
+    if (isNarrowMobile) setMobileView("detail");
+  }
 
-            <div className="space-y-2">
-              {meetings.length === 0 ? (
-                <p className="text-xs text-slate-500">No meetings yet.</p>
-              ) : (
-                meetings.map((meeting) => {
-                  const count = actionItems.filter((item) => item.lab_meeting_id === meeting.id).length;
-                  const isSelected = meeting.id === selectedMeetingId;
-                  return (
-                    <button
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+        <Button
+          type="button"
+          variant={meetingPanelMode === "existing" ? "default" : "outline"}
+          size="sm"
+          className={meetingPanelMode === "existing" ? "h-8 bg-slate-900 px-3 text-xs text-white hover:bg-slate-800" : "h-8 border-slate-200 px-3 text-xs"}
+          onClick={() => {
+            setMeetingPanelMode("existing");
+            if (isNarrowMobile) setMobileView("meetings");
+          }}
+        >
+          Existing meetings
+        </Button>
+        <Button
+          type="button"
+          variant={meetingPanelMode === "new" ? "default" : "outline"}
+          size="sm"
+          className={meetingPanelMode === "new" ? "h-8 bg-slate-900 px-3 text-xs text-white hover:bg-slate-800" : "h-8 border-slate-200 px-3 text-xs"}
+          onClick={() => {
+            setMeetingPanelMode("new");
+            if (isNarrowMobile) setMobileView("meetings");
+          }}
+        >
+          Add new meeting
+        </Button>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <Card className={`border-slate-200 ${isNarrowMobile && mobileView === "detail" ? "hidden" : ""}`}>
+          <CardContent className="space-y-2.5 p-2.5 sm:space-y-3 sm:p-3">
+            {meetingPanelMode === "new" ? (
+              <div className="space-y-2">
+                <Label className="text-xs">New lab meeting</Label>
+                <Input className="h-9 text-sm" value={newMeetingTitle} onChange={(e) => setNewMeetingTitle(e.target.value)} placeholder="Weekly Lab Meeting" />
+                <Input className="h-9 text-sm" type="date" value={newMeetingDate} onChange={(e) => setNewMeetingDate(e.target.value)} />
+                <Button type="button" className="h-9 w-full text-sm" onClick={createMeeting} disabled={busy === "create-meeting"}>
+                  {busy === "create-meeting" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
+                  Create meeting
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {meetings.length === 0 ? (
+                  <p className="text-xs text-slate-500">No meetings yet.</p>
+                ) : (
+                  meetings.map((meeting) => {
+                    const count = actionItems.filter((item) => item.lab_meeting_id === meeting.id).length;
+                    const isSelected = meeting.id === selectedMeetingId;
+                    return (
+                      <button
                       key={meeting.id}
                       type="button"
-                      onClick={() => setSelectedMeetingId(meeting.id)}
-                      className={`w-full rounded-xl border px-3 py-2 text-left transition ${
-                        isSelected ? "border-sky-300 bg-sky-50" : "border-slate-200 bg-white hover:bg-slate-50"
+                      onClick={() => handleSelectMeeting(meeting.id)}
+                      className={`w-full rounded-xl border px-2.5 py-2 text-left transition ${
+                        isSelected ? "border-slate-300 bg-slate-100" : "border-slate-200 bg-white hover:bg-slate-50"
                       }`}
                     >
-                      <p className="text-sm font-medium text-slate-900">{meeting.title}</p>
-                      <p className="mt-0.5 text-[11px] text-slate-500">{formatDate(meeting.meeting_date)} • {count} actions</p>
-                    </button>
-                  );
-                })
-              )}
-            </div>
+                        <p className="text-sm font-medium text-slate-900">{meeting.title}</p>
+                        <p className="mt-0.5 text-[11px] text-slate-500">{formatDate(meeting.meeting_date)} • {count} actions</p>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        <Card className="border-slate-200">
-          <CardContent className="space-y-3 p-4">
+        <Card className={`border-slate-200 ${isNarrowMobile && mobileView === "meetings" ? "hidden" : ""}`}>
+          <CardContent className="space-y-2.5 p-3 sm:space-y-3 sm:p-4">
             {!selectedMeeting ? (
               <p className="text-sm text-slate-500">Select a meeting to edit notes, transcribe, and extract action items.</p>
             ) : (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="min-w-0 flex-1">
+                    {isNarrowMobile ? (
+                      <button
+                        type="button"
+                        className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-slate-600"
+                        onClick={() => setMobileView("meetings")}
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        Back to meetings
+                      </button>
+                    ) : null}
                     <Input
+                      className="h-9 text-sm"
                       value={selectedMeeting.title}
                       onChange={(event) => {
                         const value = event.target.value;
@@ -632,7 +694,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                       <CalendarDays className="h-3.5 w-3.5" />
                       <Input
                         type="date"
-                        className="h-8 w-40"
+                        className="h-8 w-32 text-xs sm:w-40"
                         value={selectedMeeting.meeting_date}
                         onChange={(event) => {
                           const value = event.target.value;
@@ -642,11 +704,11 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button type="button" variant="outline" onClick={saveMeeting} disabled={busy === `save-meeting-${selectedMeeting.id}`}>
+                    <Button type="button" size="sm" variant="outline" className="h-8 px-3 text-xs" onClick={saveMeeting} disabled={busy === `save-meeting-${selectedMeeting.id}`}>
                       {busy === `save-meeting-${selectedMeeting.id}` ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
                       Save
                     </Button>
-                    <Button type="button" variant="ghost" onClick={() => removeMeeting(selectedMeeting.id)} disabled={busy === `delete-meeting-${selectedMeeting.id}`}>
+                    <Button type="button" size="sm" variant="ghost" className="h-8 px-2.5" onClick={() => removeMeeting(selectedMeeting.id)} disabled={busy === `delete-meeting-${selectedMeeting.id}`}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -655,6 +717,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                 <div className="space-y-2">
                   <Label className="text-xs">Attendees (comma separated)</Label>
                   <Input
+                    className="h-9 text-sm"
                     value={attendeesText}
                     onChange={(event) => {
                       const attendees = event.target.value
@@ -676,6 +739,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                           type="button"
                           variant={isListening ? "destructive" : "outline"}
                           size="sm"
+                          className="h-8 px-2.5 text-xs"
                           onClick={() => {
                             if (!isListening) insertedDictationPrefixRef.current = false;
                             toggleMic();
@@ -689,7 +753,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                     </div>
                   </div>
                   <Textarea
-                    rows={10}
+                    rows={8}
                     value={selectedMeeting.content}
                     onChange={(event) => {
                       const value = event.target.value;
@@ -700,35 +764,36 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                   {debugInfo ? <p className="text-[11px] text-slate-500">{debugInfo}</p> : null}
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button type="button" variant="outline" size="sm" onClick={extractActions} disabled={extracting}>
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                    <Button type="button" variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={extractActions} disabled={extracting}>
                       {extracting ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1 h-3.5 w-3.5" />}
                       Extract actions (Lab AI)
                     </Button>
-                    <Button type="button" variant="outline" size="sm" onClick={summarizeMeeting} disabled={summarizing}>
+                    <Button type="button" variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={summarizeMeeting} disabled={summarizing}>
                       {summarizing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1 h-3.5 w-3.5" />}
                       Summarize (Lab AI)
                     </Button>
                   </div>
 
                   {extractDraft.length > 0 ? (
-                    <div className="space-y-2 rounded-xl border border-sky-200 bg-sky-50/40 p-3">
+                    <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-xs font-medium text-slate-800">Review extracted action items before adding to board</p>
-                        <Button type="button" size="sm" onClick={saveKeptExtractedItems} disabled={busy === "save-extracted-actions"}>
+                        <Button type="button" size="sm" className="h-8 px-2.5 text-xs" onClick={saveKeptExtractedItems} disabled={busy === "save-extracted-actions"}>
                           {busy === "save-extracted-actions" ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
                           Add selected
                         </Button>
                       </div>
                       {extractDraft.map((item) => (
-                        <div key={item.id} className="grid gap-2 rounded-lg border border-sky-100 bg-white p-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
+                        <div key={item.id} className="grid gap-2 rounded-lg border border-slate-200 bg-white p-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
                           <input
                             type="checkbox"
                             checked={item.keep}
                             onChange={(event) => setExtractDraft((prev) => prev.map((row) => (row.id === item.id ? { ...row, keep: event.target.checked } : row)))}
                           />
                           <Input
+                            className="h-8 text-xs"
                             value={item.text}
                             onChange={(event) => setExtractDraft((prev) => prev.map((row) => (row.id === item.id ? { ...row, text: event.target.value } : row)))}
                           />
@@ -772,7 +837,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                 <div className="space-y-2">
                   <Label className="text-xs">AI summary</Label>
                   <Textarea
-                    rows={6}
+                    rows={5}
                     value={selectedMeeting.ai_summary || ""}
                     onChange={(event) => {
                       const value = event.target.value;
@@ -788,11 +853,11 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
       </div>
 
       <Card className="border-slate-200">
-        <CardContent className="space-y-3 p-4">
+        <CardContent className="space-y-2.5 p-3 sm:space-y-3 sm:p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-slate-900">Action Item Board (all lab meetings)</h3>
             <div className="flex flex-wrap items-center gap-2">
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search actions" className="h-9 w-44" />
+              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search actions" className="h-8 w-40 text-xs sm:h-9 sm:w-44 sm:text-sm" />
               <select value={boardFilter} onChange={(e) => setBoardFilter(e.target.value as "all" | "open" | "completed")} className="h-9 rounded-md border border-input bg-white px-2 text-xs">
                 <option value="open">Open</option>
                 <option value="completed">Completed</option>

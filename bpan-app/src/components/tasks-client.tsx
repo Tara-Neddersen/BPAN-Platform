@@ -70,6 +70,16 @@ function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function formatScheduleDate(dateStr: string) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return dateStr;
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 // ─── Interfaces ──────────────────────────────────────────────────────────
 
 // Behavior experiment types (handling → rotarod/stamina/blood_draw) treated as one batch
@@ -104,14 +114,18 @@ interface TasksClientProps {
     updateTask: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     toggleTask: (id: string, completed: boolean) => Promise<{ success?: boolean; error?: string }>;
     deleteTask: (id: string) => Promise<{ success?: boolean; error?: string }>;
+    updateAnimalExperimentBatchStatus: (experimentIds: string[], status: string) => Promise<{ success?: boolean; error?: string }>;
   };
 }
 
 type ViewFilter = "all" | "today" | "upcoming" | "overdue" | "completed";
 type SourceFilter = "all" | "meeting_action" | "manual" | "experiment" | "cage_change";
+type TasksPanel = "queue" | "schedule" | "calendar";
 
 interface UpcomingExperimentLite {
+  id: string;
   scheduled_date: string;
+  status: string;
   experiment_type: string;
   timepoint_age_days: number | null;
   animals?: {
@@ -142,10 +156,14 @@ function WeekCalendar({
   tasks,
   upcomingExperiments,
   cohorts,
+  selectedDay,
+  onSelectDay,
 }: {
   tasks: Task[];
   upcomingExperiments: UpcomingExperimentLite[];
   cohorts: CohortLite[];
+  selectedDay: string;
+  onSelectDay: (dateStr: string) => void;
 }) {
   const todayStr = toDateStr();
   const [ty, tm, td] = todayStr.split("-").map(Number);
@@ -166,8 +184,6 @@ function WeekCalendar({
       isWeekend: i >= 5,
     };
   });
-
-  const [selectedDay, setSelectedDay] = useState<string>(todayStr);
 
   const counts = (dateStr: string) => {
     const t = tasks.filter(
@@ -213,13 +229,13 @@ function WeekCalendar({
       {/* Gradient header */}
       <div
         className="px-4 py-3 flex items-center justify-between"
-        style={{ background: "linear-gradient(135deg, #ede9fe 0%, #ddd6fe 60%, #c4b5fd 100%)" }}
+        style={{ background: "linear-gradient(135deg, #dbeafe 0%, #bfdbfe 58%, #bae6fd 100%)" }}
       >
         <div className="flex items-center gap-2">
           <span className="text-xl" role="img" aria-label="mouse">🐭</span>
-          <span className="text-xs font-bold text-violet-800 uppercase tracking-wide">This Week</span>
+          <span className="text-xs font-bold text-blue-800 uppercase tracking-wide">This Week</span>
         </div>
-        <span className="text-xs font-medium text-violet-700">{rangeLabel}</span>
+        <span className="text-xs font-medium text-blue-700">{rangeLabel}</span>
       </div>
 
       {/* Day strip */}
@@ -231,12 +247,12 @@ function WeekCalendar({
           return (
             <button
               key={day.dateStr}
-              onClick={() => setSelectedDay(day.dateStr)}
+              onClick={() => onSelectDay(day.dateStr)}
               className={`flex flex-col items-center gap-1 rounded-xl py-2.5 px-1 text-center select-none transition-all ${
                 day.isToday
                   ? "bg-primary text-primary-foreground shadow-sm"
                   : isSelected && !day.isToday
-                  ? "bg-violet-100 text-violet-800 ring-2 ring-violet-300"
+                  ? "bg-sky-100 text-sky-800 ring-2 ring-sky-300"
                   : day.isPast
                   ? "opacity-40 hover:opacity-60 cursor-pointer"
                   : day.isWeekend
@@ -253,7 +269,7 @@ function WeekCalendar({
                   <span
                     title={`${e} experiment${e !== 1 ? "s" : ""}`}
                     className={`text-[9px] font-bold rounded-full w-[18px] h-[18px] flex items-center justify-center ${
-                      day.isToday ? "bg-white/25 text-white" : "bg-purple-100 text-purple-700"
+                      day.isToday ? "bg-white/25 text-white" : "bg-cyan-100 text-cyan-700"
                     }`}
                   >
                     {e}
@@ -286,7 +302,7 @@ function WeekCalendar({
             {expGroups.map((g) => (
               <div key={g.type} className="flex items-center gap-2 text-xs">
                 <span className="h-2 w-2 rounded-full bg-purple-400 flex-shrink-0" />
-                <span className="font-semibold text-purple-800">{COLONY_EXP_LABELS[g.type] || g.type}</span>
+                <span className="font-semibold text-cyan-800">{COLONY_EXP_LABELS[g.type] || g.type}</span>
                 {g.cohortNames.length > 0 && (
                   <span className="text-muted-foreground">· {g.cohortNames.join(", ")}</span>
                 )}
@@ -311,7 +327,7 @@ function WeekCalendar({
       {/* Legend */}
       <div className="px-4 pb-3 flex gap-4 justify-end">
         <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-          <span className="h-2.5 w-2.5 rounded-full bg-purple-200 border border-purple-300" />
+          <span className="h-2.5 w-2.5 rounded-full bg-cyan-200 border border-cyan-300" />
           Experiments
         </span>
         <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -334,6 +350,8 @@ export function TasksClient({
   actions,
 }: TasksClientProps) {
   const tasks = initTasks;
+  const [panel, setPanel] = useState<TasksPanel>("calendar");
+  const [calendarDay, setCalendarDay] = useState<string>(toDateStr());
   const [view, setView] = useState<ViewFilter>("all");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [showAddTask, setShowAddTask] = useState(false);
@@ -364,6 +382,10 @@ export function TasksClient({
     }
   }, [tasks, view, today, sourceFilter]);
 
+  const calendarDayTasks = useMemo(
+    () => tasks.filter((task) => task.due_date === calendarDay && task.status !== "skipped"),
+    [tasks, calendarDay]
+  );
   async function act(promise: Promise<{ success?: boolean; error?: string }>) {
     setBusy(true);
     const res = await promise;
@@ -372,6 +394,10 @@ export function TasksClient({
     // Simple reload for now
     window.location.reload();
     setBusy(false);
+  }
+
+  function setBatchStatus(experimentIds: string[], status: string) {
+    return act(actions.updateAnimalExperimentBatchStatus(experimentIds, status));
   }
 
   async function handleFormAction(
@@ -390,11 +416,100 @@ export function TasksClient({
 
   return (
     <>
-      {/* ─── Week Calendar ────────────────────────────── */}
-      <WeekCalendar tasks={tasks} upcomingExperiments={upcomingExperiments} cohorts={cohorts} />
+      <div className="sticky-section-switcher px-2 py-2">
+        <div className="grid grid-cols-3 gap-1.5 rounded-2xl border border-white/75 bg-white/82 p-1 backdrop-blur-xl">
+          {([
+            { id: "calendar", label: "Calendar" },
+            { id: "queue", label: "Tasks" },
+            { id: "schedule", label: "Schedule" },
+          ] as const).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setPanel(item.id)}
+              className={`h-10 rounded-xl text-sm font-medium transition-all ${
+                panel === item.id
+                  ? "border border-white/85 bg-white/95 text-slate-900 shadow-[0_10px_24px_-20px_rgba(15,23,42,0.45)]"
+                  : "border border-transparent bg-transparent text-slate-600 hover:bg-white/70 hover:text-slate-900"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-      {/* ─── Stats Cards ──────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {panel === "calendar" ? (
+        <WeekCalendar
+          tasks={tasks}
+          upcomingExperiments={upcomingExperiments}
+          cohorts={cohorts}
+          selectedDay={calendarDay}
+          onSelectDay={setCalendarDay}
+        />
+      ) : null}
+
+      {panel === "calendar" ? (
+        <Card>
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm font-semibold">
+              Day Tasks: {calendarDay === today ? "Today" : new Date(calendarDay).toLocaleDateString("en-US", { month: "short", day: "numeric", weekday: "short" })}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="py-2">
+            {calendarDayTasks.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No tasks for this day.</p>
+            ) : (
+              <div className="space-y-2">
+                {calendarDayTasks.map((task) => {
+                  const isDone = task.status === "completed";
+                  return (
+                    <div
+                      key={`calendar-${task.id}`}
+                      className={`flex items-start gap-3 rounded-xl border bg-white/70 px-3 py-2.5 ${isDone ? "opacity-60" : ""}`}
+                    >
+                      <button
+                        className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                          isDone
+                            ? "bg-green-500 border-green-500 text-white"
+                            : "border-gray-300 hover:border-primary"
+                        }`}
+                        onClick={() => act(actions.toggleTask(task.id, !isDone))}
+                        aria-label={isDone ? "Mark task as pending" : "Mark task as completed"}
+                      >
+                        {isDone && <Check className="h-3 w-3" />}
+                      </button>
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 text-left"
+                        onClick={() => setEditingTask(task)}
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-sm font-medium ${isDone ? "line-through" : ""}`}>{task.title}</span>
+                          {task.priority !== "medium" && (
+                            <Badge className={`text-[10px] ${PRIORITY_STYLES[task.priority]?.badge}`}>
+                              {task.priority}
+                            </Badge>
+                          )}
+                        </div>
+                        {task.description ? (
+                          <p className="mt-0.5 truncate text-xs text-muted-foreground">{task.description}</p>
+                        ) : null}
+                      </button>
+                      <Button variant="ghost" size="sm" onClick={() => act(actions.deleteTask(task.id))}>
+                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {panel === "queue" ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <button
           onClick={() => setView("overdue")}
           style={{ background: "linear-gradient(135deg, #fee2e2, #fecaca)" }}
@@ -447,10 +562,11 @@ export function TasksClient({
             <div className="text-xs text-green-700 font-semibold">Completed</div>
           </div>
         </button>
-      </div>
+        </div>
+      ) : null}
 
       {/* ─── Upcoming Experiments (Batched by Cohort) & Other Items ─── */}
-      {(upcomingExperiments.length > 0 || upcomingCageChanges.length > 0 || recentMeetings.length > 0) && (
+      {panel === "schedule" && (upcomingExperiments.length > 0 || upcomingCageChanges.length > 0 || recentMeetings.length > 0) && (
         <Card>
           <CardHeader className="py-3">
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -470,6 +586,8 @@ export function TasksClient({
                 isBehavior: boolean;
                 animals: Set<string>;
                 expTypes: Set<string>;
+                statuses: Set<string>;
+                experimentIds: string[];
                 firstDate: string;
                 lastDate: string;
                 count: number;
@@ -489,6 +607,8 @@ export function TasksClient({
                     isBehavior,
                     animals: new Set(),
                     expTypes: new Set(),
+                    statuses: new Set(),
+                    experimentIds: [],
                     firstDate: exp.scheduled_date,
                     lastDate: exp.scheduled_date,
                     count: 0,
@@ -498,6 +618,8 @@ export function TasksClient({
                 const batch = batches.get(key)!;
                 batch.animals.add(exp.animals?.identifier || "?");
                 batch.expTypes.add(exp.experiment_type);
+                batch.statuses.add(exp.status || "scheduled");
+                batch.experimentIds.push(exp.id);
                 if (exp.scheduled_date < batch.firstDate) batch.firstDate = exp.scheduled_date;
                 if (exp.scheduled_date > batch.lastDate) batch.lastDate = exp.scheduled_date;
                 batch.count++;
@@ -507,8 +629,13 @@ export function TasksClient({
 
               return sortedBatches.map((batch, i) => {
                 const dateRange = batch.firstDate === batch.lastDate
-                  ? formatDate(batch.firstDate)
-                  : `${formatDate(batch.firstDate)} → ${formatDate(batch.lastDate)}`;
+                  ? formatScheduleDate(batch.firstDate)
+                  : `${formatScheduleDate(batch.firstDate)} → ${formatScheduleDate(batch.lastDate)}`;
+                const expLabels = [...batch.expTypes].map((t) => EXP_TYPE_LABELS[t] || t);
+                const shownLabels = expLabels.slice(0, 3);
+                const remainingLabelCount = Math.max(expLabels.length - shownLabels.length, 0);
+                const statusValues = [...batch.statuses].filter(Boolean);
+                const batchStatus = statusValues.length === 1 ? statusValues[0] : "mixed";
 
                 return (
                   <div key={i} className="flex items-start justify-between gap-2 text-sm bg-muted/30 rounded-md p-2.5">
@@ -523,18 +650,52 @@ export function TasksClient({
                       </div>
                       <div className="text-xs text-muted-foreground mt-1 ml-5">
                         {batch.isBehavior ? (
-                          <span>Behavior Experiments (Handling → Y-Maze, LDB, Marble, Nesting, CatWalk, Rotarod, Plasma)</span>
+                          <span>Behavior pipeline</span>
                         ) : (
-                          <span>{[...batch.expTypes].map(t => EXP_TYPE_LABELS[t] || t).join(", ")}</span>
+                          <span>{expLabels.join(", ")}</span>
                         )}
                       </div>
+                      {batch.isBehavior ? (
+                        <div className="mt-1 ml-5 flex flex-wrap gap-1">
+                          {shownLabels.map((label) => (
+                            <span
+                              key={`${batch.cohortName}-${batch.timepointDays}-${label}`}
+                              className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600"
+                            >
+                              {label}
+                            </span>
+                          ))}
+                          {remainingLabelCount > 0 ? (
+                            <span className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600">
+                              +{remainingLabelCount} more
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div className="text-[10px] text-muted-foreground mt-0.5 ml-5">
-                        Animals: {[...batch.animals].join(", ")}
+                        Animals: {[...batch.animals].slice(0, 5).join(", ")}
+                        {batch.animals.size > 5 ? ` +${batch.animals.size - 5} more` : ""}
                       </div>
                     </div>
-                    <Badge variant="outline" className="text-xs flex-shrink-0 whitespace-nowrap">
-                      {dateRange}
-                    </Badge>
+                    <div className="flex flex-col items-end gap-1.5">
+                      <Badge variant="outline" className="text-xs flex-shrink-0 whitespace-nowrap">
+                        {dateRange}
+                      </Badge>
+                      <select
+                        value={batchStatus}
+                        onChange={(e) => setBatchStatus(batch.experimentIds, e.target.value)}
+                        className="h-6 min-w-[108px] rounded-md border border-input bg-white px-1.5 text-[10px] shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={busy}
+                        aria-label={`Set status for ${batch.cohortName}`}
+                      >
+                        {batchStatus === "mixed" ? <option value="mixed">Mixed</option> : null}
+                        <option value="scheduled">Scheduled</option>
+                        <option value="pending">Pending</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="completed">Completed</option>
+                        <option value="skipped">Skipped</option>
+                      </select>
+                    </div>
                   </div>
                 );
               });
@@ -566,11 +727,20 @@ export function TasksClient({
                 </div>
               );
             })}
+
           </CardContent>
         </Card>
       )}
 
+      {panel === "schedule" && upcomingExperiments.length === 0 && upcomingCageChanges.length === 0 && recentMeetings.length === 0 ? (
+        <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-8 text-center">
+          <p className="text-sm font-medium text-slate-900">No upcoming schedule items.</p>
+          <p className="mt-1 text-xs text-slate-600">Experiments, cage changes, and meeting actions will appear here.</p>
+        </div>
+      ) : null}
+
       {/* ─── Filter Tabs & Add Button ──────────────────── */}
+      {panel === "queue" ? (
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex gap-1 flex-wrap">
           {(["all", "today", "upcoming", "overdue", "completed"] as ViewFilter[]).map((f) => (
@@ -603,9 +773,10 @@ export function TasksClient({
           </Button>
         </div>
       </div>
+      ) : null}
 
       {/* ─── Task List ─────────────────────────────────── */}
-      {filteredTasks.length === 0 ? (
+      {panel === "queue" && (filteredTasks.length === 0 ? (
         <div className="text-center py-16">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/[0.06]">
             <ListChecks className="h-7 w-7 text-primary/40" />
@@ -687,11 +858,11 @@ export function TasksClient({
                     </Button>
                   </div>
                 </CardContent>
-              </Card>
-            );
-          })}
+            </Card>
+          );
+        })}
         </div>
-      )}
+      ))}
 
       {/* ─── Add Task Dialog ───────────────────────────── */}
       <Dialog open={showAddTask} onOpenChange={setShowAddTask}>

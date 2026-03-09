@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Send, MessageSquarePlus, CheckCircle2, Circle, Edit3, Users, UserRound, ChevronLeft } from "lucide-react";
+import { Search, Send, MessageSquarePlus, CheckCircle2, Circle, Edit3, Users, UserRound, ChevronLeft, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export type ChatLabMemberOption = {
@@ -88,6 +88,7 @@ export function LabsChatClient({
     editMessage: (formData: FormData) => Promise<{ success?: boolean; error?: string; message?: ActionMessagePayload }>;
     markThreadRead: (formData: FormData) => Promise<{ success?: boolean; error?: string; updated?: number }>;
     markThreadUnread: (formData: FormData) => Promise<{ success?: boolean; error?: string; updated?: number }>;
+    deleteThread: (formData: FormData) => Promise<{ success?: boolean; error?: string; threadId?: string }>;
   };
 }) {
   const [isNarrowMobile, setIsNarrowMobile] = useState(false);
@@ -231,11 +232,41 @@ export function LabsChatClient({
     setSelectedRecipientIds([]);
   }
 
+  function getParticipantThreadTitle(recipientIds: string[]) {
+    const labels = recipientIds
+      .map((userId) => memberById.get(userId)?.label || "Lab member")
+      .filter((label) => label.trim().length > 0);
+    if (labels.length <= 1) return labels[0] || "Direct message";
+    return `Group: ${labels.join(", ")}`;
+  }
+
+  function findExistingParticipantThread(recipientIds: string[]) {
+    const expected = new Set([currentUserId, ...recipientIds]);
+    return threadItems.find((thread) => {
+      if (thread.recipientScope !== "participants") return false;
+      if (thread.participantUserIds.length !== expected.size) return false;
+      return thread.participantUserIds.every((userId) => expected.has(userId));
+    });
+  }
+
   function onCreateThread() {
-    const title = newThreadTitle.trim();
     const recipientScope = createScope === "all_lab" ? "lab" : "participants";
+    const participantThread = recipientScope === "participants";
+    const title = participantThread ? getParticipantThreadTitle(selectedRecipientIds) : newThreadTitle.trim();
     if (!title) return;
     if (recipientScope === "participants" && selectedRecipientIds.length === 0) return;
+
+    const existingParticipantThread = participantThread
+      ? findExistingParticipantThread(selectedRecipientIds)
+      : null;
+    if (existingParticipantThread) {
+      setSelectedThreadId(existingParticipantThread.id);
+      setSelectedRecipientIds([]);
+      setMemberSearch("");
+      setSearch("");
+      if (isNarrowMobile) setMobileView("chat");
+      return;
+    }
 
     startTransition(async () => {
       setErrorMessage(null);
@@ -286,7 +317,9 @@ export function LabsChatClient({
       setNewThreadTitle("");
       setSelectedRecipientIds([]);
       setMemberSearch("");
+      setSearch("");
       setCreateScope("all_lab");
+      if (isNarrowMobile) setMobileView("chat");
       router.refresh();
     });
   }
@@ -415,6 +448,38 @@ export function LabsChatClient({
     });
   }
 
+  function onDeleteThread() {
+    if (!activeThreadId || !activeThread) return;
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(`Delete "${activeThread.title}" and all messages in it?`);
+      if (!confirmed) return;
+    }
+
+    const targetThreadId = activeThreadId;
+    startTransition(async () => {
+      setErrorMessage(null);
+      const formData = new FormData();
+      formData.set("active_lab_id", activeLabId);
+      formData.set("thread_id", targetThreadId);
+      const result = await actions.deleteThread(formData);
+      if (result?.error) {
+        setErrorMessage(result.error);
+        return;
+      }
+
+      setThreadItems((prev) => prev.filter((thread) => thread.id !== targetThreadId));
+      setMessageItems((prev) => prev.filter((message) => message.threadId !== targetThreadId));
+      setComposerDraftByThreadId((prev) => {
+        const next = { ...prev };
+        delete next[targetThreadId];
+        return next;
+      });
+      setSelectedThreadId((prev) => (prev === targetThreadId ? "" : prev));
+      if (isNarrowMobile) setMobileView("threads");
+      router.refresh();
+    });
+  }
+
   const activeThreadRecipientSummary = useMemo(() => {
     if (!activeThread) return null;
     if (activeThread.threadType === "all_lab") return "All active members in this lab";
@@ -488,12 +553,18 @@ export function LabsChatClient({
                   </Button>
                 </div>
 
-                <input
-                  value={newThreadTitle}
-                  onChange={(e) => setNewThreadTitle(e.target.value)}
-                  placeholder={createScope === "all_lab" ? "Chat title" : "DM/group title"}
-                  className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-                />
+                {createScope === "all_lab" ? (
+                  <input
+                    value={newThreadTitle}
+                    onChange={(e) => setNewThreadTitle(e.target.value)}
+                    placeholder="Chat title"
+                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+                  />
+                ) : (
+                  <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                    Pick members and we will open an existing DM/group or create one automatically.
+                  </p>
+                )}
 
                 {createScope === "participants" ? (
                   <div className="space-y-2">
@@ -531,9 +602,9 @@ export function LabsChatClient({
                   type="button"
                   size="sm"
                   onClick={onCreateThread}
-                  disabled={isPending || !newThreadTitle.trim() || (createScope === "participants" && selectedRecipientIds.length === 0)}
+                  disabled={isPending || (createScope === "all_lab" ? !newThreadTitle.trim() : selectedRecipientIds.length === 0)}
                 >
-                  Create chat
+                  {createScope === "all_lab" ? "Create chat" : "Open chat"}
                 </Button>
               </div>
             </details>
@@ -595,9 +666,15 @@ export function LabsChatClient({
                   <p className="truncate text-xs text-slate-500">{activeThreadRecipientSummary}</p>
                 </div>
               </div>
-              <Button type="button" size="sm" variant="outline" onClick={() => onMarkThreadRead(activeThread.unreadCount > 0)} disabled={isPending}>
-                {activeThread.unreadCount > 0 ? "Mark read" : "Mark unread"}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => onMarkThreadRead(activeThread.unreadCount > 0)} disabled={isPending}>
+                  {activeThread.unreadCount > 0 ? "Mark read" : "Mark unread"}
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={onDeleteThread} disabled={isPending}>
+                  <Trash2 className="mr-1.5 h-4 w-4" />
+                  Delete
+                </Button>
+              </div>
             </div>
 
             <div className="mt-3 max-h-[54vh] overflow-y-auto rounded-xl bg-gradient-to-b from-slate-50/80 to-white p-2.5">
@@ -721,12 +798,18 @@ export function LabsChatClient({
                 </Button>
               </div>
 
-              <input
-                value={newThreadTitle}
-                onChange={(e) => setNewThreadTitle(e.target.value)}
-                placeholder={createScope === "all_lab" ? "Thread title (all lab)" : "Thread title (DM/group)"}
-                className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-              />
+              {createScope === "all_lab" ? (
+                <input
+                  value={newThreadTitle}
+                  onChange={(e) => setNewThreadTitle(e.target.value)}
+                  placeholder="Thread title (all lab)"
+                  className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+                />
+              ) : (
+                <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                  Pick members and we will open an existing DM/group or create one automatically.
+                </p>
+              )}
 
               {createScope === "participants" ? (
                 <div className="space-y-2">
@@ -760,9 +843,9 @@ export function LabsChatClient({
                 type="button"
                 size="sm"
                 onClick={onCreateThread}
-                disabled={isPending || !newThreadTitle.trim() || (createScope === "participants" && selectedRecipientIds.length === 0)}
+                disabled={isPending || (createScope === "all_lab" ? !newThreadTitle.trim() : selectedRecipientIds.length === 0)}
               >
-                Create thread
+                {createScope === "all_lab" ? "Create thread" : "Open chat"}
               </Button>
             </div>
           </details>
@@ -817,6 +900,10 @@ export function LabsChatClient({
                   <Button type="button" size="sm" variant="outline" onClick={() => onMarkThreadRead(false)} disabled={isPending}>
                     <Circle className="mr-1.5 h-4 w-4" />
                     Mark unread
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={onDeleteThread} disabled={isPending}>
+                    <Trash2 className="mr-1.5 h-4 w-4" />
+                    Delete thread
                   </Button>
                 </div>
               </div>

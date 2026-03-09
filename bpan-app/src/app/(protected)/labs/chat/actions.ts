@@ -307,3 +307,51 @@ export async function markLabChatThreadUnread(formData: FormData) {
   revalidateLabChat();
   return { success: true, updated: messageIds.length };
 }
+
+export async function deleteLabChatThread(formData: FormData) {
+  const { supabase } = await requireUser();
+  const activeLabId = normalizeOptionalString(formData.get("active_lab_id"));
+  const threadId = normalizeOptionalString(formData.get("thread_id"));
+
+  if (!activeLabId) return { error: "Active lab context is required." };
+  if (!threadId) return { error: "Thread id is required." };
+
+  const threadCheck = await assertLabRootThread(supabase, { threadId, labId: activeLabId });
+  if ("error" in threadCheck) return threadCheck;
+
+  const { data: threadMessages, error: threadMessagesError } = await supabase
+    .from("messages")
+    .select("id")
+    .eq("thread_id", threadId);
+  if (threadMessagesError) return { error: threadMessagesError.message };
+
+  const messageIds = (threadMessages || []).map((row) => String(row.id));
+  if (messageIds.length > 0) {
+    const { error: readsDeleteError } = await supabase
+      .from("message_reads")
+      .delete()
+      .in("message_id", messageIds);
+    if (readsDeleteError) return { error: readsDeleteError.message };
+  }
+
+  const { error: messagesDeleteError } = await supabase
+    .from("messages")
+    .delete()
+    .eq("thread_id", threadId);
+  if (messagesDeleteError) return { error: messagesDeleteError.message };
+
+  const { error: participantsDeleteError } = await supabase
+    .from("message_thread_participants")
+    .delete()
+    .eq("thread_id", threadId);
+  if (participantsDeleteError) return { error: participantsDeleteError.message };
+
+  const { error: threadDeleteError } = await supabase
+    .from("message_threads")
+    .delete()
+    .eq("id", threadId);
+  if (threadDeleteError) return { error: threadDeleteError.message };
+
+  revalidateLabChat();
+  return { success: true, threadId };
+}

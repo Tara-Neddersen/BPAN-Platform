@@ -103,6 +103,29 @@ export async function deleteTask(id: string) {
   return { success: true };
 }
 
+export async function updateAnimalExperimentBatchStatus(experimentIds: string[], status: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+  if (!Array.isArray(experimentIds) || experimentIds.length === 0) return { error: "No experiments provided." };
+
+  const update: Record<string, unknown> = {
+    status,
+    completed_date: status === "completed" ? new Date().toISOString().split("T")[0] : null,
+  };
+
+  const { error } = await supabase
+    .from("animal_experiments")
+    .update(update)
+    .in("id", experimentIds)
+    .eq("user_id", user.id);
+
+  if (error) return { error: error.message };
+  revalidatePath("/tasks");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true };
+}
+
 function ownerTag(owner?: string) {
   const normalized = String(owner || "").trim().toLowerCase();
   if (!normalized) return null;

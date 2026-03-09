@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { ColonyClient } from "@/components/colony-client";
 import type { ReactNode } from "react";
+import Link from "next/link";
 import type {
   BreederCage,
   Cohort,
@@ -67,7 +68,7 @@ import {
  * This is more reliable than .range() or RPC-based pagination.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchAllRows(supabase: any, table: string, userId: string, orderBy = "id"): Promise<unknown[]> {
+async function fetchAllRows(supabase: any, table: string, userId: string): Promise<unknown[]> {
   const PAGE = 900; // Stay comfortably under 1000-row limit
   let all: unknown[] = [];
   let lastId: string | null = null;
@@ -112,7 +113,59 @@ export async function renderColonyPageView({
 }: ColonyPageViewOptions = {}) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
+  if (!user) {
+    return (
+      <section className="rounded-3xl border border-slate-200/80 bg-white/90 px-6 py-10 shadow-sm backdrop-blur sm:px-10 sm:py-14">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-10">
+          <div className="space-y-4">
+            <p className="inline-flex w-fit rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-800">
+              Colony Workspace
+            </p>
+            <h1 className="max-w-3xl text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
+              Track breeding, scheduling, and results in one place.
+            </h1>
+            <p className="max-w-2xl text-base text-slate-600 sm:text-lg">
+              Built for any research team to keep colony protocol, cage logistics, and experiment progress organized with fewer spreadsheet mistakes.
+            </p>
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              <Link
+                href="/auth/signup"
+                className="inline-flex h-10 items-center justify-center rounded-lg bg-slate-900 px-5 text-sm font-medium text-white transition hover:bg-slate-800"
+              >
+                Create free account
+              </Link>
+              <Link
+                href="/auth/login"
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              >
+                Sign in
+              </Link>
+            </div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4">
+              <h2 className="text-sm font-semibold text-slate-900">Cohorts and breeders</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Maintain cage lineage, genotypes, and active colony inventory.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4">
+              <h2 className="text-sm font-semibold text-slate-900">Protocol timeline</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Schedule handling, behavioral tests, and EEG milestones without manual date math.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4">
+              <h2 className="text-sm font-semibold text-slate-900">Results + analysis</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Capture experiment outputs and compare cohorts in analysis-ready views.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   // Small tables use normal queries (well under 1000 rows)
   // Large tables use paginated RPC to bypass PostgREST 1000-row hard limit

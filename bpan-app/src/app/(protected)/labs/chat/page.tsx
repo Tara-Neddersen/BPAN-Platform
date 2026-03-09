@@ -10,6 +10,7 @@ import {
 import type { Message, MessageRead, MessageThread, MessageThreadParticipant } from "@/types";
 import {
   createLabChatThread,
+  deleteLabChatThread,
   editLabChatMessage,
   markLabChatThreadRead,
   markLabChatThreadUnread,
@@ -291,6 +292,7 @@ export default async function LabsChatPage() {
         editMessage: editLabChatMessage,
         markThreadRead: markLabChatThreadRead,
         markThreadUnread: markLabChatThreadUnread,
+        deleteThread: deleteLabChatThread,
       }}
     />
   );

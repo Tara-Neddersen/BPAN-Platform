@@ -7,10 +7,22 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:labs-assistant-intents": "tsx scripts/labs_assistant_intent_regression.ts",
     "backfill:platform-sync": "node scripts/backfill_platform_sync.mjs",
-    "quartzy:sync-orders": "node scripts/quartzy_sync_orders.mjs"
+    "quartzy:sync-orders": "node scripts/quartzy_sync_orders.mjs",
+    "ios:sync": "npx cap sync ios",
+    "ios:open": "npx cap open ios",
+    "ios:add": "npx cap add ios",
+    "ios:run": "npm run ios:sync && npm run ios:open",
+    "ios:prepare-release": "./scripts/ios_prepare_release.sh",
+    "ios:preflight": "./scripts/ios_release_preflight.sh",
+    "ios:testflight": "./scripts/ios_testflight_release.sh",
+    "push:generate-vapid": "node -e \"const w=require(\\\"web-push\\\");console.log(w.generateVAPIDKeys())\""
   },
   "dependencies": {
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
+    "@capacitor/ios": "^8.2.0",
     "@google/generative-ai": "^0.24.1",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.95.3",
@@ -30,7 +42,9 @@
     "simple-statistics": "^7.8.8",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.1",
-    "xlsx": "^0.18.5"
+    "web-push": "^3.6.7",
+    "xlsx": "^0.18.5",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -39,10 +53,12 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/react-plotly.js": "^2.6.4",
+    "@types/web-push": "^3.6.4",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "shadcn": "^3.8.4",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "tw-animate-css": "^1.4.0",
     "typescript": "^5"
   }

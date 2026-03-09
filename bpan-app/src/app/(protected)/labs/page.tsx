@@ -43,6 +43,7 @@ import {
 } from "@/app/(protected)/labs/actions";
 import {
   createLabChatThread,
+  deleteLabChatThread,
   editLabChatMessage,
   markLabChatThreadRead,
   markLabChatThreadUnread,
@@ -310,6 +311,39 @@ async function loadOperationsPanelData({
       : Promise.resolve({ data: [] as LabMemberTitleRow[] }),
   ]);
 
+  const { data: approverMembersResult } = await supabase
+    .from("lab_members")
+    .select("user_id,display_title,role,is_active")
+    .eq("lab_id", activeLabId)
+    .eq("is_active", true)
+    .in("role", ["manager", "admin"]);
+
+  const approverMembers = (approverMembersResult ?? []) as Array<{
+    user_id: string;
+    display_title: string | null;
+    role: string;
+    is_active: boolean;
+  }>;
+  const approverIds = Array.from(new Set(approverMembers.map((member) => member.user_id)));
+  const { data: approverProfilesResult } = approverIds.length > 0
+    ? await serviceSupabase
+        .from("profiles")
+        .select("id,display_name,email")
+        .in("id", approverIds)
+    : { data: [] as ProfileRow[] };
+  const approverProfileById = new Map(
+    ((approverProfilesResult ?? []) as ProfileRow[]).map((profile) => [profile.id, profile]),
+  );
+  const approverLabels = approverMembers
+    .map((member) => {
+      const profile = approverProfileById.get(member.user_id);
+      if (member.display_title && member.display_title.trim().length > 0) return member.display_title.trim();
+      if (profile?.display_name && profile.display_name.trim().length > 0) return profile.display_name.trim();
+      if (profile?.email && profile.email.trim().length > 0) return profile.email.trim();
+      return "Lab approver";
+    })
+    .filter((label, index, list) => list.indexOf(label) === index);
+
   const authorLabelById = new Map<string, string>();
   for (const row of (profilesResult.data ?? []) as ProfileRow[]) {
     const label =
@@ -438,6 +472,7 @@ async function loadOperationsPanelData({
       linkedTaskIds: taskLinksByObject.get(objectKey("lab_equipment_booking", item.id)) ?? [],
       messages: messagesForObject("lab_equipment_booking", item.id),
     })),
+    approverLabels,
   };
 
   return panelData;
@@ -879,6 +914,7 @@ export default async function LabsPage({
           editMessage: editLabChatMessage,
           markThreadRead: markLabChatThreadRead,
           markThreadUnread: markLabChatThreadUnread,
+          deleteThread: deleteLabChatThread,
         }}
       />
     );

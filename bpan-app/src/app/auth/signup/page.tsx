@@ -61,7 +61,7 @@ export default function SignupPage() {
   if (success) {
     return (
       <AuthShell mode="signup">
-        <div className="rounded-xl border border-slate-200/80 bg-white p-6 text-center shadow-[0_10px_20px_-16px_rgba(15,23,42,0.35)]">
+        <div className="rounded-2xl border border-white/80 bg-white/84 p-6 text-center shadow-[0_16px_30px_-20px_rgba(15,23,42,0.36)] backdrop-blur-xl">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
             <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -85,7 +85,7 @@ export default function SignupPage() {
 
   return (
     <AuthShell mode="signup">
-      <div className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-[0_10px_20px_-16px_rgba(15,23,42,0.35)] sm:p-6">
+      <div className="rounded-2xl border border-white/80 bg-white/84 p-5 shadow-[0_16px_30px_-20px_rgba(15,23,42,0.36)] backdrop-blur-xl sm:p-6">
         <div className="mb-5">
           <h2 className="text-xl font-semibold text-slate-900">Create account</h2>
           <p className="mt-1 text-sm text-slate-600">Get started with the BPAN platform</p>
@@ -138,7 +138,7 @@ export default function SignupPage() {
           )}
           <Button
             type="submit"
-            className="h-11 w-full rounded-xl bg-[linear-gradient(135deg,#5aa5bb,#3d8397)] text-white shadow-[0_10px_20px_-12px_rgba(45,110,128,0.8)] hover:opacity-95"
+            className="h-11 w-full rounded-xl border border-primary/70 bg-primary text-white shadow-[0_14px_30px_-22px_color-mix(in_oklch,var(--primary)_70%,black)] hover:bg-primary/92"
             disabled={loading}
           >
             {loading ? "Creating account..." : hasSupabaseEnv ? "Sign up" : "Sign up (Preview only)"}
@@ -147,7 +147,7 @@ export default function SignupPage() {
 
         <p className="mt-5 text-center text-sm text-slate-600">
           Already have an account?{" "}
-          <Link href="/auth/login" className="font-semibold text-cyan-700 hover:text-cyan-800">
+          <Link href="/auth/login" className="font-semibold text-primary hover:text-primary/90">
             Sign in
           </Link>
         </p>

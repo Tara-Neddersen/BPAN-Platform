@@ -1,9 +1,8 @@
 "use client";
 
-import { cloneElement, isValidElement, startTransition, useEffect, useState, type ReactNode } from "react";
+import { cloneElement, isValidElement, startTransition, useState, type ReactElement, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Building2,
   CalendarClock,
   ClipboardCheck,
   FlaskConical,
@@ -11,14 +10,12 @@ import {
   Megaphone,
   MessageSquare,
   NotebookPen,
-  ShieldCheck,
   Trash2,
   UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   addLabMemberByEmail,
-  createLab,
   deactivateLabMember,
   updateLabMemberDisplayName,
   updateLabMemberRole,
@@ -187,6 +184,12 @@ type LabHubSection =
   | "announcements"
   | "inspection_tasks"
   | "equipment_booking";
+type LabsViewMode = "operations" | "administration";
+
+type OperationsReagentsPanelProps = {
+  inventoryEntryMode?: "default" | "add" | "search" | "chat";
+  inventoryOnBack?: (() => void) | null;
+};
 
 const ROLE_LABELS: Record<PlatformLabRole, string> = {
   member: "Member",
@@ -201,11 +204,25 @@ const EDIT_POLICY_LABELS = {
 
 const LAB_HOME_SHORTCUTS = [
   {
+    key: "announcements" as const,
+    title: "Announcements",
+    description: "Share inspection notices.",
+    actionLabel: "Open section",
+    icon: Megaphone,
+  },
+  {
     key: "reagents" as const,
     title: "Reagents",
     description: "Track stock and reorder needs.",
     actionLabel: "Open section",
     icon: FlaskConical,
+  },
+  {
+    key: "equipment_booking" as const,
+    title: "Equipment booking",
+    description: "Book and manage equipment time.",
+    actionLabel: "Open section",
+    icon: CalendarClock,
   },
   {
     key: "meetings" as const,
@@ -222,64 +239,50 @@ const LAB_HOME_SHORTCUTS = [
     icon: MessageSquare,
   },
   {
-    key: "announcements" as const,
-    title: "Announcements",
-    description: "Share inspection notices.",
-    actionLabel: "Open section",
-    icon: Megaphone,
-  },
-  {
     key: "inspection_tasks" as const,
     title: "Shared inspection tasks",
     description: "Review inspection follow-ups.",
     actionLabel: "Open section",
     icon: ClipboardCheck,
   },
-  {
-    key: "equipment_booking" as const,
-    title: "Equipment booking",
-    description: "Book and manage equipment time.",
-    actionLabel: "Open section",
-    icon: CalendarClock,
-  },
 ] as const;
 
 const SHORTCUT_THEME: Record<string, { active: string; idle: string; icon: string; iconBg: string }> = {
   reagents: {
-    active: "border-emerald-300 bg-emerald-50 text-emerald-950",
-    idle: "border-emerald-200/70 bg-white text-slate-700 hover:bg-emerald-50/60",
+    active: "border-emerald-300/70 bg-emerald-50 text-slate-900",
+    idle: "border-white/80 bg-white/86 text-slate-700 hover:bg-white",
     icon: "text-emerald-700",
-    iconBg: "bg-emerald-100",
+    iconBg: "bg-emerald-100/70",
   },
   chat: {
-    active: "border-sky-300 bg-sky-50 text-sky-950",
-    idle: "border-sky-200/70 bg-white text-slate-700 hover:bg-sky-50/60",
-    icon: "text-sky-700",
-    iconBg: "bg-sky-100",
+    active: "border-violet-300/70 bg-violet-50 text-slate-900",
+    idle: "border-white/80 bg-white/86 text-slate-700 hover:bg-white",
+    icon: "text-violet-700",
+    iconBg: "bg-violet-100/75",
   },
   meetings: {
-    active: "border-indigo-300 bg-indigo-50 text-indigo-950",
-    idle: "border-indigo-200/70 bg-white text-slate-700 hover:bg-indigo-50/60",
-    icon: "text-indigo-700",
-    iconBg: "bg-indigo-100",
+    active: "border-amber-300/70 bg-amber-50 text-slate-900",
+    idle: "border-white/80 bg-white/86 text-slate-700 hover:bg-white",
+    icon: "text-amber-700",
+    iconBg: "bg-amber-100/70",
   },
   announcements: {
-    active: "border-amber-300 bg-amber-50 text-amber-950",
-    idle: "border-amber-200/70 bg-white text-slate-700 hover:bg-amber-50/60",
-    icon: "text-amber-700",
-    iconBg: "bg-amber-100",
+    active: "border-sky-300/70 bg-sky-50 text-slate-900",
+    idle: "border-white/80 bg-white/86 text-slate-700 hover:bg-white",
+    icon: "text-sky-700",
+    iconBg: "bg-sky-100/75",
   },
   inspection_tasks: {
-    active: "border-violet-300 bg-violet-50 text-violet-950",
-    idle: "border-violet-200/70 bg-white text-slate-700 hover:bg-violet-50/60",
-    icon: "text-violet-700",
-    iconBg: "bg-violet-100",
+    active: "border-rose-300/70 bg-rose-50 text-slate-900",
+    idle: "border-white/80 bg-white/86 text-slate-700 hover:bg-white",
+    icon: "text-rose-700",
+    iconBg: "bg-rose-100/70",
   },
   equipment_booking: {
-    active: "border-cyan-300 bg-cyan-50 text-cyan-950",
-    idle: "border-cyan-200/70 bg-white text-slate-700 hover:bg-cyan-50/60",
-    icon: "text-cyan-700",
-    iconBg: "bg-cyan-100",
+    active: "border-indigo-300/70 bg-indigo-50 text-slate-900",
+    idle: "border-white/80 bg-white/86 text-slate-700 hover:bg-white",
+    icon: "text-indigo-700",
+    iconBg: "bg-indigo-100/75",
   },
 };
 
@@ -368,13 +371,6 @@ function toSharedTaskEntry(entry: SharedTaskRecord): SharedTaskEntry {
   };
 }
 
-function formatSyncTimestamp(timestamp: string | null) {
-  if (!timestamp) return "No sync marker yet";
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return timestamp;
-  return date.toLocaleString();
-}
-
 export function LabsClient({
   currentUserId,
   shellWarning,
@@ -390,7 +386,6 @@ export function LabsClient({
   initialSharedTasksByLab = {},
   announcementActions,
   sharedTaskActions,
-  syncStatusByLab = {},
   workspaces,
 }: LabsClientProps) {
   const router = useRouter();
@@ -405,23 +400,22 @@ export function LabsClient({
   const [lastAddDraftByLab, setLastAddDraftByLab] = useState<Record<string, AddMemberDraft>>({});
   const [managerProfileByLab, setManagerProfileByLab] = useState<Record<string, Record<string, ManagerMemberProfile>>>({});
   const [sharedTaskEditById, setSharedTaskEditById] = useState<Record<string, SharedTaskEditDraft>>({});
-  const [teamTargetLabId, setTeamTargetLabId] = useState<string | null>(null);
   const [openTeamPoliciesByLab, setOpenTeamPoliciesByLab] = useState<Record<string, boolean>>({});
   const [opsTabByLab, setOpsTabByLab] = useState<Record<string, LabHubSection>>({});
   const [advancedPanelByLab, setAdvancedPanelByLab] = useState<Record<string, Partial<Record<LabHubSection, boolean>>>>({});
+  const [reagentViewByLab, setReagentViewByLab] = useState<Record<string, "chooser" | "workspace">>({});
+  const [reagentEntryModeByLab, setReagentEntryModeByLab] = useState<Record<string, "default" | "add" | "search" | "chat">>({});
+  const [reagentSlideDirByLab, setReagentSlideDirByLab] = useState<Record<string, "forward" | "back">>({});
+  const [announcementViewByLab, setAnnouncementViewByLab] = useState<Record<string, "chooser" | "browse" | "create">>({});
+  const [announcementSlideDirByLab, setAnnouncementSlideDirByLab] = useState<Record<string, "forward" | "back">>({});
+  const [inspectionViewByLab, setInspectionViewByLab] = useState<Record<string, "chooser" | "board" | "create">>({});
+  const [inspectionSlideDirByLab, setInspectionSlideDirByLab] = useState<Record<string, "forward" | "back">>({});
+  const [selectedAnnouncementIdByLab, setSelectedAnnouncementIdByLab] = useState<Record<string, string>>({});
+  const [selectedInspectionTaskIdByLab, setSelectedInspectionTaskIdByLab] = useState<Record<string, string>>({});
   const [opsPanelPulseKey, setOpsPanelPulseKey] = useState<string | null>(null);
-  const [isNarrowMobile, setIsNarrowMobile] = useState(false);
   const effectiveActiveLabId = selectedLabId ?? workspaces[0]?.membership.lab.id ?? null;
   const normalizedInitialPanel = normalizeIncomingPanel(initialPanel);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mediaQuery = window.matchMedia("(max-width: 640px)");
-    const apply = () => setIsNarrowMobile(mediaQuery.matches);
-    apply();
-    mediaQuery.addEventListener("change", apply);
-    return () => mediaQuery.removeEventListener("change", apply);
-  }, []);
+  const [labsView] = useState<LabsViewMode>("operations");
 
   function readStoredEvents<T>(key: string): T[] {
     if (typeof window === "undefined") return [];
@@ -635,6 +629,30 @@ export function LabsClient({
     return opsTabByLab[labId] ?? normalizedInitialPanel ?? "announcements";
   }
 
+  function getReagentView(labId: string) {
+    return reagentViewByLab[labId] ?? "chooser";
+  }
+
+  function reagentSlideClass(labId: string) {
+    return reagentSlideDirByLab[labId] === "back" ? "ops-slide-card-back" : "ops-slide-card-forward";
+  }
+
+  function getAnnouncementView(labId: string) {
+    return announcementViewByLab[labId] ?? "chooser";
+  }
+
+  function announcementSlideClass(labId: string) {
+    return announcementSlideDirByLab[labId] === "back" ? "ops-slide-card-back" : "ops-slide-card-forward";
+  }
+
+  function getInspectionView(labId: string) {
+    return inspectionViewByLab[labId] ?? "chooser";
+  }
+
+  function inspectionSlideClass(labId: string) {
+    return inspectionSlideDirByLab[labId] === "back" ? "ops-slide-card-back" : "ops-slide-card-forward";
+  }
+
   function setOpsTab(labId: string, section: LabHubSection) {
     setOpsTabByLab((current) => ({ ...current, [labId]: section }));
     if (typeof window !== "undefined") {
@@ -652,6 +670,15 @@ export function LabsClient({
 
   function openOpsSection(labId: string, section: LabHubSection) {
     setOpsTab(labId, section);
+    if (section === "reagents") {
+      setReagentViewByLab((current) => ({ ...current, [labId]: "chooser" }));
+    }
+    if (section === "announcements") {
+      setAnnouncementViewByLab((current) => ({ ...current, [labId]: "chooser" }));
+    }
+    if (section === "inspection_tasks") {
+      setInspectionViewByLab((current) => ({ ...current, [labId]: "chooser" }));
+    }
     const pulseKey = `${labId}:${section}`;
     setOpsPanelPulseKey(pulseKey);
     if (typeof window !== "undefined") {
@@ -682,106 +709,72 @@ export function LabsClient({
     return advancedPanelByLab[labId]?.[section] ?? false;
   }
 
-  function getTeamTargetId(labId: string, target: "members" | "policies") {
-    return `lab-${labId}-team-${target}`;
-  }
-
   function getTeamDetailsId(labId: string) {
     return `lab-${labId}-team-policies`;
   }
 
-  function focusTeamTarget(labId: string, target: "members" | "policies") {
-    setOpenTeamPoliciesByLab((current) => ({ ...current, [labId]: true }));
-    const targetId = getTeamTargetId(labId, target);
-    if (typeof window !== "undefined") {
-      window.requestAnimationFrame(() => {
-        const details = document.getElementById(getTeamDetailsId(labId));
-        if (details instanceof HTMLDetailsElement) {
-          details.open = true;
-        }
-        const element = document.getElementById(targetId) as HTMLElement | null;
-        if (!element) {
-          toast.error("Could not open that section.");
-          return;
-        }
-        element.scrollIntoView({ behavior: "smooth", block: "start" });
-        element.focus();
-        toast.success(target === "members" ? "Opened member invite section." : "Opened policy and role section.");
-      });
-    }
+  function getTeamTargetId(labId: string, target: "members" | "policies") {
+    return `lab-${labId}-team-${target}`;
   }
 
   const hasActiveLab = Boolean(effectiveActiveLabId);
-  const activeLabName = effectiveActiveLabId
-    ? workspaces.find((workspace) => workspace.membership.lab.id === effectiveActiveLabId)?.membership.lab.name ?? "Selected lab"
-    : null;
-  const manageableLabs = workspaces.filter(
-    (workspace) =>
-      canManageLabMembers(workspace.membership.role) || canManageLabPolicies(workspace.membership.role),
-  );
-  const defaultTeamTargetLabId =
-    manageableLabs.find((workspace) => workspace.membership.lab.id === effectiveActiveLabId)?.membership.lab.id ??
-    manageableLabs[0]?.membership.lab.id ??
-    null;
-  const resolvedTeamTargetLabId =
-    teamTargetLabId && manageableLabs.some((workspace) => workspace.membership.lab.id === teamTargetLabId)
-      ? teamTargetLabId
-      : defaultTeamTargetLabId;
-  const resolvedTeamTargetLab = manageableLabs.find(
-    (workspace) => workspace.membership.lab.id === resolvedTeamTargetLabId,
-  );
-  const canRunMemberAction = resolvedTeamTargetLab ? canManageLabMembers(resolvedTeamTargetLab.membership.role) : false;
-  const canRunPolicyAction = resolvedTeamTargetLab ? canManageLabPolicies(resolvedTeamTargetLab.membership.role) : false;
-  const canViewSyncStatus = resolvedTeamTargetLab ? roleRank(resolvedTeamTargetLab.membership.role) >= 2 : false;
-  const syncStatus = resolvedTeamTargetLabId ? syncStatusByLab[resolvedTeamTargetLabId] : undefined;
+  const visibleWorkspaces = effectiveActiveLabId
+    ? workspaces.filter((workspace) => workspace.membership.lab.id === effectiveActiveLabId)
+    : workspaces;
   const activeShortcutKey = effectiveActiveLabId ? getActiveOpsTab(effectiveActiveLabId) : "announcements";
   const activeShortcut = LAB_HOME_SHORTCUTS.find((item) => item.key === activeShortcutKey) ?? LAB_HOME_SHORTCUTS[0];
   const activeShortcutTheme = SHORTCUT_THEME[activeShortcut.key] ?? SHORTCUT_THEME.equipment_booking;
 
+  function switchWorkspace(labId: string) {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (labId) {
+      params.set("lab_id", labId);
+    } else {
+      params.delete("lab_id");
+    }
+    const query = params.toString();
+    router.push(query ? `${window.location.pathname}?${query}` : window.location.pathname);
+  }
+
   return (
     <div
-      className="page-shell labs-aesthetic"
-      style={isNarrowMobile ? { transform: "scale(0.8)", transformOrigin: "top left", width: "125%" } : undefined}
+      className="page-shell labs-native overflow-x-hidden"
     >
-      <section className="section-card card-density-comfy labs-hero border border-slate-200 bg-gradient-to-r from-white via-cyan-50/40 to-amber-50/35">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-3xl">
-            <div className="flex items-center gap-1.5">
-              <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">Lab operations hub</h1>
-              <HelpHint text="Start daily lab work from one place." />
-            </div>
-            <p className="mt-1.5 text-xs text-slate-600 sm:text-sm">Daily execution up top, admin controls tucked below.</p>
-          </div>
-          <div className="labs-meta-chip rounded-xl border border-cyan-200/70 bg-white/90 px-3 py-2 text-xs text-slate-700 shadow-sm">
-            <p className="font-medium">{hasActiveLab ? `Current lab: ${activeLabName}` : "Personal workspace"}</p>
-            <p>{workspaces.length} lab{workspaces.length === 1 ? "" : "s"} available</p>
-          </div>
-        </div>
-
-        {shellWarning ? (
-          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            {shellWarning}
-          </div>
-        ) : null}
-      </section>
+      <div className="flex items-center justify-end">
+        <select
+          value={effectiveActiveLabId ?? ""}
+          onChange={(event) => switchWorkspace(event.target.value)}
+          className="h-10 max-w-[13rem] rounded-lg border border-white/80 bg-white/84 px-3 text-[15px] text-slate-700 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.82)] sm:h-9 sm:max-w-[12rem] sm:px-2.5 sm:text-sm"
+          aria-label="Select lab workspace"
+          title={shellWarning ?? undefined}
+        >
+          {workspaces.map((workspace) => (
+            <option key={`workspace-select-${workspace.membership.lab.id}`} value={workspace.membership.lab.id}>
+              {workspace.membership.lab.name}
+            </option>
+          ))}
+        </select>
+      </div>
 
       {labsAssistantPanel ? (
-        <section className="section-card card-density-comfy border border-sky-200/70 bg-gradient-to-r from-white via-sky-50/35 to-white">
+        <section className="section-card card-density-comfy">
           <div className="mb-3 flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-900">Lab AI assistant</h2>
+            <h2 className="text-[15px] font-semibold text-slate-900 sm:text-sm">Lab AI assistant</h2>
             <HelpHint text="Ask inventory, equipment, booking, and operations questions for the active lab." />
           </div>
           {labsAssistantPanel}
         </section>
       ) : null}
 
-      <section className="section-card card-density-comfy labs-shortcuts border border-slate-200 bg-white">
+      {labsView === "operations" ? (
+      <section className="section-card card-density-comfy labs-shortcuts border-white/80 bg-white/82">
         <div className="mb-3 flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-slate-900">Daily operations</h2>
+          <h2 className="text-[15px] font-semibold text-slate-900 sm:text-sm">Daily operations</h2>
           <HelpHint text="Quick links to the core shared lab workflows." />
         </div>
         <div
-          className={`labs-tool-strip flex gap-2 overflow-x-auto ${hasActiveLab ? "" : "opacity-60"}`}
+          className={`labs-tool-strip flex flex-wrap gap-2 overflow-x-auto sm:flex-nowrap ${hasActiveLab ? "" : "opacity-60"}`}
           role="tablist"
           aria-label="Lab tools"
         >
@@ -804,227 +797,31 @@ export function LabsClient({
                   }
                   openOpsSection(effectiveActiveLabId, shortcut.key);
                 }}
-                className={`labs-tool-tab inline-flex items-center gap-2 rounded-xl border px-3 py-2.5 text-sm shadow-[0_6px_16px_-12px_rgba(15,23,42,0.45)] transition ${
+                className={`labs-tool-tab inline-flex min-h-10 items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm shadow-[0_6px_16px_-12px_rgba(15,23,42,0.45)] transition ${
                   isActiveShortcut ? theme.active : theme.idle
-                } ${hasActiveLab ? "" : "cursor-not-allowed"}`}
+                } ${
+                  hasActiveLab ? "" : "cursor-not-allowed"
+                }`}
               >
                 <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${theme.iconBg}`}>
                   <Icon className={`h-4 w-4 ${theme.icon}`} />
                 </span>
-                <span className="font-medium">{shortcut.title}</span>
+                <span className="text-[15px] font-medium sm:text-sm">{shortcut.title}</span>
               </button>
             );
           })}
         </div>
-        <div className={`mt-3 rounded-xl border px-3 py-2 text-xs ${activeShortcutTheme.active}`}>
+        <div
+          className={`mt-3 rounded-xl border px-3 py-2 text-xs sm:text-sm ${
+            activeShortcutKey === "announcements"
+              ? "border-amber-300/80 bg-amber-50/85 text-amber-950 shadow-[0_10px_24px_-18px_rgba(180,83,9,0.44)]"
+              : activeShortcutTheme.active
+          }`}
+        >
           <span className="font-semibold">{activeShortcut.title}:</span> {activeShortcut.description}
         </div>
       </section>
-
-      <section className="section-card card-density-comfy border border-violet-200/60 bg-gradient-to-r from-white via-violet-50/25 to-white">
-        <div className="mb-3 flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-slate-900">Lab administration</h2>
-          <HelpHint text="Infrequent controls for access, roles, and sharing rules." />
-        </div>
-      <details className="rounded-2xl border border-violet-200/70 bg-white/90 p-3 sm:p-4">
-        <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-slate-900">
-          <ShieldCheck className="h-4 w-4 text-slate-600" />
-          Open administration controls
-        </summary>
-        <div className="mt-3 space-y-2 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3">
-          <label className="space-y-1">
-            <span className="flex items-center gap-1 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
-              Target lab
-              <HelpHint text="Member and policy actions below apply to this selected lab." />
-            </span>
-            <select
-              value={resolvedTeamTargetLabId ?? ""}
-              onChange={(event) => {
-                setTeamTargetLabId(event.target.value || null);
-              }}
-              className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm shadow-xs outline-none"
-            >
-              {manageableLabs.length === 0 ? (
-                <option value="">No manageable labs available</option>
-              ) : (
-                manageableLabs.map((workspace) => (
-                  <option key={`team-target-${workspace.membership.lab.id}`} value={workspace.membership.lab.id}>
-                    {workspace.membership.lab.name}
-                  </option>
-                ))
-              )}
-            </select>
-          </label>
-          <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={!resolvedTeamTargetLabId || !canRunMemberAction}
-            onClick={() => {
-              if (!resolvedTeamTargetLabId) {
-                toast.error("Select a target lab first.");
-                return;
-              }
-              focusTeamTarget(resolvedTeamTargetLabId, "members");
-            }}
-          >
-            Add or invite members
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={!resolvedTeamTargetLabId || !canRunPolicyAction}
-            onClick={() => {
-              if (!resolvedTeamTargetLabId) {
-                toast.error("Select a target lab first.");
-                return;
-              }
-              focusTeamTarget(resolvedTeamTargetLabId, "policies");
-            }}
-          >
-            Open roles and access
-          </Button>
-          </div>
-          {resolvedTeamTargetLabId ? (
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <Badge className={canRunMemberAction ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
-                {canRunMemberAction ? "Members: editable" : "Members: limited"}
-              </Badge>
-              <Badge className={canRunPolicyAction ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"}>
-                {canRunPolicyAction ? "Policies: editable" : "Policies: limited"}
-              </Badge>
-            </div>
-          ) : null}
-          {!resolvedTeamTargetLabId ? (
-            <p className="text-xs text-amber-700">Select a target lab to enable actions.</p>
-          ) : null}
-          {resolvedTeamTargetLabId && (!canRunMemberAction || !canRunPolicyAction) ? (
-            <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
-              {canRunMemberAction && !canRunPolicyAction
-                ? "You can invite members for this lab, but policy editing requires higher access."
-                : !canRunMemberAction && canRunPolicyAction
-                  ? "You can edit policies for this lab, but member invites require manager/admin member access."
-                  : "You do not have team or policy management access for this lab."}
-            </p>
-          ) : null}
-        </div>
-        {canViewSyncStatus && resolvedTeamTargetLabId ? (
-          <Card className="mt-3 border-white/80 bg-white/85 shadow-[0_18px_38px_-30px_rgba(15,23,42,0.24)]">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Inventory sync status</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <p className="text-slate-700">
-                Last sync: <span className="font-medium">{formatSyncTimestamp(syncStatus?.lastSyncAt ?? null)}</span>
-              </p>
-              <div className="grid gap-2 sm:grid-cols-3">
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-[0.08em] text-slate-500">Fetched</p>
-                  <p className="text-sm font-semibold text-slate-900">{syncStatus?.fetched ?? "N/A"}</p>
-                </div>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-[0.08em] text-slate-500">Matched</p>
-                  <p className="text-sm font-semibold text-slate-900">{syncStatus?.matched ?? "N/A"}</p>
-                </div>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-[0.08em] text-slate-500">Inserted</p>
-                  <p className="text-sm font-semibold text-slate-900">{syncStatus?.inserted ?? "N/A"}</p>
-                </div>
-              </div>
-              <p className="text-xs text-slate-600">
-                {syncStatus?.hint ?? "Sync summary is not available yet for this lab."}
-              </p>
-              <div className="flex items-center gap-1 text-xs text-slate-600">
-                <span>Manual checks</span>
-                <HelpHint text="Run: node scripts/quartzy_sync_orders.mjs --dry-run (or --apply), then review cron/job logs for summary output." />
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-        <Card className="mt-3 border-white/80 bg-white/85 shadow-[0_18px_38px_-30px_rgba(15,23,42,0.24)]">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Building2 className="h-4 w-4 text-cyan-700" />
-              Create a lab
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form
-              className="grid gap-4 lg:grid-cols-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                runAction(
-                  "create-lab",
-                  createLab,
-                  new FormData(event.currentTarget),
-                  "Lab workspace created.",
-                );
-              }}
-            >
-            <label className="space-y-2 text-sm text-slate-700">
-              <span className="font-medium">Lab name</span>
-              <Input name="name" placeholder="Neurobehavior Core" required />
-            </label>
-
-            <label className="space-y-2 text-sm text-slate-700">
-              <span className="font-medium">Slug</span>
-              <Input name="slug" placeholder="neurobehavior-core" />
-            </label>
-
-            <label className="space-y-2 text-sm text-slate-700 lg:col-span-2">
-              <span className="font-medium">Description</span>
-              <Textarea
-                name="description"
-                placeholder="What this lab shares, who it supports, and what should stay private."
-                rows={3}
-              />
-            </label>
-
-            <label className="space-y-2 text-sm text-slate-700">
-              <span className="font-medium">Timezone</span>
-              <Input name="timezone" defaultValue="America/Los_Angeles" />
-            </label>
-
-            <label className="space-y-2 text-sm text-slate-700">
-              <span className="font-medium">Shared template editing</span>
-              <select
-                name="shared_template_edit_policy"
-                defaultValue="manager_controlled"
-                className="h-10 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none"
-              >
-                <option value="manager_controlled">{EDIT_POLICY_LABELS.manager_controlled}</option>
-                <option value="open_edit">{EDIT_POLICY_LABELS.open_edit}</option>
-              </select>
-            </label>
-
-            <label className="space-y-2 text-sm text-slate-700">
-              <span className="font-medium">Shared protocol editing</span>
-              <select
-                name="shared_protocol_edit_policy"
-                defaultValue="manager_controlled"
-                className="h-10 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none"
-              >
-                <option value="manager_controlled">{EDIT_POLICY_LABELS.manager_controlled}</option>
-                <option value="open_edit">{EDIT_POLICY_LABELS.open_edit}</option>
-              </select>
-            </label>
-
-              <div className="lg:col-span-2 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-600">
-                <div className="flex items-center gap-1.5">
-                  <p>Owner role</p>
-                  <HelpHint text="You are added as the first admin when you create a lab." />
-                </div>
-                <Button type="submit" disabled={busyKey === "create-lab"}>
-                  {busyKey === "create-lab" ? "Creating..." : "Create lab"}
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      </details>
-      </section>
+      ) : null}
 
       {workspaces.length === 0 ? (
         <Card className="border-dashed border-slate-300 bg-white/75">
@@ -1037,7 +834,7 @@ export function LabsClient({
           </CardContent>
         </Card>
       ) : (
-        workspaces.map((workspace) => {
+        visibleWorkspaces.map((workspace) => {
           const isSelected = effectiveActiveLabId === workspace.membership.lab.id;
           const canManageMembers = canManageLabMembers(workspace.membership.role);
           const canManagePolicies = canManageLabPolicies(workspace.membership.role);
@@ -1065,10 +862,10 @@ export function LabsClient({
               key={workspace.membership.lab.id}
               id={`lab-${workspace.membership.lab.id}`}
               className={`labs-workspace-card relative overflow-hidden border-white/80 bg-white/90 shadow-[0_18px_38px_-30px_rgba(15,23,42,0.24)] ${
-                isSelected ? "ring-2 ring-cyan-200" : ""
+                isSelected ? "ring-2 ring-primary/25" : ""
               }`}
             >
-              <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-cyan-400 via-violet-400 to-amber-300" />
+              <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-sky-300/90 via-indigo-300/80 to-emerald-300/85" />
               <CardHeader className="gap-3 pb-3">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div>
@@ -1078,67 +875,43 @@ export function LabsClient({
                         workspace.membership.role === "admin"
                           ? "bg-emerald-100 text-emerald-800"
                           : workspace.membership.role === "manager"
-                            ? "bg-blue-100 text-blue-800"
+                            ? "bg-slate-100 text-slate-700"
                             : "bg-slate-100 text-slate-700"
                       }>
                         {ROLE_LABELS[workspace.membership.role]}
                       </Badge>
                       {isSelected ? (
-                        <Badge className="bg-cyan-600 text-white">Active lab</Badge>
+                        <Badge className="bg-primary text-white">Active lab</Badge>
                       ) : null}
                     </div>
-                    <p className="mt-2 text-sm text-slate-600">
-                      {workspace.membership.lab.description || "No lab description yet."}
-                    </p>
                   </div>
-                  <div className="labs-minimal-chip rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600">
-                    <div className="flex items-center gap-1.5">
-                      <p className="font-semibold uppercase tracking-[0.14em] text-slate-500">Visibility boundary</p>
-                      <HelpHint text="Private records stay personal. Shared records follow this lab's rules." />
-                    </div>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-1.5 text-xs">
-                  <Badge variant="outline" className={canManageMembers ? "border-emerald-200 text-emerald-800" : "border-slate-200 text-slate-600"}>
-                    {canManageMembers ? "Members editable" : "Members read-only"}
-                  </Badge>
-                  <Badge variant="outline" className={canManagePolicies ? "border-blue-200 text-blue-800" : "border-slate-200 text-slate-600"}>
-                    {canManagePolicies ? "Policies editable" : "Policies read-only"}
-                  </Badge>
                 </div>
               </CardHeader>
 
               <CardContent className="space-y-3">
+                {labsView === "operations" ? (
                 <section
                   id={getOpsHubId(workspace.membership.lab.id)}
-                  className="labs-ops-surface space-y-3 rounded-2xl border border-cyan-100 bg-cyan-50/40 p-4"
+                  className="labs-ops-surface space-y-3 rounded-2xl border border-white/80 bg-white/74 p-4 backdrop-blur-xl"
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <h3 className="text-sm font-semibold text-slate-900">Operations hub</h3>
-                        <HelpHint text="Shared announcements, meetings, and inspection tasks for this lab." />
-                      </div>
-                    </div>
-                  </div>
-
                   <div
-                    className={
-                      usesEmbeddedSurface
-                        ? "min-w-0 space-y-2 overflow-x-hidden"
-                        : "labs-content-panel rounded-2xl border border-slate-200 bg-white p-4"
-                    }
+                        className={
+                          usesEmbeddedSurface
+                            ? "min-w-0 space-y-2 overflow-x-hidden"
+                            : "labs-content-panel rounded-2xl border border-white/80 bg-white/84 p-4"
+                        }
                     role="tabpanel"
                     id={getOpsPanelId(workspace.membership.lab.id, activeOpsTab)}
                     aria-labelledby={`ops-tab-${workspace.membership.lab.id}-${activeOpsTab}`}
                   >
                     {usesEmbeddedSurface ? null : (
-                      <div className="mb-3 flex items-center justify-between gap-2">
+                      <div className="mb-3 flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <p className="text-sm font-semibold text-slate-900">{HUB_SECTION_LABELS[activeOpsTab]}</p>
                         <Button
                           type="button"
                           size="sm"
                           variant="outline"
+                          className="w-full sm:w-auto"
                           onClick={() => toggleAdvancedPanel(workspace.membership.lab.id, activeOpsTab)}
                         >
                           {showAdvanced ? "Hide advanced" : "Show advanced"}
@@ -1151,28 +924,107 @@ export function LabsClient({
                         className={cn(
                           "min-w-0 overflow-x-hidden",
                           opsPanelPulseKey === `${workspace.membership.lab.id}:reagents`
-                            ? "rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200"
+                            ? "rounded-xl ring-2 ring-primary/25 transition-all duration-200"
                             : "",
                         )}
                       >
-                        {operationsReagentsPanel
-                          ? (isValidElement(operationsReagentsPanel)
-                            ? cloneElement(operationsReagentsPanel, { key: `ops-reagents-${workspace.membership.lab.id}` })
-                            : operationsReagentsPanel)
-                          : (
-                          <p className="text-sm text-slate-600">Reagent operations are not available for this lab yet.</p>
+                        {getReagentView(workspace.membership.lab.id) === "chooser" ? (
+                          <div className={cn("ops-slide-card space-y-3 rounded-xl border border-slate-200 bg-white p-4", reagentSlideClass(workspace.membership.lab.id))}>
+                            <p className="text-sm text-slate-600">
+                              Choose what you want to do first.
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                className="bg-slate-900 text-white hover:bg-slate-800"
+                                onClick={() => {
+                                  const labId = workspace.membership.lab.id;
+                                  setReagentEntryModeByLab((current) => ({ ...current, [labId]: "add" }));
+                                  setReagentSlideDirByLab((current) => ({ ...current, [labId]: "forward" }));
+                                  setReagentViewByLab((current) => ({
+                                    ...current,
+                                    [labId]: "workspace",
+                                  }));
+                                }}
+                              >
+                                Add reagents
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="border-slate-200"
+                                onClick={() => {
+                                  const labId = workspace.membership.lab.id;
+                                  setReagentEntryModeByLab((current) => ({ ...current, [labId]: "search" }));
+                                  setReagentSlideDirByLab((current) => ({ ...current, [labId]: "forward" }));
+                                  setReagentViewByLab((current) => ({
+                                    ...current,
+                                    [labId]: "workspace",
+                                  }));
+                                }}
+                              >
+                                Search reagents
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="border-slate-200"
+                                onClick={() => {
+                                  const labId = workspace.membership.lab.id;
+                                  setReagentEntryModeByLab((current) => ({ ...current, [labId]: "chat" }));
+                                  setReagentSlideDirByLab((current) => ({ ...current, [labId]: "forward" }));
+                                  setReagentViewByLab((current) => ({
+                                    ...current,
+                                    [labId]: "workspace",
+                                  }));
+                                }}
+                              >
+                                Reagent chat room
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className={cn("ops-slide-card", reagentSlideClass(workspace.membership.lab.id))}>
+                            {operationsReagentsPanel
+                              ? (
+                                <div className="labs-subtab-theme">
+                                  {isValidElement(operationsReagentsPanel)
+                                    ? cloneElement(operationsReagentsPanel as ReactElement<OperationsReagentsPanelProps>, {
+                                      key: `ops-reagents-${workspace.membership.lab.id}`,
+                                      inventoryEntryMode: reagentEntryModeByLab[workspace.membership.lab.id] ?? "default",
+                                      inventoryOnBack: () => {
+                                        const labId = workspace.membership.lab.id;
+                                        setReagentEntryModeByLab((current) => ({ ...current, [labId]: "default" }));
+                                        setReagentSlideDirByLab((current) => ({ ...current, [labId]: "back" }));
+                                        setReagentViewByLab((current) => ({
+                                          ...current,
+                                          [labId]: "chooser",
+                                        }));
+                                      },
+                                    })
+                                    : operationsReagentsPanel}
+                                </div>
+                              )
+                              : (
+                              <p className="text-sm text-slate-600">Reagent operations are not available for this lab yet.</p>
+                            )}
+                          </div>
                         )}
                       </div>
                     ) : null}
 
                     {activeOpsTab === "chat" ? (
                       <div
-                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:chat` ? "rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200" : ""}
+                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:chat` ? "rounded-xl ring-2 ring-primary/25 transition-all duration-200" : ""}
                       >
                         {labChatPanel
-                          ? (isValidElement(labChatPanel)
-                            ? cloneElement(labChatPanel, { key: `ops-chat-${workspace.membership.lab.id}` })
-                            : labChatPanel)
+                          ? (
+                            <div className="labs-subtab-theme">
+                              {isValidElement(labChatPanel)
+                                ? cloneElement(labChatPanel, { key: `ops-chat-${workspace.membership.lab.id}` })
+                                : labChatPanel}
+                            </div>
+                          )
                           : (
                           <p className="text-sm text-slate-600">Lab chat is not available for this lab yet.</p>
                         )}
@@ -1181,12 +1033,16 @@ export function LabsClient({
 
                     {activeOpsTab === "meetings" ? (
                       <div
-                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:meetings` ? "rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200" : ""}
+                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:meetings` ? "rounded-xl ring-2 ring-primary/25 transition-all duration-200" : ""}
                       >
                         {labMeetingsPanel
-                          ? (isValidElement(labMeetingsPanel)
-                            ? cloneElement(labMeetingsPanel, { key: `ops-meetings-${workspace.membership.lab.id}` })
-                            : labMeetingsPanel)
+                          ? (
+                            <div className="labs-subtab-theme">
+                              {isValidElement(labMeetingsPanel)
+                                ? cloneElement(labMeetingsPanel, { key: `ops-meetings-${workspace.membership.lab.id}` })
+                                : labMeetingsPanel}
+                            </div>
+                          )
                           : (
                           <p className="text-sm text-slate-600">Lab meetings are not available for this lab yet.</p>
                         )}
@@ -1195,319 +1051,538 @@ export function LabsClient({
 
                     {activeOpsTab === "announcements" ? (
                       <div
-                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:announcements` ? "space-y-3 rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200" : "space-y-3"}
+                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:announcements` ? "space-y-3 rounded-xl ring-2 ring-primary/25 transition-all duration-200" : "space-y-3"}
                       >
-                        <form
-                          className="grid max-w-2xl gap-2"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            const formData = new FormData(event.currentTarget);
-                            const typeRaw = String(formData.get("announcement_type") ?? "general");
-                            const title = String(formData.get("title") ?? "").trim();
-                            const body = String(formData.get("body") ?? "").trim();
-                            if (!title || !body) return;
-                            runAction(
-                              `announcement-create-${workspace.membership.lab.id}`,
-                              announcementActions.createAnnouncement,
-                              withLabContext(workspace.membership.lab.id, [
-                                ["announcement_type", typeRaw === "inspection" ? "inspection" : "general"],
-                                ["title", title],
-                                ["body", body],
-                              ]),
-                              "Announcement posted.",
-                              () => event.currentTarget.reset(),
-                            );
-                          }}
-                        >
-                          {showAdvanced ? (
-                            <select
-                              name="announcement_type"
-                              defaultValue="general"
-                              disabled={!canManageMembers || requiresActiveLab}
-                              className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              <option value="inspection">Inspection notice</option>
-                              <option value="general">General notice</option>
-                            </select>
-                          ) : (
-                            <input type="hidden" name="announcement_type" value="general" />
-                          )}
-                          <Input
-                            name="title"
-                            placeholder="Announcement title"
-                            disabled={!canManageMembers || requiresActiveLab}
-                            required
-                          />
-                          <Textarea
-                            name="body"
-                            rows={2}
-                            placeholder="Share a lab update."
-                            disabled={!canManageMembers || requiresActiveLab}
-                            required
-                          />
-                          <Button
-                            type="submit"
-                            variant="outline"
-                            className="w-full sm:w-fit"
-                            disabled={!canManageMembers || requiresActiveLab || busyKey === `announcement-create-${workspace.membership.lab.id}`}
-                          >
-                            {busyKey === `announcement-create-${workspace.membership.lab.id}` ? "Posting..." : "Post announcement"}
-                          </Button>
-                        </form>
-                        <div className="space-y-2">
-                          {announcementEntries.length === 0 ? (
-                            <p className="text-sm text-slate-500">No announcements yet.</p>
-                          ) : (
-                            (showAdvanced ? announcementEntries : announcementEntries.slice(0, 5)).map((entry) => (
-                              <div key={entry.id} className="labs-list-item rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                <div className="flex items-center justify-between gap-2">
-                                  <p className="truncate text-sm font-medium text-slate-900">{entry.title}</p>
-                                  <div className="flex items-center gap-2">
-                                    <Badge variant={entry.type === "inspection" ? "secondary" : "outline"}>
-                                      {entry.type === "inspection" ? "Inspection" : "General"}
-                                    </Badge>
-                                    {canManageMembers ? (
-                                      <Button
-                                        type="button"
-                                        size="icon"
-                                        variant="ghost"
-                                        className="h-7 w-7 text-slate-500 hover:text-rose-600"
-                                        onClick={() =>
-                                          runAction(
-                                            `announcement-delete-${workspace.membership.lab.id}-${entry.id}`,
-                                            announcementActions.deleteAnnouncement,
-                                            withLabContext(workspace.membership.lab.id, [["announcement_id", entry.id]]),
-                                            "Announcement deleted.",
-                                          )
-                                        }
-                                        disabled={requiresActiveLab || busyKey === `announcement-delete-${workspace.membership.lab.id}-${entry.id}`}
-                                        aria-label="Delete announcement"
-                                        title="Delete announcement"
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                      </Button>
-                                    ) : null}
-                                  </div>
+                        {(() => {
+                          const labId = workspace.membership.lab.id;
+                          const announcementView = getAnnouncementView(labId);
+                          const selectedAnnouncementId = selectedAnnouncementIdByLab[labId] ?? announcementEntries[0]?.id ?? "";
+                          const selectedAnnouncement =
+                            announcementEntries.find((entry) => entry.id === selectedAnnouncementId) ?? announcementEntries[0] ?? null;
+
+                          if (announcementView === "chooser") {
+                            return (
+                              <div className={cn("ops-slide-card space-y-3 rounded-xl border border-slate-200 bg-white p-4", announcementSlideClass(labId))}>
+                                <p className="text-sm text-slate-600">Choose one action to continue.</p>
+                                <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+                                  <Button
+                                    type="button"
+                                    className="w-full bg-slate-900 text-white hover:bg-slate-800 sm:w-auto"
+                                    onClick={() => {
+                                      setAnnouncementSlideDirByLab((current) => ({ ...current, [labId]: "forward" }));
+                                      setAnnouncementViewByLab((current) => ({ ...current, [labId]: "browse" }));
+                                    }}
+                                  >
+                                    Browse announcements
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="w-full border-slate-200 sm:w-auto"
+                                    onClick={() => {
+                                      setAnnouncementSlideDirByLab((current) => ({ ...current, [labId]: "forward" }));
+                                      setAnnouncementViewByLab((current) => ({ ...current, [labId]: "create" }));
+                                    }}
+                                  >
+                                    Create announcement
+                                  </Button>
                                 </div>
-                                <p className="mt-1 text-xs text-slate-700">{entry.body}</p>
-                                <p className="mt-1 text-[11px] text-slate-500">
-                                  {entry.createdByUserId === currentUserId
-                                    ? "You"
-                                    : (entry.createdByUserId ? memberLabelByUserId.get(entry.createdByUserId) : null) ?? "Lab manager"} · {formatRelativeTime(entry.createdAt)}
-                                </p>
                               </div>
-                            ))
-                          )}
-                        </div>
+                            );
+                          }
+
+                          if (announcementView === "create") {
+                            return (
+                              <div className={cn("ops-slide-card space-y-3 rounded-xl border border-slate-200 bg-white p-4", announcementSlideClass(labId))}>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-slate-200"
+                                    onClick={() => {
+                                      setAnnouncementSlideDirByLab((current) => ({ ...current, [labId]: "back" }));
+                                      setAnnouncementViewByLab((current) => ({ ...current, [labId]: "chooser" }));
+                                    }}
+                                  >
+                                    Back
+                                  </Button>
+                                  <p className="text-sm font-medium text-slate-900">Create announcement</p>
+                                </div>
+                                <form
+                                  className="grid max-w-2xl gap-2"
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    const formData = new FormData(event.currentTarget);
+                                    const typeRaw = String(formData.get("announcement_type") ?? "general");
+                                    const title = String(formData.get("title") ?? "").trim();
+                                    const body = String(formData.get("body") ?? "").trim();
+                                    if (!title || !body) return;
+                                    runAction(
+                                      `announcement-create-${labId}`,
+                                      announcementActions.createAnnouncement,
+                                      withLabContext(labId, [
+                                        ["announcement_type", typeRaw === "inspection" ? "inspection" : "general"],
+                                        ["title", title],
+                                        ["body", body],
+                                      ]),
+                                      "Announcement posted.",
+                                      () => event.currentTarget.reset(),
+                                    );
+                                  }}
+                                >
+                                  {showAdvanced ? (
+                                    <select
+                                      name="announcement_type"
+                                      defaultValue="general"
+                                      disabled={!canManageMembers || requiresActiveLab}
+                                      className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                      <option value="inspection">Inspection notice</option>
+                                      <option value="general">General notice</option>
+                                    </select>
+                                  ) : (
+                                    <input type="hidden" name="announcement_type" value="general" />
+                                  )}
+                                  <Input
+                                    name="title"
+                                    placeholder="Announcement title"
+                                    disabled={!canManageMembers || requiresActiveLab}
+                                    required
+                                  />
+                                  <Textarea
+                                    name="body"
+                                    rows={3}
+                                    placeholder="Share a lab update."
+                                    disabled={!canManageMembers || requiresActiveLab}
+                                    required
+                                  />
+                                  <Button
+                                    type="submit"
+                                    className="w-full sm:w-fit bg-slate-900 text-white hover:bg-slate-800"
+                                    disabled={!canManageMembers || requiresActiveLab || busyKey === `announcement-create-${labId}`}
+                                  >
+                                    {busyKey === `announcement-create-${labId}` ? "Posting..." : "Post announcement"}
+                                  </Button>
+                                </form>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div className={cn("ops-slide-card space-y-3 rounded-xl border border-slate-200 bg-white p-4", announcementSlideClass(labId))}>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-slate-200"
+                                  onClick={() => {
+                                    setAnnouncementSlideDirByLab((current) => ({ ...current, [labId]: "back" }));
+                                    setAnnouncementViewByLab((current) => ({ ...current, [labId]: "chooser" }));
+                                  }}
+                                >
+                                  Back
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-slate-200"
+                                  onClick={() => {
+                                    setAnnouncementSlideDirByLab((current) => ({ ...current, [labId]: "forward" }));
+                                    setAnnouncementViewByLab((current) => ({ ...current, [labId]: "create" }));
+                                  }}
+                                >
+                                  New announcement
+                                </Button>
+                              </div>
+                              {announcementEntries.length === 0 ? (
+                                <p className="text-sm text-slate-500">No announcements yet.</p>
+                              ) : (
+                                <div className="grid gap-3 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)]">
+                                  <div className="space-y-2">
+                                    {(showAdvanced ? announcementEntries : announcementEntries.slice(0, 7)).map((entry) => (
+                                      <button
+                                        key={entry.id}
+                                        type="button"
+                                        className={cn(
+                                          "w-full rounded-xl border px-3 py-2 text-left",
+                                          selectedAnnouncement?.id === entry.id
+                                            ? "border-primary/30 bg-primary/10"
+                                            : "border-slate-200 bg-slate-50 hover:bg-slate-100",
+                                        )}
+                                        onClick={() => setSelectedAnnouncementIdByLab((current) => ({ ...current, [labId]: entry.id }))}
+                                      >
+                                        <p className="truncate text-sm font-medium text-slate-900">{entry.title}</p>
+                                        <p className="mt-1 text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {selectedAnnouncement ? (
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <p className="text-sm font-semibold text-slate-900">{selectedAnnouncement.title}</p>
+                                        <Badge variant={selectedAnnouncement.type === "inspection" ? "secondary" : "outline"}>
+                                          {selectedAnnouncement.type === "inspection" ? "Inspection" : "General"}
+                                        </Badge>
+                                      </div>
+                                      <p className="mt-2 text-sm text-slate-700">{selectedAnnouncement.body}</p>
+                                      <p className="mt-2 text-xs text-slate-500">
+                                        {selectedAnnouncement.createdByUserId === currentUserId
+                                          ? "You"
+                                          : (selectedAnnouncement.createdByUserId
+                                            ? memberLabelByUserId.get(selectedAnnouncement.createdByUserId)
+                                            : null) ?? "Lab manager"} · {formatRelativeTime(selectedAnnouncement.createdAt)}
+                                      </p>
+                                      {canManageMembers ? (
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="outline"
+                                          className="mt-3 border-red-200 text-red-700 hover:bg-red-50"
+                                          onClick={() =>
+                                            runAction(
+                                              `announcement-delete-${labId}-${selectedAnnouncement.id}`,
+                                              announcementActions.deleteAnnouncement,
+                                              withLabContext(labId, [["announcement_id", selectedAnnouncement.id]]),
+                                              "Announcement deleted.",
+                                            )
+                                          }
+                                          disabled={requiresActiveLab || busyKey === `announcement-delete-${labId}-${selectedAnnouncement.id}`}
+                                        >
+                                          <Trash2 className="mr-1.5 h-4 w-4" />
+                                          Delete announcement
+                                        </Button>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     ) : null}
 
                     {activeOpsTab === "inspection_tasks" ? (
                       <div
-                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:inspection_tasks` ? "space-y-3 rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200" : "space-y-3"}
+                        className={opsPanelPulseKey === `${workspace.membership.lab.id}:inspection_tasks` ? "space-y-3 rounded-xl ring-2 ring-primary/25 transition-all duration-200" : "space-y-3"}
                       >
-                        <form
-                          className="grid max-w-2xl gap-2"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            const formData = new FormData(event.currentTarget);
-                            const title = String(formData.get("title") ?? "").trim();
-                            const details = String(formData.get("details") ?? "").trim();
-                            const assigneeMemberIdRaw = String(formData.get("assignee_member_id") ?? "").trim();
-                            if (!title) return;
-                            runAction(
-                              `shared-task-create-${workspace.membership.lab.id}-inspection`,
-                              sharedTaskActions.createTask,
-                              withLabContext(workspace.membership.lab.id, [
-                                ["title", title],
-                                ["details", details],
-                                ["list_type", "inspection"],
-                                ["assignee_member_id", assigneeMemberIdRaw],
-                              ]),
-                              "Inspection task added.",
-                              () => event.currentTarget.reset(),
-                            );
-                          }}
-                        >
-                          <Input
-                            name="title"
-                            placeholder="Add inspection task"
-                            disabled={!canManageMembers || requiresActiveLab}
-                            required
-                          />
-                          {showAdvanced ? (
-                            <>
-                              <Input
-                                name="details"
-                                placeholder="Task details"
-                                disabled={!canManageMembers || requiresActiveLab}
-                              />
-                              <select
-                                name="assignee_member_id"
-                                defaultValue=""
-                                disabled={!canManageMembers || requiresActiveLab}
-                                className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                <option value="">Unassigned</option>
-                                {activeMembers.map((member) => (
-                                  <option key={`inspect-assignee-${member.id}`} value={member.id}>
-                                    {getMemberPrimaryLabel(member)}
-                                  </option>
-                                ))}
-                              </select>
-                            </>
-                          ) : null}
-                          <Button
-                            type="submit"
-                            variant="outline"
-                            className="w-full sm:w-fit"
-                            disabled={!canManageMembers || requiresActiveLab || busyKey === `shared-task-create-${workspace.membership.lab.id}-inspection`}
-                          >
-                            {busyKey === `shared-task-create-${workspace.membership.lab.id}-inspection` ? "Adding..." : "Add inspection task"}
-                          </Button>
-                        </form>
-                        <div className="space-y-2">
-                          {inspectionTasks.length === 0 ? (
-                            <p className="text-sm text-slate-500">No shared inspection tasks yet.</p>
-                          ) : (
-                            (showAdvanced ? inspectionTasks : inspectionTasks.slice(0, 6)).map((task) => (
-                              <div key={task.id} className="labs-list-item space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                {sharedTaskEditById[task.id] ? (
-                                  <div className="space-y-2">
-                                    <Input
-                                      value={sharedTaskEditById[task.id].title}
-                                      onChange={(event) =>
-                                        setSharedTaskEditById((current) => ({
-                                          ...current,
-                                          [task.id]: {
-                                            ...(current[task.id] ?? { title: task.title, details: task.details }),
-                                            title: event.target.value,
-                                          },
-                                        }))
-                                      }
-                                      disabled={!canManageMembers || requiresActiveLab}
-                                    />
-                                    <Textarea
-                                      rows={2}
-                                      value={sharedTaskEditById[task.id].details}
-                                      onChange={(event) =>
-                                        setSharedTaskEditById((current) => ({
-                                          ...current,
-                                          [task.id]: {
-                                            ...(current[task.id] ?? { title: task.title, details: task.details }),
-                                            details: event.target.value,
-                                          },
-                                        }))
-                                      }
-                                      disabled={!canManageMembers || requiresActiveLab}
-                                    />
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div>
-                                      <p className={`text-sm font-medium ${task.done ? "text-slate-500 line-through" : "text-slate-900"}`}>
-                                        {task.title}
-                                      </p>
-                                      {task.details ? <p className="mt-1 text-xs text-slate-600">{task.details}</p> : null}
-                                    </div>
-                                    <Badge variant={task.done ? "secondary" : "outline"}>{task.done ? "Done" : "Open"}</Badge>
-                                  </div>
-                                )}
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <select
-                                    value={task.assigneeMemberId ?? ""}
-                                    onChange={(event) => {
-                                      const assigneeMemberIdRaw = event.target.value;
-                                      submitSharedTaskUpdate(
-                                        workspace.membership.lab.id,
-                                        task,
-                                        { assigneeMemberId: assigneeMemberIdRaw || null },
-                                        "Task assignee updated.",
-                                      );
+                        {(() => {
+                          const labId = workspace.membership.lab.id;
+                          const inspectionView = getInspectionView(labId);
+                          const selectedTaskId = selectedInspectionTaskIdByLab[labId] ?? inspectionTasks[0]?.id ?? "";
+                          const selectedTask = inspectionTasks.find((task) => task.id === selectedTaskId) ?? inspectionTasks[0] ?? null;
+
+                          if (inspectionView === "chooser") {
+                            return (
+                              <div className={cn("ops-slide-card space-y-3 rounded-xl border border-slate-200 bg-white p-4", inspectionSlideClass(labId))}>
+                                <p className="text-sm text-slate-600">Choose one inspection task action.</p>
+                                <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+                                  <Button
+                                    type="button"
+                                    className="w-full bg-slate-900 text-white hover:bg-slate-800 sm:w-auto"
+                                    onClick={() => {
+                                      setInspectionSlideDirByLab((current) => ({ ...current, [labId]: "forward" }));
+                                      setInspectionViewByLab((current) => ({ ...current, [labId]: "board" }));
                                     }}
-                                    disabled={!canManageMembers || requiresActiveLab}
-                                    className="h-9 min-w-40 rounded-md border border-input bg-white px-3 text-xs shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
                                   >
-                                    <option value="">Unassigned</option>
-                                    {activeMembers.map((member) => (
-                                      <option key={`inspect-edit-assignee-${task.id}-${member.id}`} value={member.id}>
-                                        {getMemberPrimaryLabel(member)}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  {sharedTaskEditById[task.id] ? (
-                                    <>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={!canManageMembers || requiresActiveLab || !sharedTaskEditById[task.id].title.trim()}
-                                        onClick={() => {
-                                          const draft = sharedTaskEditById[task.id];
-                                          submitSharedTaskUpdate(
-                                            workspace.membership.lab.id,
-                                            task,
-                                            {
-                                              title: draft.title.trim(),
-                                              details: draft.details.trim(),
-                                            },
-                                            "Task updated.",
-                                            () => cancelSharedTaskEdit(task.id),
-                                          );
-                                        }}
-                                      >
-                                        Save
-                                      </Button>
-                                      <Button type="button" variant="ghost" size="sm" onClick={() => cancelSharedTaskEdit(task.id)}>
-                                        Cancel
-                                      </Button>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={!canManageMembers || requiresActiveLab}
-                                        onClick={() => startSharedTaskEdit(task)}
-                                      >
-                                        Edit
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={!canManageMembers || requiresActiveLab}
-                                        onClick={() => {
-                                          submitSharedTaskUpdate(
-                                            workspace.membership.lab.id,
-                                            task,
-                                            { done: !task.done },
-                                            task.done ? "Task marked open." : "Task marked done.",
-                                          );
-                                        }}
-                                      >
-                                        {task.done ? "Mark open" : "Mark done"}
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={!canManageMembers || requiresActiveLab}
-                                        onClick={() => submitSharedTaskDelete(workspace.membership.lab.id, task.id)}
-                                      >
-                                        Delete
-                                      </Button>
-                                    </>
-                                  )}
+                                    Open task board
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="w-full border-slate-200 sm:w-auto"
+                                    onClick={() => {
+                                      setInspectionSlideDirByLab((current) => ({ ...current, [labId]: "forward" }));
+                                      setInspectionViewByLab((current) => ({ ...current, [labId]: "create" }));
+                                    }}
+                                  >
+                                    Create task
+                                  </Button>
                                 </div>
-                                <p className="text-[11px] text-slate-500">
-                                  {(task.assigneeMemberId ? memberLabelByMembershipId.get(task.assigneeMemberId) : null) ?? "Unassigned"} · {formatRelativeTime(task.createdAt)}
-                                </p>
                               </div>
-                            ))
-                          )}
-                        </div>
+                            );
+                          }
+
+                          if (inspectionView === "create") {
+                            return (
+                              <div className={cn("ops-slide-card space-y-3 rounded-xl border border-slate-200 bg-white p-4", inspectionSlideClass(labId))}>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-slate-200"
+                                    onClick={() => {
+                                      setInspectionSlideDirByLab((current) => ({ ...current, [labId]: "back" }));
+                                      setInspectionViewByLab((current) => ({ ...current, [labId]: "chooser" }));
+                                    }}
+                                  >
+                                    Back
+                                  </Button>
+                                  <p className="text-sm font-medium text-slate-900">Create inspection task</p>
+                                </div>
+                                <form
+                                  className="grid max-w-2xl gap-2"
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    const formData = new FormData(event.currentTarget);
+                                    const title = String(formData.get("title") ?? "").trim();
+                                    const details = String(formData.get("details") ?? "").trim();
+                                    const assigneeMemberIdRaw = String(formData.get("assignee_member_id") ?? "").trim();
+                                    if (!title) return;
+                                    runAction(
+                                      `shared-task-create-${labId}-inspection`,
+                                      sharedTaskActions.createTask,
+                                      withLabContext(labId, [
+                                        ["title", title],
+                                        ["details", details],
+                                        ["list_type", "inspection"],
+                                        ["assignee_member_id", assigneeMemberIdRaw],
+                                      ]),
+                                      "Inspection task added.",
+                                      () => event.currentTarget.reset(),
+                                    );
+                                  }}
+                                >
+                                  <Input
+                                    name="title"
+                                    placeholder="Add inspection task"
+                                    disabled={!canManageMembers || requiresActiveLab}
+                                    required
+                                  />
+                                  {showAdvanced ? (
+                                    <>
+                                      <Input
+                                        name="details"
+                                        placeholder="Task details"
+                                        disabled={!canManageMembers || requiresActiveLab}
+                                      />
+                                      <select
+                                        name="assignee_member_id"
+                                        defaultValue=""
+                                        disabled={!canManageMembers || requiresActiveLab}
+                                        className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                                      >
+                                        <option value="">Unassigned</option>
+                                        {activeMembers.map((member) => (
+                                          <option key={`inspect-assignee-${member.id}`} value={member.id}>
+                                            {getMemberPrimaryLabel(member)}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </>
+                                  ) : null}
+                                  <Button
+                                    type="submit"
+                                    className="w-full sm:w-fit bg-slate-900 text-white hover:bg-slate-800"
+                                    disabled={!canManageMembers || requiresActiveLab || busyKey === `shared-task-create-${labId}-inspection`}
+                                  >
+                                    {busyKey === `shared-task-create-${labId}-inspection` ? "Adding..." : "Add inspection task"}
+                                  </Button>
+                                </form>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div className={cn("ops-slide-card space-y-3 rounded-xl border border-slate-200 bg-white p-4", inspectionSlideClass(labId))}>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-slate-200"
+                                  onClick={() => {
+                                    setInspectionSlideDirByLab((current) => ({ ...current, [labId]: "back" }));
+                                    setInspectionViewByLab((current) => ({ ...current, [labId]: "chooser" }));
+                                  }}
+                                >
+                                  Back
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-slate-200"
+                                  onClick={() => {
+                                    setInspectionSlideDirByLab((current) => ({ ...current, [labId]: "forward" }));
+                                    setInspectionViewByLab((current) => ({ ...current, [labId]: "create" }));
+                                  }}
+                                >
+                                  New task
+                                </Button>
+                              </div>
+                              {inspectionTasks.length === 0 ? (
+                                <p className="text-sm text-slate-500">No shared inspection tasks yet.</p>
+                              ) : (
+                                <div className="grid gap-3 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)]">
+                                  <div className="space-y-2">
+                                    {(showAdvanced ? inspectionTasks : inspectionTasks.slice(0, 8)).map((task) => (
+                                      <button
+                                        key={task.id}
+                                        type="button"
+                                        className={cn(
+                                          "w-full rounded-xl border px-3 py-2 text-left",
+                                          selectedTask?.id === task.id
+                                            ? "border-primary/30 bg-primary/10"
+                                            : "border-slate-200 bg-slate-50 hover:bg-slate-100",
+                                        )}
+                                        onClick={() => setSelectedInspectionTaskIdByLab((current) => ({ ...current, [labId]: task.id }))}
+                                      >
+                                        <p className={cn("truncate text-sm font-medium", task.done ? "text-slate-500 line-through" : "text-slate-900")}>
+                                          {task.title}
+                                        </p>
+                                        <p className="mt-1 text-[11px] text-slate-500">
+                                          {(task.assigneeMemberId ? memberLabelByMembershipId.get(task.assigneeMemberId) : null) ?? "Unassigned"} · {formatRelativeTime(task.createdAt)}
+                                        </p>
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {selectedTask ? (
+                                    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                      {sharedTaskEditById[selectedTask.id] ? (
+                                        <div className="space-y-2">
+                                          <Input
+                                            value={sharedTaskEditById[selectedTask.id].title}
+                                            onChange={(event) =>
+                                              setSharedTaskEditById((current) => ({
+                                                ...current,
+                                                [selectedTask.id]: {
+                                                  ...(current[selectedTask.id] ?? { title: selectedTask.title, details: selectedTask.details }),
+                                                  title: event.target.value,
+                                                },
+                                              }))
+                                            }
+                                            disabled={!canManageMembers || requiresActiveLab}
+                                          />
+                                          <Textarea
+                                            rows={3}
+                                            value={sharedTaskEditById[selectedTask.id].details}
+                                            onChange={(event) =>
+                                              setSharedTaskEditById((current) => ({
+                                                ...current,
+                                                [selectedTask.id]: {
+                                                  ...(current[selectedTask.id] ?? { title: selectedTask.title, details: selectedTask.details }),
+                                                  details: event.target.value,
+                                                },
+                                              }))
+                                            }
+                                            disabled={!canManageMembers || requiresActiveLab}
+                                          />
+                                        </div>
+                                      ) : (
+                                        <div>
+                                          <div className="flex items-center justify-between gap-2">
+                                            <p className={cn("text-sm font-semibold", selectedTask.done ? "text-slate-500 line-through" : "text-slate-900")}>
+                                              {selectedTask.title}
+                                            </p>
+                                            <Badge variant={selectedTask.done ? "secondary" : "outline"}>{selectedTask.done ? "Done" : "Open"}</Badge>
+                                          </div>
+                                          {selectedTask.details ? <p className="mt-2 text-sm text-slate-700">{selectedTask.details}</p> : null}
+                                        </div>
+                                      )}
+                                      <select
+                                        value={selectedTask.assigneeMemberId ?? ""}
+                                        onChange={(event) => {
+                                          const assigneeMemberIdRaw = event.target.value;
+                                          submitSharedTaskUpdate(
+                                            labId,
+                                            selectedTask,
+                                            { assigneeMemberId: assigneeMemberIdRaw || null },
+                                            "Task assignee updated.",
+                                          );
+                                        }}
+                                        disabled={!canManageMembers || requiresActiveLab}
+                                        className="h-9 min-w-40 rounded-md border border-input bg-white px-3 text-xs shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                                      >
+                                        <option value="">Unassigned</option>
+                                        {activeMembers.map((member) => (
+                                          <option key={`inspect-edit-assignee-${selectedTask.id}-${member.id}`} value={member.id}>
+                                            {getMemberPrimaryLabel(member)}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        {sharedTaskEditById[selectedTask.id] ? (
+                                          <>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="outline"
+                                              className="border-slate-200"
+                                              disabled={!canManageMembers || requiresActiveLab || !sharedTaskEditById[selectedTask.id].title.trim()}
+                                              onClick={() => {
+                                                const draft = sharedTaskEditById[selectedTask.id];
+                                                submitSharedTaskUpdate(
+                                                  labId,
+                                                  selectedTask,
+                                                  {
+                                                    title: draft.title.trim(),
+                                                    details: draft.details.trim(),
+                                                  },
+                                                  "Task updated.",
+                                                  () => cancelSharedTaskEdit(selectedTask.id),
+                                                );
+                                              }}
+                                            >
+                                              Save
+                                            </Button>
+                                            <Button type="button" size="sm" variant="outline" className="border-slate-200" onClick={() => cancelSharedTaskEdit(selectedTask.id)}>
+                                              Cancel
+                                            </Button>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="outline"
+                                              className="border-slate-200"
+                                              disabled={!canManageMembers || requiresActiveLab}
+                                              onClick={() => startSharedTaskEdit(selectedTask)}
+                                            >
+                                              Edit
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="outline"
+                                              className="border-slate-200"
+                                              disabled={!canManageMembers || requiresActiveLab}
+                                              onClick={() => {
+                                                submitSharedTaskUpdate(
+                                                  labId,
+                                                  selectedTask,
+                                                  { done: !selectedTask.done },
+                                                  selectedTask.done ? "Task marked open." : "Task marked done.",
+                                                );
+                                              }}
+                                            >
+                                              {selectedTask.done ? "Mark open" : "Mark done"}
+                                            </Button>
+                                          </>
+                                        )}
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="outline"
+                                          className="border-red-200 text-red-700 hover:bg-red-50"
+                                          disabled={!canManageMembers || requiresActiveLab}
+                                          onClick={() => submitSharedTaskDelete(labId, selectedTask.id)}
+                                        >
+                                          Delete
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     ) : null}
 
@@ -1516,11 +1591,13 @@ export function LabsClient({
                         className={cn(
                           "min-w-0 overflow-x-hidden",
                           opsPanelPulseKey === `${workspace.membership.lab.id}:equipment_booking`
-                            ? "rounded-xl ring-2 ring-cyan-200/70 transition-all duration-200"
+                            ? "rounded-xl ring-2 ring-primary/25 transition-all duration-200"
                             : "",
                         )}
                       >
-                        {operationsEquipmentPanel ? operationsEquipmentPanel : (
+                        {operationsEquipmentPanel ? (
+                          <div className="labs-subtab-theme">{operationsEquipmentPanel}</div>
+                        ) : (
                           <p className="text-sm text-slate-600">Equipment booking is not available for this lab yet.</p>
                         )}
                       </div>
@@ -1534,7 +1611,9 @@ export function LabsClient({
                     </p>
                   ) : null}
                 </section>
+                ) : null}
 
+                {labsView === "administration" ? (
                 <details
                   id={getTeamDetailsId(workspace.membership.lab.id)}
                   open={openTeamPoliciesByLab[workspace.membership.lab.id] ?? false}
@@ -2222,9 +2301,10 @@ export function LabsClient({
                       </div>
                     </div>
                   </details>
-                  </div>
+                    </div>
                   </div>
                 </details>
+                ) : null}
               </CardContent>
             </Card>
           );

@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendEmail } from "@/lib/email";
+import { sendWebPushToUser } from "@/lib/web-push";
 
 export const CHAT_NOTIFICATION_CHANNELS = ["dm", "group", "all_lab"] as const;
 
@@ -442,6 +443,13 @@ export async function deliverChatMessageNotifications({
           senderName,
           threadLabel,
           messageBody,
+        });
+
+        await sendWebPushToUser(admin, recipientId, {
+          title: `${senderName} sent a message`,
+          body: `${threadLabel}: ${messageSnippet}`,
+          url: "/labs/chat",
+          tag: `chat-${channel}`,
         });
       }
 

@@ -185,12 +185,15 @@ interface LabOperationsClientProps {
   embedded?: boolean;
   initialTab?: "inventory" | "bookings" | "handoff";
   initialSelectedInventoryId?: string | null;
+  inventoryEntryMode?: "default" | "add" | "search" | "chat";
+  inventoryOnBack?: (() => void) | null;
   scanMode?: boolean;
   labContext: LabContextView;
   taskOptions: TaskOption[];
   inventory: InventoryView[];
   equipmentOptions: EquipmentOption[];
   bookings: BookingView[];
+  approverLabels?: string[];
   actions: {
     createLabEquipment: (formData: FormData) => Promise<ActionResult>;
     createLabReagent: (formData: FormData) => Promise<ActionResult>;
@@ -361,6 +364,13 @@ function bookingTone(status: PlatformBookingStatus) {
   }
 }
 
+function bookingStatusLabel(status: PlatformBookingStatus, bookingRequiresApproval: boolean) {
+  if (status === "draft" && bookingRequiresApproval) return "Waiting for approval";
+  if (status === "draft") return "Scheduled";
+  if (status === "confirmed") return "Scheduled";
+  return status.replace(/_/g, " ");
+}
+
 function stockTone(
   item: InventoryView,
   latestEventOverride?: PlatformInventoryEventType,
@@ -424,23 +434,35 @@ function downloadCsv(filename: string, headers: string[], rows: Array<Array<stri
   URL.revokeObjectURL(url);
 }
 
-const MIN_CONFLICT_OVERLAP_MS = 5 * 60 * 1000;
+function parseBookingTimestamp(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return Number.NaN;
+  let normalized = trimmed.includes("T") ? trimmed : trimmed.replace(" ", "T");
+  // If timestamp has no explicit timezone, treat it as UTC for deterministic comparisons.
+  if (!/[zZ]|[+-]\d{2}:\d{2}$/.test(normalized)) {
+    normalized = `${normalized}Z`;
+  }
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
 
 function bookingIntervalsOverlap(a: BookingView, b: BookingView) {
-  const aStart = new Date(a.startsAt).getTime();
-  const aEnd = new Date(a.endsAt).getTime();
-  const bStart = new Date(b.startsAt).getTime();
-  const bEnd = new Date(b.endsAt).getTime();
+  const aStart = parseBookingTimestamp(a.startsAt);
+  const aEnd = parseBookingTimestamp(a.endsAt);
+  const bStart = parseBookingTimestamp(b.startsAt);
+  const bEnd = parseBookingTimestamp(b.endsAt);
   if (!Number.isFinite(aStart) || !Number.isFinite(aEnd) || !Number.isFinite(bStart) || !Number.isFinite(bEnd)) {
     return false;
   }
-  const aDuration = aEnd - aStart;
-  const bDuration = bEnd - bStart;
-  if (aDuration < MIN_CONFLICT_OVERLAP_MS || bDuration < MIN_CONFLICT_OVERLAP_MS) {
+  // Invalid or zero-length windows should never be treated as conflicts.
+  if (aEnd <= aStart || bEnd <= bStart) {
     return false;
   }
-  const overlap = Math.min(aEnd, bEnd) - Math.max(aStart, bStart);
-  return overlap >= MIN_CONFLICT_OVERLAP_MS;
+  return aStart < bEnd && aEnd > bStart;
+}
+
+function bookingsShareLocalStartDay(a: BookingView, b: BookingView) {
+  return toLocalDateKey(a.startsAt) === toLocalDateKey(b.startsAt);
 }
 
 function equipmentTabLabel(name: string) {
@@ -478,6 +500,7 @@ function calendarBookingTone(status: PlatformBookingStatus, hasConflict: boolean
   if (hasConflict) {
     return "border-red-300 bg-red-100 text-red-800";
   }
+  if (status === "draft") return "border-slate-300 bg-slate-100 text-slate-700";
   if (status === "in_use") return "border-violet-200 bg-violet-100 text-violet-800";
   if (status === "completed") return "border-emerald-200 bg-emerald-100 text-emerald-800";
   if (status === "cancelled") return "border-slate-300 bg-slate-200 text-slate-700";
@@ -655,12 +678,15 @@ export function LabOperationsClient({
   embedded = false,
   initialTab = "inventory",
   initialSelectedInventoryId = null,
+  inventoryEntryMode = "default",
+  inventoryOnBack = null,
   scanMode = false,
   labContext,
   taskOptions,
   inventory,
   equipmentOptions,
   bookings,
+  approverLabels = [],
   actions,
 }: LabOperationsClientProps) {
   const router = useRouter();
@@ -671,6 +697,7 @@ export function LabOperationsClient({
   const [bookingMessageDraft, setBookingMessageDraft] = useState("");
   const [equipmentMessageDraft, setEquipmentMessageDraft] = useState("");
   const [inventorySearch, setInventorySearch] = useState("");
+  const [showAddReagentCard, setShowAddReagentCard] = useState(inventoryEntryMode !== "search");
   const [localInventory, setLocalInventory] = useState<InventoryView[]>(inventory);
   const [localMessagesByObjectKey, setLocalMessagesByObjectKey] = useState<Record<string, MessageView[]>>({});
   const [localLatestInventoryEventByReagentId, setLocalLatestInventoryEventByReagentId] =
@@ -716,15 +743,21 @@ export function LabOperationsClient({
   });
   const inFlightActionKeysRef = useRef<Set<string>>(new Set());
   const reagentFormRef = useRef<HTMLFormElement | null>(null);
+  const inventorySearchInputRef = useRef<HTMLInputElement | null>(null);
+  const reagentChatPanelRef = useRef<HTMLDivElement | null>(null);
   const bookingFormRef = useRef<HTMLFormElement | null>(null);
   const equipmentEditFormRef = useRef<HTMLFormElement | null>(null);
   const [selectedEquipmentId, setSelectedEquipmentId] = useState(equipmentOptions[0]?.id ?? "");
   const [equipmentEditError, setEquipmentEditError] = useState<string | null>(null);
   const [equipmentTab, setEquipmentTab] = useState("all");
   const [equipmentSection, setEquipmentSection] = useState<"booking" | "calendar" | "equipment">("booking");
+  const [mobileBookingView, setMobileBookingView] = useState<"equipment" | "list" | "detail">("equipment");
+  const [mobileCalendarView, setMobileCalendarView] = useState<"calendar" | "chat">("calendar");
   const [calendarStatusDraftByBookingId, setCalendarStatusDraftByBookingId] = useState<Record<string, PlatformBookingStatus>>({});
   const [calendarView, setCalendarView] = useState<"week" | "month">("month");
   const [surfaceTab, setSurfaceTab] = useState<"inventory" | "bookings" | "handoff">(initialTab);
+  const [handoffSection, setHandoffSection] = useState<"chooser" | "inventory" | "bookings" | "notes">("chooser");
+  const [handoffSlideDirection, setHandoffSlideDirection] = useState<"forward" | "back">("forward");
   const [isNarrowMobile, setIsNarrowMobile] = useState(false);
   const [scanUsageAmount, setScanUsageAmount] = useState("1");
   const [reorderVendorInput, setReorderVendorInput] = useState("");
@@ -732,6 +765,16 @@ export function LabOperationsClient({
   const [reorderEtaInput, setReorderEtaInput] = useState("");
   const activeSurfaceTab = embedded ? initialTab : surfaceTab;
   const reagentDetailRef = useRef<HTMLDivElement | null>(null);
+  const handoffSlideClass = handoffSlideDirection === "back" ? "ops-slide-card-back" : "ops-slide-card-forward";
+  const reagentSubtabMode = embedded && initialTab === "inventory" ? inventoryEntryMode : "default";
+  const isInventorySearchMode = reagentSubtabMode === "search";
+  const isInventoryAddMode = reagentSubtabMode === "add";
+  const isInventoryChatMode = reagentSubtabMode === "chat";
+  const showInventoryListCard = reagentSubtabMode === "default" || isInventorySearchMode;
+  const showInventoryDetailCard = reagentSubtabMode === "default";
+  const showInventoryChatCard = isInventoryChatMode;
+  const showInventoryAddCard = isInventoryAddMode || reagentSubtabMode === "default" || (isInventorySearchMode && showAddReagentCard);
+  const showInventoryRightRail = showInventoryDetailCard || showInventoryChatCard;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -775,6 +818,54 @@ export function LabOperationsClient({
     setSelectedInventoryId(initialSelectedInventoryId);
     setInventoryTab("all");
   }, [initialSelectedInventoryId, localInventory]);
+
+  useEffect(() => {
+    if (inventoryEntryMode === "search") {
+      setShowAddReagentCard(false);
+      return;
+    }
+    if (inventoryEntryMode === "add" || inventoryEntryMode === "default" || inventoryEntryMode === "chat") {
+      setShowAddReagentCard(true);
+    }
+  }, [inventoryEntryMode]);
+
+  useEffect(() => {
+    if (initialTab !== "inventory") return;
+    if (inventoryEntryMode === "default") return;
+
+    if (inventoryEntryMode === "search") {
+      inventorySearchInputRef.current?.focus();
+      inventorySearchInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+
+    if (inventoryEntryMode === "add") {
+      reagentFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const nameInput = reagentFormRef.current?.elements.namedItem("name");
+      if (nameInput instanceof HTMLInputElement) {
+        nameInput.focus();
+      }
+      return;
+    }
+
+    if (inventoryEntryMode === "chat") {
+      if (!selectedInventoryId && localInventory.length > 0) {
+        setSelectedInventoryId(localInventory[0].id);
+      }
+      reagentChatPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [initialTab, inventoryEntryMode, selectedInventoryId, localInventory]);
+
+  function revealAddReagentCard() {
+    setShowAddReagentCard(true);
+    setTimeout(() => {
+      reagentFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const nameInput = reagentFormRef.current?.elements.namedItem("name");
+      if (nameInput instanceof HTMLInputElement) {
+        nameInput.focus();
+      }
+    }, 0);
+  }
 
   useEffect(() => {
     if (!labContext.labId) return;
@@ -955,6 +1046,21 @@ export function LabOperationsClient({
   }, [scopedBookings, selectedBookingId]);
 
   useEffect(() => {
+    if (!isNarrowMobile || equipmentSection !== "booking") return;
+    if (equipmentTab === "all") {
+      setMobileBookingView("equipment");
+      return;
+    }
+    if (selectedBooking && mobileBookingView === "detail") return;
+    setMobileBookingView("list");
+  }, [equipmentSection, equipmentTab, isNarrowMobile, mobileBookingView, selectedBooking]);
+
+  useEffect(() => {
+    if (!isNarrowMobile || equipmentSection !== "calendar") return;
+    setMobileCalendarView("calendar");
+  }, [equipmentSection, isNarrowMobile, calendarEquipmentId]);
+
+  useEffect(() => {
     if (equipmentTab === "all") {
       if (!calendarEquipmentId) {
         const fallback = localEquipmentOptions.find((item) => item.isActive) ?? localEquipmentOptions[0];
@@ -1004,9 +1110,8 @@ export function LabOperationsClient({
     }
 
     const actionable = [...dedupedBySignature.values()].filter((booking) => {
-      if (booking.status === "cancelled" || booking.status === "completed") return false;
-      const startMs = new Date(booking.startsAt).getTime();
-      const endMs = new Date(booking.endsAt).getTime();
+      const startMs = parseBookingTimestamp(booking.startsAt);
+      const endMs = parseBookingTimestamp(booking.endsAt);
       if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return false;
       // Ignore zero/negative windows; they should not be treated as conflicts.
       if (endMs <= startMs) return false;
@@ -1020,6 +1125,7 @@ export function LabOperationsClient({
         const a = actionable[index];
         const b = actionable[compareIndex];
         if (a.equipmentId !== b.equipmentId) continue;
+        if (!bookingsShareLocalStartDay(a, b)) continue;
         if (!bookingIntervalsOverlap(a, b)) continue;
         map.set(a.id, [...(map.get(a.id) ?? []), b]);
         map.set(b.id, [...(map.get(b.id) ?? []), a]);
@@ -1590,6 +1696,8 @@ export function LabOperationsClient({
     const notes = String(formData.get("notes") ?? "").trim() || null;
     const taskId = String(formData.get("task_id") ?? "").trim() || null;
     const equipment = localEquipmentOptions.find((item) => item.id === equipmentId);
+    const optimisticStatus: PlatformBookingStatus =
+      equipment?.bookingRequiresApproval ? "draft" : "confirmed";
     const tempId = `temp-booking-${Date.now()}`;
     const previousBookings = localBookings;
 
@@ -1604,7 +1712,7 @@ export function LabOperationsClient({
           title,
           startsAt: new Date(startsAt).toISOString(),
           endsAt: new Date(endsAt).toISOString(),
-          status: "draft" as const,
+          status: optimisticStatus,
           bookedBy: labContext.currentUserId,
           bookedByLabel: "You",
           taskId,
@@ -1615,6 +1723,7 @@ export function LabOperationsClient({
         },
       ].sort((a, b) => a.startsAt.localeCompare(b.startsAt)));
       setSelectedBookingId(tempId);
+      if (isNarrowMobile && equipmentSection === "booking") setMobileBookingView("detail");
     }
 
     formData.set("active_lab_id", labContext.labId);
@@ -1657,6 +1766,7 @@ export function LabOperationsClient({
           return [...withoutTemp, nextBooking].sort((a, b) => a.startsAt.localeCompare(b.startsAt));
         });
         setSelectedBookingId(actionResult.booking.id);
+        if (isNarrowMobile && equipmentSection === "booking") setMobileBookingView("detail");
         onComplete?.();
       },
     );
@@ -1664,6 +1774,7 @@ export function LabOperationsClient({
     if (!result?.success) {
       setLocalBookings(previousBookings);
       setSelectedBookingId(previousBookings[0]?.id ?? "");
+      if (isNarrowMobile && previousBookings.length === 0) setMobileBookingView("list");
     }
   }
 
@@ -2048,6 +2159,9 @@ export function LabOperationsClient({
     if (selectedBookingId === booking.id) {
       const fallback = previous.find((item) => item.id !== booking.id);
       setSelectedBookingId(fallback?.id ?? "");
+      if (isNarrowMobile && equipmentSection === "booking" && !fallback) {
+        setMobileBookingView("list");
+      }
     }
 
     const formData = new FormData();
@@ -2297,23 +2411,15 @@ export function LabOperationsClient({
   ).length;
   const canManageEquipment = labContext.role === "manager" || labContext.role === "admin";
   const canDeleteReagent = labContext.role === "manager" || labContext.role === "admin";
+  const approverNamesText = approverLabels.length > 0
+    ? approverLabels.join(", ")
+    : "Lab managers and admins";
   const canEditBooking = (booking: BookingView) =>
     canManageEquipment || booking.bookedBy === labContext.currentUserId;
   const canEditSelectedBooking =
     selectedBooking
       ? canEditBooking(selectedBooking)
       : false;
-  const bookingOwnerLegend = useMemo(() => {
-    const unique = new Map<string, { label: string; key: string | null }>();
-    for (const booking of localBookings) {
-      const ownerLabel = booking.bookedByLabel || "Lab member";
-      const ownerKey = booking.bookedBy ?? ownerLabel;
-      if (!unique.has(ownerLabel)) {
-        unique.set(ownerLabel, { label: ownerLabel, key: ownerKey });
-      }
-    }
-    return [...unique.values()].slice(0, 8);
-  }, [localBookings]);
   const equipmentCalendarBookings = useMemo(() => {
     const dayFilter = calendarDateFilter.trim();
     return localBookings
@@ -2411,13 +2517,64 @@ export function LabOperationsClient({
     titleInput?.focus();
   }
 
+  function handleSelectBooking(bookingId: string) {
+    setSelectedBookingId(bookingId);
+    if (isNarrowMobile && equipmentSection === "booking") {
+      setMobileBookingView("detail");
+    }
+  }
+
+  function handleSelectEquipmentForBookings(equipmentId: string) {
+    setEquipmentTab(equipmentId);
+    setSelectedEquipmentId(equipmentId);
+    setCalendarEquipmentId(equipmentId);
+    if (isNarrowMobile) {
+      setMobileBookingView("list");
+      setEquipmentSection("calendar");
+      setMobileCalendarView("calendar");
+    }
+  }
+
   const equipmentCalendarCard = (
     <Card className="border-white/80 bg-white/90">
       <CardHeader className="pb-4">
-        <CardTitle className="text-base text-slate-900">Equipment calendar</CardTitle>
-        {embedded ? null : (
-          <CardDescription className="text-slate-600">View bookings by equipment and date.</CardDescription>
-        )}
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <CardTitle className="text-base text-slate-900">Equipment calendar</CardTitle>
+            {embedded ? null : (
+              <CardDescription className="text-slate-600">View bookings by equipment and date.</CardDescription>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {isNarrowMobile ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="border-slate-200"
+                onClick={() => {
+                  setEquipmentSection("booking");
+                  setEquipmentTab("all");
+                  setMobileBookingView("equipment");
+                }}
+              >
+                <ChevronLeft className="mr-1 h-3.5 w-3.5" />
+                Setups
+              </Button>
+            ) : null}
+            {isNarrowMobile && selectedCalendarEquipment ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="border-slate-200"
+                onClick={() => setMobileCalendarView("chat")}
+              >
+                Open chatroom
+              </Button>
+            ) : null}
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
@@ -2538,23 +2695,6 @@ export function LabOperationsClient({
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Owner colors</p>
-          {bookingOwnerLegend.length === 0 ? (
-            <span className="text-xs text-slate-500">No owners yet.</span>
-          ) : (
-            bookingOwnerLegend.map((owner) => {
-              const tone = ownerColor(owner.key);
-              return (
-                <span key={owner.label} className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs", tone.chip)}>
-                  <span className={cn("h-2 w-2 rounded-full", tone.dot)} />
-                  {owner.label}
-                </span>
-              );
-            })
-          )}
-        </div>
-
         <div className="grid grid-cols-7 gap-1">
           {visibleCalendarDays.map((day) => {
             const dayKey = toLocalDateKey(day);
@@ -2624,7 +2764,7 @@ export function LabOperationsClient({
                           <span className="mt-0.5 block">{bookingWindow.time}</span>
                           <span className="mt-0.5 block">Owner: {booking.bookedByLabel}</span>
                           <span className="mt-0.5 block">
-                            Status: {booking.status === "draft" || booking.status === "confirmed" ? "scheduled" : booking.status.replace(/_/g, " ")}
+                            Status: {bookingStatusLabel(booking.status, booking.bookingRequiresApproval)}
                           </span>
                           {hasConflict ? (
                             <span className="mt-0.5 block text-red-700">
@@ -2721,13 +2861,13 @@ export function LabOperationsClient({
                     <button
                       type="button"
                       className="text-sm font-medium text-slate-900"
-                      onClick={() => setSelectedBookingId(booking.id)}
+                      onClick={() => handleSelectBooking(booking.id)}
                     >
                       {booking.title}
                     </button>
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className={cn("border", bookingTone(booking.status))}>
-                        {booking.status.replace(/_/g, " ")}
+                        {bookingStatusLabel(booking.status, booking.bookingRequiresApproval)}
                       </Badge>
                       <Button
                         type="button"
@@ -2768,7 +2908,7 @@ export function LabOperationsClient({
                         disabled={busy}
                         className="h-8 min-w-40 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
                       >
-                        <option value="draft">Scheduled (draft)</option>
+                        <option value="draft">Waiting for approval</option>
                         <option value="confirmed">Scheduled (confirmed)</option>
                         <option value="in_use">In use</option>
                         <option value="completed">Completed</option>
@@ -2878,8 +3018,22 @@ export function LabOperationsClient({
         )}
 
         <TabsContent value="inventory" className={cn("min-w-0", embedded ? "space-y-5" : "space-y-4")}>
-          <div className={cn("grid min-w-0 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]", embedded ? "gap-5" : "gap-4")}>
+          {embedded && initialTab === "inventory" && inventoryOnBack ? (
+            <div className="mb-1 flex justify-end">
+              <Button type="button" size="sm" variant="outline" className="border-slate-200" onClick={inventoryOnBack}>
+                Back
+              </Button>
+            </div>
+          ) : null}
+          <div
+            className={cn(
+              "grid min-w-0",
+              showInventoryRightRail ? "xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]" : "grid-cols-1",
+              embedded ? "gap-5" : "gap-4",
+            )}
+          >
             <div className="min-w-0 space-y-4">
+              {showInventoryListCard ? (
               <Card className={cn("bg-white/95", embedded ? "border-slate-200/70 shadow-none" : "border-white/80")}>
                 <CardHeader className="pb-4">
                   <div className={cn("flex flex-col", embedded ? "gap-4" : "gap-3")}>
@@ -2891,6 +3045,7 @@ export function LabOperationsClient({
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       <Input
+                        ref={inventorySearchInputRef}
                         value={inventorySearch}
                         onChange={(event) => setInventorySearch(event.target.value)}
                         placeholder="Search by name, supplier, or catalog"
@@ -3087,6 +3242,20 @@ export function LabOperationsClient({
                         : inventoryTab === "all"
                           ? "No reagents match the current search."
                           : `No reagents in ${inventoryTab}.`}
+                      {isInventorySearchMode ? (
+                        <div className="mt-4">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="bg-slate-900 text-white hover:bg-slate-800"
+                            onClick={revealAddReagentCard}
+                            disabled={busy || !labContext.labId || labContext.featureUnavailable}
+                          >
+                            <PackagePlus className="mr-1.5 h-3.5 w-3.5" />
+                            Add reagent
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     filteredInventory.map((item) => {
@@ -3234,7 +3403,9 @@ export function LabOperationsClient({
                   )}
                 </CardContent>
               </Card>
+              ) : null}
 
+              {showInventoryAddCard ? (
               <Card className={cn("bg-white/95", embedded ? "border-slate-200/70 shadow-none" : "border-white/80")}>
                 <CardHeader className="pb-4">
                   <CardTitle className="text-base text-slate-900">Add reagent</CardTitle>
@@ -3325,9 +3496,12 @@ export function LabOperationsClient({
                   </form>
                 </CardContent>
               </Card>
+              ) : null}
             </div>
 
+            {showInventoryRightRail ? (
             <div className="min-w-0 space-y-4">
+              {showInventoryDetailCard ? (
               <Card className={cn("bg-white/95", embedded ? "border-slate-200/70 shadow-none" : "border-white/80")}>
                 <CardHeader className="pb-4">
                   <CardTitle className="text-base text-slate-900">
@@ -3860,30 +4034,42 @@ export function LabOperationsClient({
                   )}
                 </CardContent>
               </Card>
+              ) : null}
 
-              {selectedInventory ? (
-                <ObjectLinksPanel
-                  title="Reagent notes and links"
-                  subtitle="Track discussion and related tasks for this reagent."
-                  linkedObjectId={selectedInventory.id}
-                  linkedObjectType="lab_reagent"
-                  labId={labContext.labId}
-                  linkedTaskIds={selectedInventory.linkedTaskIds}
-                  taskOptions={taskOptions}
-                  messages={withLocalMessages("lab_reagent", selectedInventory.id, selectedInventory.messages)}
-                  messageDraft={inventoryMessageDraft}
-                  onMessageDraftChange={setInventoryMessageDraft}
-                  onCreateTaskLink={submitTaskLink}
-                  onPostMessage={submitMessage}
-                  disabled={labContext.featureUnavailable}
-                  busy={busy}
-                />
+              {showInventoryChatCard && selectedInventory ? (
+                <div ref={reagentChatPanelRef}>
+                  <ObjectLinksPanel
+                    title="Reagent notes and links"
+                    subtitle="Track discussion and related tasks for this reagent."
+                    linkedObjectId={selectedInventory.id}
+                    linkedObjectType="lab_reagent"
+                    labId={labContext.labId}
+                    linkedTaskIds={selectedInventory.linkedTaskIds}
+                    taskOptions={taskOptions}
+                    messages={withLocalMessages("lab_reagent", selectedInventory.id, selectedInventory.messages)}
+                    messageDraft={inventoryMessageDraft}
+                    onMessageDraftChange={setInventoryMessageDraft}
+                    onCreateTaskLink={submitTaskLink}
+                    onPostMessage={submitMessage}
+                    disabled={labContext.featureUnavailable}
+                    busy={busy}
+                  />
+                </div>
+              ) : null}
+              {showInventoryChatCard && !selectedInventory ? (
+                <Card className={cn("bg-white/95", embedded ? "border-slate-200/70 shadow-none" : "border-white/80")}>
+                  <CardContent className="py-8 text-sm text-slate-600">
+                    Select a reagent to open the chat room.
+                  </CardContent>
+                </Card>
               ) : null}
             </div>
+            ) : null}
           </div>
         </TabsContent>
 
         <TabsContent value="bookings" className="space-y-4">
+          {isNarrowMobile ? null : (
           <Card className="border-white/80 bg-white/90">
             <CardContent className="pt-4">
               <Tabs value={equipmentTab} onValueChange={setEquipmentTab} className="w-full">
@@ -3941,7 +4127,7 @@ export function LabOperationsClient({
                   </Button>
                 </div>
               ) : null}
-              {embedded ? null : (
+              {embedded || (isNarrowMobile && equipmentSection === "booking") ? null : (
                 <p className="mt-2 text-xs text-slate-500">
                   {equipmentTab === "all"
                     ? "Select an equipment tab for calendar-first focus."
@@ -3950,7 +4136,8 @@ export function LabOperationsClient({
               )}
             </CardContent>
           </Card>
-          {embedded ? null : (
+          )}
+          {embedded || isNarrowMobile ? null : (
           <Card className="border-white/80 bg-white/90">
             <CardContent className="pt-4">
               <div className="flex flex-wrap gap-2">
@@ -3999,17 +4186,74 @@ export function LabOperationsClient({
                 : "xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]",
             )}
           >
-            <div className="min-w-0 space-y-4">
+            {!(isNarrowMobile && equipmentSection === "booking" && mobileBookingView === "detail") ? (
+            <div className={cn("min-w-0", isNarrowMobile ? "space-y-2" : "space-y-4")}>
               {equipmentSection === "booking" ? (
+              isNarrowMobile && mobileBookingView === "equipment" ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 px-1">
+                    <p className="text-sm font-semibold text-slate-900">Equipment setups</p>
+                    {canManageEquipment ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8 rounded-full border-slate-200 px-3 text-xs font-medium text-slate-700"
+                        onClick={() => setEquipmentSection("equipment")}
+                        aria-label="Add equipment setup"
+                      >
+                        Add setup
+                      </Button>
+                    ) : null}
+                  </div>
+                  {localEquipmentOptions.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-slate-200 bg-white/80 px-3 py-3 text-sm text-slate-600">
+                      No equipment setups yet. Add one in Equipment.
+                    </p>
+                  ) : (
+                    localEquipmentOptions.map((item) => {
+                      const bookingCount = localBookings.filter((booking) => booking.equipmentId === item.id).length;
+                      return (
+                        <button
+                          key={`mobile-setup-${item.id}`}
+                          type="button"
+                          onClick={() => handleSelectEquipmentForBookings(item.id)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left hover:bg-slate-50"
+                        >
+                          <p className="truncate text-sm font-semibold text-slate-900">{item.name}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {item.location ?? "No location"} · {bookingCount} booking{bookingCount === 1 ? "" : "s"}
+                          </p>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              ) : (
               isNarrowMobile ? (
                 <details className="ops-mobile-disclosure rounded-xl border border-slate-200 bg-white/90 p-2">
                   <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
                     New booking
                   </summary>
-                  <Card className="mt-2 border-white/80 bg-white/90 shadow-none">
-                    <CardHeader className="pb-3">
+                <Card className="mt-2 border-white/80 bg-white/90 shadow-none">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between gap-2">
                       <CardTitle className="text-sm text-slate-900">Add booking</CardTitle>
-                    </CardHeader>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="border-slate-200"
+                        onClick={() => {
+                          setEquipmentTab("all");
+                          setMobileBookingView("equipment");
+                        }}
+                      >
+                        <ChevronLeft className="mr-1 h-3.5 w-3.5" />
+                        Setups
+                      </Button>
+                    </div>
+                  </CardHeader>
                     <CardContent>
                       <form
                         ref={bookingFormRef}
@@ -4139,7 +4383,7 @@ export function LabOperationsClient({
                         >
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
-                              <button type="button" className="text-left" onClick={() => setSelectedBookingId(booking.id)}>
+                              <button type="button" className="text-left" onClick={() => handleSelectBooking(booking.id)}>
                                 <p className="truncate text-sm font-semibold text-slate-900">{booking.equipmentName}</p>
                                 <p className="mt-1 text-xs text-slate-500">
                                   {booking.title} · {bookingWindow.date}
@@ -4148,7 +4392,7 @@ export function LabOperationsClient({
                             </div>
                             <div className="flex items-center gap-2">
                               <Badge variant="outline" className={cn("border", bookingTone(booking.status))}>
-                                {booking.status.replace(/_/g, " ")}
+                                {bookingStatusLabel(booking.status, booking.bookingRequiresApproval)}
                               </Badge>
                               <Button
                                 type="button"
@@ -4173,6 +4417,7 @@ export function LabOperationsClient({
                               <span className="inline-flex items-center gap-1 text-amber-700">
                                 <AlertTriangle className="h-3.5 w-3.5" />
                                 Approval required
+                                <HelpHint text={`Approvers: ${approverNamesText}`} />
                               </span>
                             ) : null}
                             <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5", ownerTone.chip)}>
@@ -4193,15 +4438,27 @@ export function LabOperationsClient({
                 </CardContent>
               </Card>
               )
+              )
               ) : null}
 
               {equipmentSection === "equipment" ? (
               isNarrowMobile ? (
-                <details className="ops-mobile-disclosure rounded-xl border border-slate-200 bg-white/90 p-2">
-                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
-                    Equipment setup
-                  </summary>
-                  <Card className="mt-2 border-white/80 bg-white/90 shadow-none">
+                <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="border-slate-200"
+                  onClick={() => {
+                    setEquipmentSection("booking");
+                    setEquipmentTab("all");
+                    setMobileBookingView("equipment");
+                  }}
+                >
+                  <ChevronLeft className="mr-1 h-3.5 w-3.5" />
+                  Back to setups
+                </Button>
+                <Card className="border-white/80 bg-white/90 shadow-none">
                     <CardHeader className="pb-3">
                       <CardTitle className="text-sm text-slate-900">Add equipment</CardTitle>
                     </CardHeader>
@@ -4264,7 +4521,7 @@ export function LabOperationsClient({
               </form>
                     </CardContent>
                   </Card>
-                </details>
+                </>
               ) : (
               <Card className="border-white/80 bg-white/90">
                 <CardHeader className="pb-4">
@@ -4463,7 +4720,7 @@ export function LabOperationsClient({
               )
               ) : null}
 
-              {equipmentSection === "booking" ? (
+              {equipmentSection === "booking" && !isNarrowMobile ? (
               <Card className="border-white/80 bg-white/90">
                 <CardHeader className="pb-4">
                   <CardTitle className="text-base text-slate-900">Add booking</CardTitle>
@@ -4575,41 +4832,95 @@ export function LabOperationsClient({
               ) : null}
 
               {equipmentSection === "calendar" ? (
-                <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]">
-                  {equipmentCalendarCard}
-                  {selectedCalendarEquipment ? (
-                    <ObjectLinksPanel
-                      title="Equipment chatroom"
-                      subtitle="All lab members can discuss this equipment directly next to its calendar."
-                      linkedObjectId={selectedCalendarEquipment.id}
-                      linkedObjectType="lab_equipment"
-                      labId={labContext.labId}
-                      linkedTaskIds={selectedCalendarEquipment.linkedTaskIds}
-                      taskOptions={taskOptions}
-                      messages={withLocalMessages("lab_equipment", selectedCalendarEquipment.id, selectedCalendarEquipment.messages)}
-                      messageDraft={equipmentMessageDraft}
-                      onMessageDraftChange={setEquipmentMessageDraft}
-                      onCreateTaskLink={submitTaskLink}
-                      onPostMessage={submitMessage}
-                      disabled={labContext.featureUnavailable}
-                      busy={busy}
-                    />
+                isNarrowMobile ? (
+                  mobileCalendarView === "chat" ? (
+                    <div className="space-y-3">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="border-slate-200"
+                        onClick={() => setMobileCalendarView("calendar")}
+                      >
+                        <ChevronLeft className="mr-1 h-3.5 w-3.5" />
+                        Back to calendar
+                      </Button>
+                      {selectedCalendarEquipment ? (
+                        <ObjectLinksPanel
+                          title="Equipment chatroom"
+                          subtitle=""
+                          linkedObjectId={selectedCalendarEquipment.id}
+                          linkedObjectType="lab_equipment"
+                          labId={labContext.labId}
+                          linkedTaskIds={selectedCalendarEquipment.linkedTaskIds}
+                          taskOptions={taskOptions}
+                          messages={withLocalMessages("lab_equipment", selectedCalendarEquipment.id, selectedCalendarEquipment.messages)}
+                          messageDraft={equipmentMessageDraft}
+                          onMessageDraftChange={setEquipmentMessageDraft}
+                          onCreateTaskLink={submitTaskLink}
+                          onPostMessage={submitMessage}
+                          disabled={labContext.featureUnavailable}
+                          busy={busy}
+                        />
+                      ) : (
+                        <Card className="border-white/80 bg-white/90">
+                          <CardContent className="py-8 text-sm text-slate-600">
+                            Select an equipment tab to open its shared chatroom.
+                          </CardContent>
+                        </Card>
+                      )}
+                    </div>
                   ) : (
-                    <Card className="border-white/80 bg-white/90">
-                      <CardContent className="py-8 text-sm text-slate-600">
-                        Select an equipment tab to open its shared chatroom.
-                      </CardContent>
-                    </Card>
-                  )}
-                </div>
+                    equipmentCalendarCard
+                  )
+                ) : (
+                  <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]">
+                    {equipmentCalendarCard}
+                    {selectedCalendarEquipment ? (
+                      <ObjectLinksPanel
+                        title="Equipment chatroom"
+                        subtitle=""
+                        linkedObjectId={selectedCalendarEquipment.id}
+                        linkedObjectType="lab_equipment"
+                        labId={labContext.labId}
+                        linkedTaskIds={selectedCalendarEquipment.linkedTaskIds}
+                        taskOptions={taskOptions}
+                        messages={withLocalMessages("lab_equipment", selectedCalendarEquipment.id, selectedCalendarEquipment.messages)}
+                        messageDraft={equipmentMessageDraft}
+                        onMessageDraftChange={setEquipmentMessageDraft}
+                        onCreateTaskLink={submitTaskLink}
+                        onPostMessage={submitMessage}
+                        disabled={labContext.featureUnavailable}
+                        busy={busy}
+                      />
+                    ) : (
+                      <Card className="border-white/80 bg-white/90">
+                        <CardContent className="py-8 text-sm text-slate-600">
+                          Select an equipment tab to open its shared chatroom.
+                        </CardContent>
+                      </Card>
+                    )}
+                  </div>
+                )
               ) : null}
             </div>
+            ) : null}
 
-            {equipmentSection === "calendar" ? null : (
+            {equipmentSection === "calendar" || (isNarrowMobile && equipmentSection === "booking" && mobileBookingView !== "detail") ? null : (
             <div className="min-w-0 space-y-4">
               {equipmentSection === "booking" ? (
               <Card className="border-white/80 bg-white/90">
                 <CardHeader className="pb-4">
+                  {isNarrowMobile ? (
+                    <button
+                      type="button"
+                      className="mb-1 inline-flex items-center gap-1 text-xs font-medium text-slate-600"
+                      onClick={() => setMobileBookingView("list")}
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      Back to bookings
+                    </button>
+                  ) : null}
                   <CardTitle className="text-base text-slate-900">
                     {selectedBooking ? selectedBooking.equipmentName : "Select a booking"}
                   </CardTitle>
@@ -4685,7 +4996,7 @@ export function LabOperationsClient({
                         <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
                           <p className="text-xs uppercase tracking-[0.12em] text-slate-500">Status</p>
                           <p className="mt-1 text-base font-semibold text-slate-900">
-                            {selectedBooking.status.replace(/_/g, " ")}
+                            {bookingStatusLabel(selectedBooking.status, selectedBooking.bookingRequiresApproval)}
                           </p>
                         </div>
                       </div>
@@ -4761,7 +5072,7 @@ export function LabOperationsClient({
                                 }
                                 className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
                               >
-                                <option value="draft">Scheduled (draft)</option>
+                                <option value="draft">Waiting for approval</option>
                                 <option value="confirmed">Scheduled (confirmed)</option>
                                 <option value="in_use">In use</option>
                                 <option value="completed">Completed</option>
@@ -4815,7 +5126,10 @@ export function LabOperationsClient({
                             <p className="mt-2 text-sm text-slate-700">{selectedBooking.notes}</p>
                           ) : null}
                           {selectedBooking.bookingRequiresApproval ? (
-                            <p className="mt-2 text-xs text-amber-700">This equipment requires approval in the current lab policy layer.</p>
+                            <p className="mt-2 inline-flex items-center gap-1 text-xs text-amber-700">
+                              This equipment requires approval in the current lab policy layer.
+                              <HelpHint text={`Approvers: ${approverNamesText}`} />
+                            </p>
                           ) : null}
                         </div>
                       )}
@@ -4834,7 +5148,7 @@ export function LabOperationsClient({
                             disabled={busy || !canEditSelectedBooking}
                             className="h-10 min-w-0 flex-1 basis-56 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
                           >
-                            <option value="draft">Scheduled (draft)</option>
+                            <option value="draft">Waiting for approval</option>
                             <option value="confirmed">Scheduled (confirmed)</option>
                             <option value="in_use">In use</option>
                             <option value="completed">Completed</option>
@@ -4847,7 +5161,7 @@ export function LabOperationsClient({
                             onClick={() => {
                               const nextStatus = bookingEditDraft.status;
                               const confirmed = window.confirm(
-                                `Change booking status from ${selectedBooking.status.replace(/_/g, " ")} to ${nextStatus.replace(/_/g, " ")}?`,
+                                `Change booking status from ${bookingStatusLabel(selectedBooking.status, selectedBooking.bookingRequiresApproval)} to ${bookingStatusLabel(nextStatus, selectedBooking.bookingRequiresApproval)}?`,
                               );
                               if (!confirmed) return;
                               void submitBookingStatus(selectedBooking.id, nextStatus);
@@ -4892,66 +5206,134 @@ export function LabOperationsClient({
 
         {embedded ? null : (
         <TabsContent value="handoff" className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-3">
-            <Card className="border-white/80 bg-white/90 lg:col-span-2">
-              <CardHeader className="pb-4">
-                <div className="flex items-center gap-1.5">
-                  <CardTitle className="text-base text-slate-900">Inventory and booking summary</CardTitle>
-                  <HelpHint text="Quick counts for related tasks and notes." />
+          <Card className="border-white/80 bg-white/90">
+            <CardHeader className="pb-4">
+              <div className="flex items-center gap-1.5">
+                <CardTitle className="text-base text-slate-900">Summary</CardTitle>
+                <HelpHint text="Choose one summary view at a time." />
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {handoffSection === "chooser" ? (
+                <div className={cn("ops-slide-card space-y-3", handoffSlideClass)}>
+                  <p className="text-sm text-slate-600">Pick a summary view to continue.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      className="bg-slate-900 text-white hover:bg-slate-800"
+                      onClick={() => {
+                        setHandoffSlideDirection("forward");
+                        setHandoffSection("inventory");
+                      }}
+                    >
+                      Reagent summary
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-slate-200"
+                      onClick={() => {
+                        setHandoffSlideDirection("forward");
+                        setHandoffSection("bookings");
+                      }}
+                    >
+                      Booking summary
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-slate-200"
+                      onClick={() => {
+                        setHandoffSlideDirection("forward");
+                        setHandoffSection("notes");
+                      }}
+                    >
+                      Workspace notes
+                    </Button>
+                  </div>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {localInventory.map((item) => (
-                  <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                    <p className="text-sm font-semibold text-slate-900">{item.name}</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {item.linkedTaskIds.length} task link{item.linkedTaskIds.length === 1 ? "" : "s"} · {item.messages.length} message{item.messages.length === 1 ? "" : "s"}
-                    </p>
-                  </div>
-                ))}
-                {localBookings.map((item) => (
-                  <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                    <p className="text-sm font-semibold text-slate-900">{item.equipmentName}</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {item.linkedTaskIds.length} task link{item.linkedTaskIds.length === 1 ? "" : "s"} · {item.messages.length} message{item.messages.length === 1 ? "" : "s"}
-                    </p>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+              ) : null}
 
-            <Card className="border-white/80 bg-white/90">
-              <CardHeader className="pb-4">
-                <div className="flex items-center gap-1.5">
-                  <CardTitle className="text-base text-slate-900">Workspace notes</CardTitle>
-                  <HelpHint text="Quick reminders for sharing, setup order, and groups." />
+              {handoffSection === "inventory" ? (
+                <div className={cn("ops-slide-card space-y-3", handoffSlideClass)}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-900">Reagent summary</p>
+                    <Button type="button" size="sm" variant="outline" className="border-slate-200" onClick={() => {
+                      setHandoffSlideDirection("back");
+                      setHandoffSection("chooser");
+                    }}>
+                      Back
+                    </Button>
+                  </div>
+                  {localInventory.map((item) => (
+                    <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                      <p className="text-sm font-semibold text-slate-900">{item.name}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {item.linkedTaskIds.length} task link{item.linkedTaskIds.length === 1 ? "" : "s"} · {item.messages.length} message{item.messages.length === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                  ))}
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm text-slate-700">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                  <p className="font-medium text-slate-900">Shared workspace</p>
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <p>Visible to lab members.</p>
-                    <HelpHint text="Inventory, bookings, tasks, and notes here are shared with your lab." />
+              ) : null}
+
+              {handoffSection === "bookings" ? (
+                <div className={cn("ops-slide-card space-y-3", handoffSlideClass)}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-900">Booking summary</p>
+                    <Button type="button" size="sm" variant="outline" className="border-slate-200" onClick={() => {
+                      setHandoffSlideDirection("back");
+                      setHandoffSection("chooser");
+                    }}>
+                      Back
+                    </Button>
+                  </div>
+                  {localBookings.map((item) => (
+                    <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                      <p className="text-sm font-semibold text-slate-900">{item.equipmentName}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {item.linkedTaskIds.length} task link{item.linkedTaskIds.length === 1 ? "" : "s"} · {item.messages.length} message{item.messages.length === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {handoffSection === "notes" ? (
+                <div className={cn("ops-slide-card space-y-3", handoffSlideClass)}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-900">Workspace notes</p>
+                    <Button type="button" size="sm" variant="outline" className="border-slate-200" onClick={() => {
+                      setHandoffSlideDirection("back");
+                      setHandoffSection("chooser");
+                    }}>
+                      Back
+                    </Button>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700">
+                    <p className="font-medium text-slate-900">Shared workspace</p>
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <p>Visible to lab members.</p>
+                      <HelpHint text="Inventory, bookings, tasks, and notes here are shared with your lab." />
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700">
+                    <p className="font-medium text-slate-900">Equipment setup</p>
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <p>Create equipment before booking.</p>
+                      <HelpHint text="Add equipment first, then add bookings with time windows and optional task links." />
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700">
+                    <p className="font-medium text-slate-900">Reagent groups</p>
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <p>Use groups for filters.</p>
+                      <HelpHint text="Group related items to keep inventory lists easy to scan." />
+                    </div>
                   </div>
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                  <p className="font-medium text-slate-900">Equipment setup</p>
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <p>Create equipment before booking.</p>
-                    <HelpHint text="Add equipment first, then add bookings with time windows and optional task links." />
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                  <p className="font-medium text-slate-900">Reagent groups</p>
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <p>Use groups for filters.</p>
-                    <HelpHint text="Group related items to keep inventory lists easy to scan." />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+              ) : null}
+            </CardContent>
+          </Card>
         </TabsContent>
         )}
       </Tabs>

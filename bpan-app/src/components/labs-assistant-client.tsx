@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { HelpHint } from "@/components/ui/help-hint";
 import { Input } from "@/components/ui/input";
 
 type LabsAssistantClientProps = {
@@ -14,7 +15,7 @@ type LabsAssistantClientProps = {
 type Citation = {
   id: string;
   label: string;
-  kind: "reagent" | "stock_event" | "equipment" | "booking" | "thread" | "message";
+  kind: "reagent" | "stock_event" | "equipment" | "booking" | "thread" | "message" | "announcement" | "shared_task" | "meeting";
 };
 
 type ActionPlan =
@@ -90,6 +91,13 @@ type ActionPlan =
       status: "cancelled" | "confirmed" | "completed" | "in_use";
     }
   | {
+      kind: "update_booking_time";
+      bookingId: string;
+      equipmentName: string;
+      startsAt: string;
+      endsAt: string;
+    }
+  | {
       kind: "create_meeting";
       title: string;
       meetingDate: string;
@@ -105,73 +113,88 @@ type QAItem = {
   id: string;
   question: string;
   answer: string;
-  source: "huggingface" | "rules";
+  source: "model" | "rules";
   citations: Citation[];
   actionPlan: ActionPlan | null;
 };
 
-type ActionLogItem = {
-  id: string;
-  actionKind: string;
-  outcome: "planned" | "confirmed" | "executed" | "denied" | "failed" | "cancelled";
-  outcomeMessage: string | null;
-  actorLabel: string;
-  createdAt: string;
+type ChatHistoryTurn = {
+  question: string;
+  answer: string;
+  citations: Citation[];
 };
+
+type ChatThread = {
+  id: string;
+  title: string;
+  items: QAItem[];
+  updatedAt: number;
+};
+
+const STARTER_PROMPTS = [
+  "When is my next booking?",
+  "Is this equipment available tomorrow morning?",
+  "Where is this reagent stored?",
+  "Do we still have this reagent left?",
+  "What bookings do I have this week?",
+];
 
 export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
   const router = useRouter();
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
-  const [history, setHistory] = useState<QAItem[]>([]);
-  const [actionLogs, setActionLogs] = useState<ActionLogItem[]>([]);
-  const [logsLoading, setLogsLoading] = useState(false);
+  const [chatThreads, setChatThreads] = useState<ChatThread[]>([
+    { id: "chat-initial", title: "New chat", items: [], updatedAt: Date.now() },
+  ]);
+  const [activeChatId, setActiveChatId] = useState("chat-initial");
   const [error, setError] = useState<string | null>(null);
   const [confirmActionId, setConfirmActionId] = useState<string | null>(null);
   const [expandedAnswerIds, setExpandedAnswerIds] = useState<Record<string, boolean>>({});
-
-  const loadActionLogs = useCallback(async () => {
-    setLogsLoading(true);
-    try {
-      const params = new URLSearchParams({ labId: activeLabId, limit: "12" });
-      const res = await fetch(`/api/labs/assistant?${params.toString()}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) return;
-      setActionLogs(
-        Array.isArray(data.logs)
-          ? (data.logs as ActionLogItem[])
-          : []
-      );
-    } catch {
-      // Best effort only.
-    } finally {
-      setLogsLoading(false);
-    }
-  }, [activeLabId]);
+  const activeThread = useMemo(
+    () => chatThreads.find((thread) => thread.id === activeChatId) ?? chatThreads[0],
+    [activeChatId, chatThreads],
+  );
+  const history = activeThread?.items ?? [];
 
   useEffect(() => {
-    void loadActionLogs();
-  }, [loadActionLogs]);
+    setChatThreads([{ id: "chat-initial", title: "New chat", items: [], updatedAt: Date.now() }]);
+    setActiveChatId("chat-initial");
+    setQuestion("");
+    setError(null);
+    setConfirmActionId(null);
+    setExpandedAnswerIds({});
+  }, [activeLabId]);
 
-  function formatLogTime(value: string) {
-    const dt = new Date(value);
-    if (Number.isNaN(dt.getTime())) return value;
-    return dt.toLocaleString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
+  function updateActiveThreadItems(updater: (items: QAItem[]) => QAItem[]) {
+    setChatThreads((current) => {
+      const targetId = activeChatId;
+      const existing = current.some((thread) => thread.id === targetId);
+      const base = existing
+        ? current
+        : [{ id: targetId, title: "New chat", items: [], updatedAt: Date.now() }, ...current];
+      return base.map((thread) => {
+        if (thread.id !== targetId) return thread;
+        const nextItems = updater(thread.items);
+        const firstQuestion = nextItems[nextItems.length - 1]?.question ?? thread.title;
+        const nextTitle = firstQuestion.trim().slice(0, 42) || "New chat";
+        return {
+          ...thread,
+          items: nextItems,
+          title: nextTitle,
+          updatedAt: Date.now(),
+        };
+      });
     });
   }
 
-  function outcomeTone(outcome: ActionLogItem["outcome"]) {
-    if (outcome === "executed") return "bg-emerald-100 text-emerald-700 border-emerald-200";
-    if (outcome === "denied" || outcome === "failed") return "bg-rose-100 text-rose-700 border-rose-200";
-    if (outcome === "confirmed") return "bg-cyan-100 text-cyan-700 border-cyan-200";
-    return "bg-slate-100 text-slate-700 border-slate-200";
+  function startNewChat() {
+    const id = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setChatThreads((current) => [{ id, title: "New chat", items: [], updatedAt: Date.now() }, ...current]);
+    setActiveChatId(id);
+    setQuestion("");
+    setError(null);
+    setConfirmActionId(null);
+    setExpandedAnswerIds({});
   }
 
   function isHighImpactAction(action: ActionPlan) {
@@ -180,6 +203,7 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
       action.kind === "remove_reagent" ||
       action.kind === "remove_equipment" ||
       action.kind === "update_booking_status" ||
+      action.kind === "update_booking_time" ||
       action.kind === "direct_message" ||
       action.kind === "group_message" ||
       action.kind === "create_group_chat"
@@ -202,31 +226,34 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
   async function ask(overrideQuestion?: string) {
     const q = (overrideQuestion ?? question).trim();
     if (!q || busy) return;
+    const chatHistory: ChatHistoryTurn[] = (activeThread?.items ?? [])
+      .slice(0, 12)
+      .reverse()
+      .map((item) => ({ question: item.question, answer: item.answer, citations: item.citations }));
     setBusy(true);
     setError(null);
     try {
       const res = await fetch("/api/labs/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ labId: activeLabId, question: q }),
+        body: JSON.stringify({ labId: activeLabId, question: q, chatHistory }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
         setError(data.error || "Failed to get answer.");
         return;
       }
-      setHistory((prev) => [
+      updateActiveThreadItems((prev) => [
         {
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
           question: q,
           answer: String(data.answer || ""),
-          source: data.source === "huggingface" ? "huggingface" : "rules",
+          source: data.source === "rules" ? "rules" : "model",
           citations: Array.isArray(data.citations) ? (data.citations as Citation[]) : [],
           actionPlan: data.actionPlan ? (data.actionPlan as ActionPlan) : null,
         },
         ...prev,
       ]);
-      void loadActionLogs();
       if (!overrideQuestion) {
         setQuestion("");
       } else {
@@ -270,7 +297,7 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
         return;
       }
       setConfirmActionId(null);
-      setHistory((prev) =>
+      updateActiveThreadItems((prev) =>
         prev.map((entry) =>
           entry.id === item.id
             ? {
@@ -283,7 +310,6 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
         )
       );
       router.refresh();
-      void loadActionLogs();
     } catch {
       setError("Failed to execute action.");
     } finally {
@@ -291,41 +317,35 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
     }
   }
 
-  async function clearActionHistory() {
-    if (logsLoading) return;
-    const confirmed = window.confirm("Clear your assistant action history for this lab?");
-    if (!confirmed) return;
-    setError(null);
-    setLogsLoading(true);
-    try {
-      const params = new URLSearchParams({ labId: activeLabId });
-      const res = await fetch(`/api/labs/assistant?${params.toString()}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.error) {
-        setError(data.error || "Failed to clear action history.");
-        return;
-      }
-      setActionLogs([]);
-    } catch {
-      setError("Failed to clear action history.");
-    } finally {
-      setLogsLoading(false);
-    }
-  }
-
   return (
-    <Card className="border-slate-200 bg-slate-50/40">
+    <Card className="rounded-2xl border-white/80 bg-white/84 shadow-[0_16px_30px_-24px_rgba(15,23,42,0.35)]">
       <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <Sparkles className="h-4 w-4" />
+        <CardTitle className="flex items-center gap-2 text-[17px] font-semibold text-slate-900 sm:text-base">
+          <Sparkles className="h-4 w-4 shrink-0" />
           Labs Assistant
+          <HelpHint text="You can ask this assistant to find reagent/equipment info, create or remove reagents/equipment, draft or post announcements, create or update bookings, create meetings, and draft direct/group chat messages. High-impact actions require confirmation before execution." />
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex gap-2">
+      <CardContent className="space-y-3.5">
+        {history.length === 0 ? (
+          <div className="rounded-xl border border-white/80 bg-white/88 p-3.5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.85)]">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500 sm:text-xs">Try one</p>
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              {STARTER_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => void ask(prompt)}
+                  disabled={busy}
+                  className="rounded-full border border-primary/25 bg-primary/10 px-3 py-1.5 text-[12px] leading-tight text-primary hover:bg-primary/16 disabled:opacity-60 sm:text-xs"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <div className="flex min-w-0 items-center gap-2">
           <Input
             placeholder="Ask about reagent location, reorder status, or arrival..."
             value={question}
@@ -337,33 +357,54 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
               }
             }}
             disabled={busy}
+            className="h-11 min-w-0 flex-1 text-[15px] sm:h-10 sm:text-sm"
           />
-          <Button onClick={() => void ask()} disabled={busy || question.trim().length === 0}>
+          <Button className="h-11 shrink-0 rounded-xl px-4 text-[15px] sm:h-10 sm:text-sm" onClick={() => void ask()} disabled={busy || question.trim().length === 0}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ask"}
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              if (history.length === 0) return;
-              const confirmed = window.confirm("Clear current chat history?");
-              if (!confirmed) return;
-              setHistory([]);
-              setExpandedAnswerIds({});
-              setConfirmActionId(null);
-              setError(null);
-            }}
-            disabled={busy || history.length === 0}
-          >
-            Clear
-          </Button>
         </div>
-        {error ? <p className="text-xs text-red-600">{error}</p> : null}
-        <div className="space-y-2">
-          {history.map((item) => (
-            <div key={item.id} className="rounded-xl border border-slate-200 bg-white p-3">
-              <p className="text-xs font-medium text-slate-700">Q: {item.question}</p>
-              <p className="mt-1 whitespace-pre-wrap text-sm text-slate-900">
+        <div className="rounded-lg border border-white/80 bg-white/90 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500 sm:text-xs">Chats</p>
+            <Button type="button" size="sm" variant="outline" className="h-8 rounded-full px-3 text-[12px] sm:text-xs" onClick={startNewChat}>
+              New chat
+            </Button>
+          </div>
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-0.5">
+            {chatThreads
+              .slice()
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .map((thread) => (
+                <button
+                  key={thread.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveChatId(thread.id);
+                    setConfirmActionId(null);
+                    setError(null);
+                  }}
+                  className={`max-w-[11rem] truncate rounded-full border px-3 py-1.5 text-[12px] sm:text-xs ${
+                    activeThread?.id === thread.id
+                      ? "border-primary/30 bg-primary/10 text-primary"
+                      : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  {thread.title}
+                </button>
+              ))}
+          </div>
+        </div>
+        {error ? <p className="text-sm text-red-600">{error}</p> : null}
+        <div className="max-h-[22rem] space-y-2 overflow-y-auto pr-1">
+          {history.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+              No messages yet. Ask a question to start this chat.
+            </div>
+          ) : (
+            history.map((item) => (
+              <div key={item.id} className="min-w-0 rounded-xl border border-slate-200 bg-white p-3.5">
+              <p className="text-sm font-medium text-slate-700">Q: {item.question}</p>
+              <p className="mt-1.5 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-slate-900 sm:text-sm">
                 {expandedAnswerIds[item.id]
                   ? item.answer
                   : compactAnswerText(item.answer).short}
@@ -371,7 +412,7 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
               {compactAnswerText(item.answer).clipped ? (
                 <button
                   type="button"
-                  className="mt-1 text-[11px] font-medium text-cyan-700 hover:text-cyan-900"
+                  className="mt-1.5 text-sm font-medium text-primary hover:text-primary/90 sm:text-xs"
                   onClick={() =>
                     setExpandedAnswerIds((prev) => ({
                       ...prev,
@@ -382,53 +423,57 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
                 </button>
               ) : null}
               {item.citations.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-1">
+                <div className="mt-2 flex flex-wrap gap-1.5">
                   {item.citations.slice(0, 4).map((c) => (
-                    <span key={`${item.id}-${c.kind}-${c.id}`} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600">
+                    <span key={`${item.id}-${c.kind}-${c.id}`} className="max-w-full truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600">
                       {c.kind.replace("_", " ")}: {c.label}
                     </span>
                   ))}
                 </div>
               ) : null}
               {item.actionPlan ? (
-                <div className="mt-3 rounded-lg border border-cyan-200 bg-cyan-50 p-2">
-                  <p className="text-[11px] font-medium text-cyan-900">Action detected: {item.actionPlan.kind}</p>
+                <div className="mt-3 rounded-lg border border-primary/25 bg-primary/10 p-2.5">
+                  <p className="text-sm font-medium text-primary sm:text-xs">Action detected: {item.actionPlan.kind}</p>
                   {item.actionPlan.kind === "create_booking" ? (
-                    <p className="mt-1 text-[11px] text-cyan-900">
+                    <p className="mt-1 text-sm text-primary sm:text-xs">
                       {item.actionPlan.equipmentName} · {item.actionPlan.title}
                     </p>
                   ) : item.actionPlan.kind === "direct_message" || item.actionPlan.kind === "group_message" || item.actionPlan.kind === "create_group_chat" ? (
-                    <p className="mt-1 text-[11px] text-cyan-900">
+                    <p className="mt-1 text-sm text-primary sm:text-xs">
                       {item.actionPlan.recipientLabels.join(", ")} · {item.actionPlan.title}
                     </p>
                   ) : item.actionPlan.kind === "add_reagent" ? (
-                    <p className="mt-1 text-[11px] text-cyan-900">
+                    <p className="mt-1 text-sm text-primary sm:text-xs">
                       {item.actionPlan.name} · qty {item.actionPlan.quantity}
                       {item.actionPlan.unit ? ` ${item.actionPlan.unit}` : ""}
                     </p>
                   ) : item.actionPlan.kind === "remove_reagent" ? (
-                    <p className="mt-1 text-[11px] text-cyan-900">{item.actionPlan.reagentName}</p>
+                    <p className="mt-1 text-sm text-primary sm:text-xs">{item.actionPlan.reagentName}</p>
                   ) : item.actionPlan.kind === "add_equipment" ? (
-                    <p className="mt-1 text-[11px] text-cyan-900">
+                    <p className="mt-1 text-sm text-primary sm:text-xs">
                       {item.actionPlan.name}
                       {item.actionPlan.location ? ` · ${item.actionPlan.location}` : ""}
                     </p>
                   ) : item.actionPlan.kind === "remove_equipment" ? (
-                    <p className="mt-1 text-[11px] text-cyan-900">{item.actionPlan.equipmentName}</p>
+                    <p className="mt-1 text-sm text-primary sm:text-xs">{item.actionPlan.equipmentName}</p>
                   ) : item.actionPlan.kind === "update_booking_status" ? (
-                    <p className="mt-1 text-[11px] text-cyan-900">
+                    <p className="mt-1 text-sm text-primary sm:text-xs">
                       {item.actionPlan.equipmentName} · {item.actionPlan.status}
                     </p>
+                  ) : item.actionPlan.kind === "update_booking_time" ? (
+                    <p className="mt-1 text-sm text-primary sm:text-xs">
+                      {item.actionPlan.equipmentName} · {new Date(item.actionPlan.startsAt).toLocaleString()} - {new Date(item.actionPlan.endsAt).toLocaleString()}
+                    </p>
                   ) : item.actionPlan.kind === "create_meeting" ? (
-                    <p className="mt-1 text-[11px] text-cyan-900">
+                    <p className="mt-1 text-sm text-primary sm:text-xs">
                       {item.actionPlan.title} · {item.actionPlan.meetingDate}
                     </p>
                   ) : item.actionPlan.kind === "clarification_required" ? (
-                    <p className="mt-1 text-[11px] text-cyan-900">
+                    <p className="mt-1 text-sm text-primary sm:text-xs">
                       {item.actionPlan.body}
                     </p>
                   ) : (
-                    <p className="mt-1 text-[11px] text-cyan-900">{item.actionPlan.title}</p>
+                    <p className="mt-1 text-sm text-primary sm:text-xs">{item.actionPlan.title}</p>
                   )}
                   {item.actionPlan.kind === "clarification_required" ? (
                     <div className="mt-2 flex flex-wrap gap-1">
@@ -440,14 +485,19 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
                             const isDurationPrompt =
                               item.actionPlan?.kind === "clarification_required"
                               && item.actionPlan.title.toLowerCase().includes("duration");
+                            const isBookingPicker =
+                              item.actionPlan?.kind === "clarification_required"
+                              && item.actionPlan.title.toLowerCase().includes("booking");
                             return void ask(
                               isDurationPrompt
                                 ? `${item.question} for ${option}`
+                                : isBookingPicker
+                                ? `${item.question}\nSelected booking: ${option}`
                                 : `${item.question}\nSelected equipment: ${option}`,
                             );
                           }}
                           disabled={busy}
-                          className="rounded-full border border-cyan-300 bg-cyan-100 px-2 py-0.5 text-[10px] text-cyan-900 hover:bg-cyan-200 disabled:opacity-60"
+                          className="rounded-full border border-primary/30 bg-primary/16 px-2.5 py-1 text-xs text-primary hover:bg-primary/22 disabled:opacity-60"
                         >
                           {option}
                         </button>
@@ -457,7 +507,7 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
                     <div className="mt-2 flex items-center gap-2">
                       <Button
                         size="sm"
-                        className="h-7 bg-cyan-700 text-white hover:bg-cyan-800"
+                        className="h-8 bg-primary text-white hover:bg-primary/92"
                         onClick={() => void runAction(item, true)}
                         disabled={busy}
                       >
@@ -476,7 +526,7 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
                   ) : (
                     <Button
                       size="sm"
-                      className="mt-2 h-7 bg-cyan-700 text-white hover:bg-cyan-800"
+                      className="mt-2 h-8 bg-primary text-white hover:bg-primary/92"
                       onClick={() => void runAction(item)}
                       disabled={busy}
                     >
@@ -485,54 +535,8 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
                   )}
                 </div>
               ) : null}
-            </div>
-          ))}
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-slate-800">Assistant Action History</p>
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7"
-                onClick={() => void clearActionHistory()}
-                disabled={logsLoading || actionLogs.length === 0}
-              >
-                Clear history
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7"
-                onClick={() => void loadActionLogs()}
-                disabled={logsLoading}
-              >
-                {logsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              </Button>
-            </div>
-          </div>
-          {actionLogs.length === 0 ? (
-            <p className="mt-2 text-[11px] text-slate-500">No assistant actions logged yet.</p>
-          ) : (
-            <div className="mt-2 space-y-2">
-              {actionLogs.map((log) => (
-                <div key={log.id} className="rounded-lg border border-slate-200 bg-slate-50 p-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-[11px] font-medium text-slate-800">{log.actionKind}</p>
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] ${outcomeTone(log.outcome)}`}>
-                      {log.outcome}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-[10px] text-slate-500">
-                    {log.actorLabel} · {formatLogTime(log.createdAt)}
-                  </p>
-                  {log.outcomeMessage ? (
-                    <p className="mt-1 text-[11px] text-slate-700">{log.outcomeMessage}</p>
-                  ) : null}
-                </div>
-              ))}
-            </div>
+              </div>
+            ))
           )}
         </div>
       </CardContent>
