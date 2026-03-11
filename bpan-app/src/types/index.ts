@@ -952,6 +952,9 @@ export interface LabEquipment {
   description: string | null;
   location: string | null;
   booking_requires_approval: boolean;
+  outlook_calendar_id: string | null;
+  outlook_calendar_name: string | null;
+  outlook_sync_owner_user_id: string | null;
   is_active: boolean;
   created_by: string | null;
   created_at: string;
