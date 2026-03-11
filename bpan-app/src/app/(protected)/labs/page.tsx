@@ -8,6 +8,7 @@ import { LabsChatClient, type ChatMessageItem, type ChatThreadItem } from "@/com
 import { LabsAssistantClient } from "@/components/labs-assistant-client";
 import { LabMeetingsClient } from "@/components/lab-meetings-client";
 import { getRequestedActiveLabId, resolveActiveLabContext } from "@/lib/active-lab-context";
+import { syncLabEquipmentBookingsFromOutlookBestEffort } from "@/lib/outlook-equipment-calendar";
 import type {
   LabEquipment,
   LabEquipmentBooking,
@@ -42,6 +43,7 @@ import {
   updateLabSharedTask as updateLabSharedTaskAction,
 } from "@/app/(protected)/labs/actions";
 import {
+  createTaskFromLabChatMessage,
   createLabChatThread,
   deleteLabChatThread,
   editLabChatMessage,
@@ -93,6 +95,8 @@ type LabMeetingActionItemRecord = {
   status: "open" | "completed";
   responsible_member_id: string | null;
   responsible_label: string | null;
+  responsible_member_ids: string[] | null;
+  responsible_labels: string[] | null;
   source: "manual" | "ai";
   created_at: string;
   updated_at: string;
@@ -191,6 +195,8 @@ async function loadOperationsPanelData({
   }>;
   const reagents = (reagentResult.data ?? []) as LabReagent[];
   const equipment = (equipmentResult.data ?? []) as LabEquipment[];
+
+  await syncLabEquipmentBookingsFromOutlookBestEffort(activeLabId, { admin: serviceSupabase });
 
   const reagentIds = reagents.map((item) => item.id);
   const equipmentIds = equipment.map((item) => item.id);
@@ -451,6 +457,9 @@ async function loadOperationsPanelData({
       description: item.description,
       location: item.location,
       bookingRequiresApproval: item.booking_requires_approval,
+      outlookCalendarId: item.outlook_calendar_id,
+      outlookCalendarName: item.outlook_calendar_name,
+      outlookSyncOwnerUserId: item.outlook_sync_owner_user_id,
       isActive: item.is_active,
       linkedTaskIds: taskLinksByObject.get(objectKey("lab_equipment", item.id)) ?? [],
       messages: messagesForObject("lab_equipment", item.id),
@@ -613,6 +622,7 @@ async function loadLabChatPanelData({
     updatedAt: message.updated_at,
     isOwn: message.author_user_id === userId,
     isRead: message.author_user_id === userId || readSet.has(message.id),
+    seenByOthers: false,
   }));
 
   const { data: labMembers } = await supabase
@@ -731,7 +741,7 @@ async function loadLabMeetingsPanelData({
   const { data: actionRows } = meetingIds.length
     ? await supabase
         .from("lab_meeting_action_items")
-        .select("id,lab_meeting_id,text,details,category,status,responsible_member_id,responsible_label,source,created_at,updated_at")
+        .select("id,lab_meeting_id,text,details,category,status,responsible_member_id,responsible_label,responsible_member_ids,responsible_labels,source,created_at,updated_at")
         .in("lab_meeting_id", meetingIds)
         .order("created_at", { ascending: false })
     : { data: [] as LabMeetingActionItemRecord[] };
@@ -912,6 +922,7 @@ export default async function LabsPage({
           createThread: createLabChatThread,
           sendMessage: sendLabChatMessage,
           editMessage: editLabChatMessage,
+          createTaskFromMessage: createTaskFromLabChatMessage,
           markThreadRead: markLabChatThreadRead,
           markThreadUnread: markLabChatThreadUnread,
           deleteThread: deleteLabChatThread,

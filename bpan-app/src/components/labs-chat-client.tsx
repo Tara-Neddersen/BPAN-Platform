@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Search, Send, MessageSquarePlus, CheckCircle2, Circle, Edit3, Users, UserRound, ChevronLeft, Trash2 } from "lucide-react";
+import { Search, Send, MessageSquarePlus, CheckCircle2, Circle, Edit3, Users, UserRound, ChevronLeft, Trash2, ListChecks } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 
@@ -35,6 +35,7 @@ export type ChatMessageItem = {
   updatedAt: string;
   isOwn: boolean;
   isRead: boolean;
+  seenByOthers: boolean;
 };
 
 type ActionMessagePayload = {
@@ -87,6 +88,7 @@ export function LabsChatClient({
     }>;
     sendMessage: (formData: FormData) => Promise<{ success?: boolean; error?: string; message?: ActionMessagePayload }>;
     editMessage: (formData: FormData) => Promise<{ success?: boolean; error?: string; message?: ActionMessagePayload }>;
+    createTaskFromMessage: (formData: FormData) => Promise<{ success?: boolean; error?: string }>;
     markThreadRead: (formData: FormData) => Promise<{ success?: boolean; error?: string; updated?: number }>;
     markThreadUnread: (formData: FormData) => Promise<{ success?: boolean; error?: string; updated?: number }>;
     deleteThread: (formData: FormData) => Promise<{ success?: boolean; error?: string; threadId?: string }>;
@@ -107,6 +109,7 @@ export function LabsChatClient({
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingBody, setEditingBody] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const autoReadThreadIdsRef = useRef<Set<string>>(new Set());
   const router = useRouter();
@@ -118,6 +121,15 @@ export function LabsChatClient({
   useEffect(() => {
     setMessageItems(messages);
   }, [messages]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const requestedThreadId = new URL(window.location.href).searchParams.get("thread_id");
+    if (!requestedThreadId) return;
+    const exists = threads.some((thread) => thread.id === requestedThreadId);
+    if (!exists) return;
+    setSelectedThreadId(requestedThreadId);
+  }, [threads]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -179,11 +191,82 @@ export function LabsChatClient({
       : filteredThreads[0]?.id || "";
   const activeThread = threadItems.find((thread) => thread.id === activeThreadId) || null;
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (activeThreadId) {
+      if (url.searchParams.get("thread_id") !== activeThreadId) {
+        url.searchParams.set("thread_id", activeThreadId);
+        window.history.replaceState({}, "", `${url.pathname}?${url.searchParams.toString()}`);
+      }
+    } else if (url.searchParams.has("thread_id")) {
+      url.searchParams.delete("thread_id");
+      const search = url.searchParams.toString();
+      window.history.replaceState({}, "", search ? `${url.pathname}?${search}` : url.pathname);
+    }
+  }, [activeThreadId]);
+
   const threadMessages = useMemo(
     () => messageItems.filter((message) => message.threadId === activeThreadId),
     [messageItems, activeThreadId],
   );
   const composer = activeThreadId ? (composerDraftByThreadId[activeThreadId] || "") : "";
+
+  const applyIncomingMessage = useCallback((row: {
+    id: string;
+    thread_id: string;
+    author_user_id: string | null;
+    body: string;
+    created_at: string;
+    updated_at: string;
+  }) => {
+    const id = String(row.id || "");
+    const threadId = String(row.thread_id || "");
+    if (!id || !threadId) return;
+    const authorUserId = row.author_user_id ? String(row.author_user_id) : null;
+    const createdAt = String(row.created_at || new Date().toISOString());
+    const updatedAt = String(row.updated_at || createdAt);
+    const body = String(row.body || "");
+
+    setMessageItems((prev) => {
+      if (prev.some((message) => message.id === id)) return prev;
+      const authorLabel =
+        authorUserId === currentUserId
+          ? "You"
+          : memberById.get(authorUserId || "")?.label || "Lab member";
+      return [
+        ...prev,
+        {
+          id,
+          threadId,
+          body,
+          authorUserId,
+          authorLabel,
+          createdAt,
+          updatedAt,
+          isOwn: authorUserId === currentUserId,
+          isRead: authorUserId === currentUserId || threadId === activeThreadId,
+          seenByOthers: false,
+        },
+      ];
+    });
+
+    setThreadItems((prev) =>
+      prev.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              messageCount: thread.messageCount + 1,
+              lastMessageAt: createdAt,
+              unreadCount:
+                authorUserId !== currentUserId && threadId !== activeThreadId
+                  ? thread.unreadCount + 1
+                  : thread.unreadCount,
+            }
+          : thread,
+      ),
+    );
+  }, [activeThreadId, currentUserId, memberById]);
 
   const setThreadUnreadState = useCallback((threadId: string, read: boolean) => {
     const unreadTotalIfUnread = messageItems.filter(
@@ -212,6 +295,7 @@ export function LabsChatClient({
 
     startTransition(async () => {
       setErrorMessage(null);
+      setSuccessMessage(null);
       const formData = new FormData();
       formData.set("active_lab_id", activeLabId);
       formData.set("thread_id", activeThreadId);
@@ -280,6 +364,7 @@ export function LabsChatClient({
 
     startTransition(async () => {
       setErrorMessage(null);
+      setSuccessMessage(null);
       const formData = new FormData();
       formData.set("active_lab_id", activeLabId);
       formData.set("subject", title);
@@ -341,6 +426,7 @@ export function LabsChatClient({
 
     startTransition(async () => {
       setErrorMessage(null);
+      setSuccessMessage(null);
       const formData = new FormData();
       formData.set("active_lab_id", activeLabId);
       formData.set("thread_id", activeThreadId);
@@ -369,6 +455,7 @@ export function LabsChatClient({
           updatedAt: sentMessage.updatedAt,
           isOwn: true,
           isRead: true,
+          seenByOthers: false,
         },
       ]);
       setThreadItems((prev) =>
@@ -406,6 +493,7 @@ export function LabsChatClient({
 
     startTransition(async () => {
       setErrorMessage(null);
+      setSuccessMessage(null);
       const formData = new FormData();
       formData.set("active_lab_id", activeLabId);
       formData.set("message_id", editingMessageId);
@@ -443,6 +531,7 @@ export function LabsChatClient({
     if (!activeThreadId) return;
     startTransition(async () => {
       setErrorMessage(null);
+      setSuccessMessage(null);
       const formData = new FormData();
       formData.set("active_lab_id", activeLabId);
       formData.set("thread_id", activeThreadId);
@@ -490,6 +579,23 @@ export function LabsChatClient({
     });
   }
 
+  function onCreateTaskFromMessage(messageId: string) {
+    startTransition(async () => {
+      setErrorMessage(null);
+      setSuccessMessage(null);
+      const formData = new FormData();
+      formData.set("active_lab_id", activeLabId);
+      formData.set("message_id", messageId);
+      const result = await actions.createTaskFromMessage(formData);
+      if (result?.error) {
+        setErrorMessage(result.error);
+        return;
+      }
+      setSuccessMessage("Task created from message. You can find it in Dashboard > Tasks.");
+      router.refresh();
+    });
+  }
+
   const activeThreadRecipientSummary = useMemo(() => {
     if (!activeThread) return null;
     if (activeThread.threadType === "all_lab") return "All active members in this lab";
@@ -520,51 +626,16 @@ export function LabsChatClient({
         { event: "INSERT", schema: "public", table: "messages" },
         (payload) => {
           const row = payload.new as Record<string, unknown>;
-          const id = String(row.id || "");
           const threadId = String(row.thread_id || "");
-          if (!id || !threadId || !threadIds.has(threadId)) return;
-          const authorUserId = row.author_user_id ? String(row.author_user_id) : null;
-          const createdAt = String(row.created_at || new Date().toISOString());
-          const updatedAt = String(row.updated_at || createdAt);
-          const body = String(row.body || "");
-
-          setMessageItems((prev) => {
-            if (prev.some((message) => message.id === id)) return prev;
-            const authorLabel =
-              authorUserId === currentUserId
-                ? "You"
-                : memberById.get(authorUserId || "")?.label || "Lab member";
-            return [
-              ...prev,
-              {
-                id,
-                threadId,
-                body,
-                authorUserId,
-                authorLabel,
-                createdAt,
-                updatedAt,
-                isOwn: authorUserId === currentUserId,
-                isRead: authorUserId === currentUserId || threadId === activeThreadId,
-              },
-            ];
+          if (!threadId || !threadIds.has(threadId)) return;
+          applyIncomingMessage({
+            id: String(row.id || ""),
+            thread_id: threadId,
+            author_user_id: row.author_user_id ? String(row.author_user_id) : null,
+            body: String(row.body || ""),
+            created_at: String(row.created_at || new Date().toISOString()),
+            updated_at: String(row.updated_at || new Date().toISOString()),
           });
-
-          setThreadItems((prev) =>
-            prev.map((thread) =>
-              thread.id === threadId
-                ? {
-                    ...thread,
-                    messageCount: thread.messageCount + 1,
-                    lastMessageAt: createdAt,
-                    unreadCount:
-                      authorUserId !== currentUserId && threadId !== activeThreadId
-                        ? thread.unreadCount + 1
-                        : thread.unreadCount,
-                  }
-                : thread,
-            ),
-          );
         },
       )
       .on(
@@ -594,7 +665,94 @@ export function LabsChatClient({
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [activeLabId, activeThreadId, currentUserId, memberById, threadItems]);
+  }, [activeLabId, applyIncomingMessage, threadItems]);
+
+  useEffect(() => {
+    const supabase = supabaseRef.current;
+    if (threadItems.length === 0) return;
+
+    let canceled = false;
+    const run = async () => {
+      if (canceled) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      const threadIds = threadItems.map((thread) => thread.id);
+      const newestCreatedAt = messageItems.reduce<string | null>((latest, message) => {
+        if (!latest) return message.createdAt;
+        return new Date(message.createdAt).getTime() > new Date(latest).getTime() ? message.createdAt : latest;
+      }, null);
+
+      let query = supabase
+        .from("messages")
+        .select("id,thread_id,author_user_id,body,created_at,updated_at")
+        .in("thread_id", threadIds)
+        .order("created_at", { ascending: true })
+        .limit(100);
+      if (newestCreatedAt) {
+        query = query.gt("created_at", newestCreatedAt);
+      }
+      const { data } = await query;
+      if (canceled || !data?.length) return;
+      for (const row of data) {
+        applyIncomingMessage({
+          id: String(row.id || ""),
+          thread_id: String(row.thread_id || ""),
+          author_user_id: row.author_user_id ? String(row.author_user_id) : null,
+          body: String(row.body || ""),
+          created_at: String(row.created_at || new Date().toISOString()),
+          updated_at: String(row.updated_at || new Date().toISOString()),
+        });
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void run();
+    }, 4000);
+    void run();
+
+    return () => {
+      canceled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [applyIncomingMessage, messageItems, threadItems]);
+
+  useEffect(() => {
+    if (!activeThreadId) return;
+    let canceled = false;
+
+    const run = async () => {
+      if (canceled) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const response = await fetch(
+          `/api/labs/chat/seen?lab_id=${encodeURIComponent(activeLabId)}&thread_id=${encodeURIComponent(activeThreadId)}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) return;
+        const payload = await response.json();
+        const seenMessageIds = Array.isArray(payload?.seenMessageIds) ? payload.seenMessageIds as string[] : [];
+        const seenSet = new Set(seenMessageIds);
+        setMessageItems((prev) =>
+          prev.map((message) =>
+            message.threadId === activeThreadId && message.authorUserId === currentUserId
+              ? { ...message, seenByOthers: seenSet.has(message.id) }
+              : message,
+          ),
+        );
+      } catch {
+        // Ignore transient polling errors.
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void run();
+    }, 4000);
+    void run();
+
+    return () => {
+      canceled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeLabId, activeThreadId, currentUserId]);
 
   function handleSelectThread(threadId: string) {
     setSelectedThreadId(threadId);
@@ -620,6 +778,9 @@ export function LabsChatClient({
 
         {errorMessage ? (
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</div>
+        ) : null}
+        {successMessage ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{successMessage}</div>
         ) : null}
 
         {mobileView === "threads" || !activeThread ? (
@@ -808,17 +969,34 @@ export function LabsChatClient({
                         <p className="mt-1.5 whitespace-pre-wrap text-sm text-slate-700">{message.body}</p>
                       )}
                       <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500">
-                        <span>{message.isRead ? "Read" : "Unread"}</span>
-                        {message.isOwn && editingMessageId !== message.id ? (
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 text-cyan-700 hover:text-cyan-900"
-                            onClick={() => onStartEdit(message)}
-                            disabled={isPending}
-                          >
-                            <Edit3 className="h-3.5 w-3.5" />
-                            Edit
-                          </button>
+                        <span>
+                          {message.isOwn
+                            ? (message.seenByOthers ? "Seen" : "Sent")
+                            : (message.isRead ? "Read" : "Unread")}
+                        </span>
+                        {editingMessageId !== message.id ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900"
+                              onClick={() => onCreateTaskFromMessage(message.id)}
+                              disabled={isPending}
+                            >
+                              <ListChecks className="h-3.5 w-3.5" />
+                              Create task
+                            </button>
+                            {message.isOwn ? (
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 text-cyan-700 hover:text-cyan-900"
+                                onClick={() => onStartEdit(message)}
+                                disabled={isPending}
+                              >
+                                <Edit3 className="h-3.5 w-3.5" />
+                                Edit
+                              </button>
+                            ) : null}
+                          </div>
                         ) : null}
                       </div>
                     </div>
@@ -870,6 +1048,9 @@ export function LabsChatClient({
 
       {errorMessage ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</div>
+      ) : null}
+      {successMessage ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{successMessage}</div>
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
@@ -1029,17 +1210,34 @@ export function LabsChatClient({
                           <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{message.body}</p>
                         )}
                         <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                          <span>{message.isRead ? "Read" : "Unread"}</span>
-                          {message.isOwn && editingMessageId !== message.id ? (
-                            <button
-                              type="button"
-                              className="inline-flex items-center gap-1 text-cyan-700 hover:text-cyan-900"
-                              onClick={() => onStartEdit(message)}
-                              disabled={isPending}
-                            >
-                              <Edit3 className="h-3.5 w-3.5" />
-                              Edit
-                            </button>
+                          <span>
+                            {message.isOwn
+                              ? (message.seenByOthers ? "Seen" : "Sent")
+                              : (message.isRead ? "Read" : "Unread")}
+                          </span>
+                          {editingMessageId !== message.id ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900"
+                                onClick={() => onCreateTaskFromMessage(message.id)}
+                                disabled={isPending}
+                              >
+                                <ListChecks className="h-3.5 w-3.5" />
+                                Create task
+                              </button>
+                              {message.isOwn ? (
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center gap-1 text-cyan-700 hover:text-cyan-900"
+                                  onClick={() => onStartEdit(message)}
+                                  disabled={isPending}
+                                >
+                                  <Edit3 className="h-3.5 w-3.5" />
+                                  Edit
+                                </button>
+                              ) : null}
+                            </div>
                           ) : null}
                         </div>
                       </div>
