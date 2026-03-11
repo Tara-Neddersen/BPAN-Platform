@@ -456,8 +456,9 @@ export async function deliverChatMessageNotifications({
       await sendWebPushToUser(admin, recipientId, {
         title: `${senderName} sent a message`,
         body: `${threadLabel}: ${messageSnippet}`,
-        url: "/labs/chat",
+        url: `/labs/chat?thread_id=${encodeURIComponent(thread.id)}`,
         tag: `chat-${channel}-${messageId}`,
+        threadId: thread.id,
         urgency: "high",
         ttlSeconds: 60,
       });

@@ -20,6 +20,7 @@ import {
   updateLabMemberDisplayName,
   updateLabMemberRole,
   updateLabPolicies,
+  setLabOutlookSyncOwner,
 } from "@/app/(protected)/labs/actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1687,6 +1688,41 @@ export function LabsClient({
                     </select>
                   </label>
 
+                  <div className="lg:col-span-2 rounded-2xl border border-slate-200/80 bg-white px-4 py-3 text-sm text-slate-700">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-slate-900">Equipment Outlook sync account</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Use one stable connected Outlook account for all equipment calendars in this lab.
+                        </p>
+                      </div>
+                      <form
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          runAction(
+                            `outlook-sync-owner-${workspace.membership.lab.id}`,
+                            setLabOutlookSyncOwner,
+                            new FormData(event.currentTarget),
+                            "Lab Outlook sync account updated.",
+                          );
+                        }}
+                      >
+                        <input type="hidden" name="lab_id" value={workspace.membership.lab.id} />
+                        <input type="hidden" name="active_lab_id" value={workspace.membership.lab.id} />
+                        <Button
+                          type="submit"
+                          variant="outline"
+                          disabled={!canManageMembers || featureUnavailable || requiresActiveLab || busyKey === `outlook-sync-owner-${workspace.membership.lab.id}`}
+                        >
+                          {busyKey === `outlook-sync-owner-${workspace.membership.lab.id}` ? "Saving..." : "Use my connected Outlook"}
+                        </Button>
+                      </form>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Current mode: one connected Outlook account routes bookings into each equipment calendar by its calendar ID.
+                    </p>
+                  </div>
+
                   <div className="lg:col-span-2 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
                     <div className="flex items-center gap-1.5">
                       <p>{canManagePolicies ? "Policy access: edit" : "Policy access: view only"}</p>
@@ -1782,7 +1818,7 @@ export function LabsClient({
                                 ...current,
                                 [workspace.membership.lab.id]: {
                                   tone: "error",
-                                  message: "No BPAN account matches that email address.",
+                                  message: "No LabLynk account matches that email address.",
                                 },
                               }));
                             } else {
@@ -1956,7 +1992,7 @@ export function LabsClient({
                                       ...current,
                                       [workspace.membership.lab.id]: {
                                         tone: "error",
-                                        message: "No BPAN account matches that email address.",
+                                        message: "No LabLynk account matches that email address.",
                                       },
                                     }));
                                   }

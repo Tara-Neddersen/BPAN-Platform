@@ -6,6 +6,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   isMissingLabRelationError,
 } from "@/lib/labs";
+import {
+  deleteEquipmentBookingFromOutlook,
+  syncEquipmentBookingToOutlook,
+} from "@/lib/outlook-equipment-calendar";
 import type {
   PlatformBookingStatus,
   PlatformInventoryEventType,
@@ -29,6 +33,9 @@ type ActionResult = {
     description: string | null;
     location: string | null;
     booking_requires_approval: boolean;
+    outlook_calendar_id: string | null;
+    outlook_calendar_name: string | null;
+    outlook_sync_owner_user_id: string | null;
     is_active: boolean;
   };
   booking?: {
@@ -167,8 +174,37 @@ async function ensureManagerOrAdmin(
   return null;
 }
 
+async function ensureActiveLabMember(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  labId: string,
+  userId: string,
+): Promise<ActionResult | null> {
+  const role = await getLabMemberRole(supabase, labId, userId);
+  if (!role) {
+    return { error: "You need active lab access to perform this action." };
+  }
+  return null;
+}
+
 async function refreshOperationsPage() {
   revalidatePath("/operations");
+}
+
+function toEquipmentResult(
+  equipment: Record<string, unknown> | null | undefined,
+): ActionResult["equipment"] | undefined {
+  if (!equipment) return undefined;
+  return {
+    id: equipment.id as string,
+    name: equipment.name as string,
+    description: equipment.description as string | null,
+    location: equipment.location as string | null,
+    booking_requires_approval: equipment.booking_requires_approval as boolean,
+    outlook_calendar_id: equipment.outlook_calendar_id as string | null,
+    outlook_calendar_name: equipment.outlook_calendar_name as string | null,
+    outlook_sync_owner_user_id: equipment.outlook_sync_owner_user_id as string | null,
+    is_active: equipment.is_active as boolean,
+  };
 }
 
 function quartzyHeaders(token: string) {
@@ -374,7 +410,7 @@ export async function deleteLabReagent(formData: FormData): Promise<ActionResult
       return { error: "Switch to the matching active lab before deleting this reagent." };
     }
 
-    const roleCheck = await ensureManagerOrAdmin(supabase, activeLabId!, userId);
+    const roleCheck = await ensureActiveLabMember(supabase, activeLabId!, userId);
     if (roleCheck) return roleCheck;
 
     const { error } = await supabase.from("lab_reagents").delete().eq("id", reagentId);
@@ -597,6 +633,15 @@ export async function createEquipmentBooking(formData: FormData): Promise<Action
       );
     }
 
+    if (booking?.id) {
+      try {
+        await syncEquipmentBookingToOutlook(booking.id as string, { admin: createAdminClient() });
+      } catch (syncError) {
+        await supabase.from("lab_equipment_bookings").delete().eq("id", booking.id as string);
+        throw syncError;
+      }
+    }
+
     await refreshOperationsPage();
     return {
       success: true,
@@ -642,6 +687,9 @@ export async function createLabEquipment(formData: FormData): Promise<ActionResu
     const roleCheck = await ensureManagerOrAdmin(supabase, activeLabId!, userId);
     if (roleCheck) return roleCheck;
 
+    const outlookCalendarId = normalizeOptionalString(formData.get("outlook_calendar_id"));
+    const outlookCalendarName = normalizeOptionalString(formData.get("outlook_calendar_name"));
+
     const { data: equipment, error } = await supabase
       .from("lab_equipment")
       .insert({
@@ -650,10 +698,12 @@ export async function createLabEquipment(formData: FormData): Promise<ActionResu
         description: normalizeOptionalString(formData.get("description")),
         location: normalizeOptionalString(formData.get("location")),
         booking_requires_approval: parseBooleanInput(formData.get("booking_requires_approval")),
+        outlook_calendar_id: outlookCalendarId,
+        outlook_calendar_name: outlookCalendarId ? (outlookCalendarName ?? name) : null,
         is_active: true,
         created_by: userId,
       })
-      .select("id,name,description,location,booking_requires_approval,is_active")
+      .select("id,name,description,location,booking_requires_approval,outlook_calendar_id,outlook_calendar_name,outlook_sync_owner_user_id,is_active")
       .single();
 
     if (error) {
@@ -667,16 +717,7 @@ export async function createLabEquipment(formData: FormData): Promise<ActionResu
     await refreshOperationsPage();
     return {
       success: true,
-      equipment: equipment
-        ? {
-            id: equipment.id as string,
-            name: equipment.name as string,
-            description: equipment.description as string | null,
-            location: equipment.location as string | null,
-            booking_requires_approval: equipment.booking_requires_approval as boolean,
-            is_active: equipment.is_active as boolean,
-          }
-        : undefined,
+      equipment: toEquipmentResult(equipment),
     };
   } catch (error) {
     return {
@@ -713,6 +754,9 @@ export async function updateLabEquipment(formData: FormData): Promise<ActionResu
     const roleCheck = await ensureManagerOrAdmin(supabase, activeLabId!, userId);
     if (roleCheck) return roleCheck;
 
+    const outlookCalendarId = normalizeOptionalString(formData.get("outlook_calendar_id"));
+    const outlookCalendarName = normalizeOptionalString(formData.get("outlook_calendar_name"));
+
     const { data: equipment, error } = await supabase
       .from("lab_equipment")
       .update({
@@ -720,9 +764,11 @@ export async function updateLabEquipment(formData: FormData): Promise<ActionResu
         description: normalizeOptionalString(formData.get("description")),
         location: normalizeOptionalString(formData.get("location")),
         booking_requires_approval: parseBooleanInput(formData.get("booking_requires_approval")),
+        outlook_calendar_id: outlookCalendarId,
+        outlook_calendar_name: outlookCalendarId ? (outlookCalendarName ?? name) : null,
       })
       .eq("id", equipmentId)
-      .select("id,name,description,location,booking_requires_approval,is_active")
+      .select("id,name,description,location,booking_requires_approval,outlook_calendar_id,outlook_calendar_name,outlook_sync_owner_user_id,is_active")
       .single();
 
     if (error) {
@@ -732,16 +778,7 @@ export async function updateLabEquipment(formData: FormData): Promise<ActionResu
     await refreshOperationsPage();
     return {
       success: true,
-      equipment: equipment
-        ? {
-            id: equipment.id as string,
-            name: equipment.name as string,
-            description: equipment.description as string | null,
-            location: equipment.location as string | null,
-            booking_requires_approval: equipment.booking_requires_approval as boolean,
-            is_active: equipment.is_active as boolean,
-          }
-        : undefined,
+      equipment: toEquipmentResult(equipment),
     };
   } catch (error) {
     return {
@@ -781,7 +818,7 @@ export async function setLabEquipmentActive(formData: FormData): Promise<ActionR
       .from("lab_equipment")
       .update({ is_active: isActive })
       .eq("id", equipmentId)
-      .select("id,name,description,location,booking_requires_approval,is_active")
+      .select("id,name,description,location,booking_requires_approval,outlook_calendar_id,outlook_calendar_name,outlook_sync_owner_user_id,is_active")
       .single();
 
     if (error) {
@@ -791,16 +828,7 @@ export async function setLabEquipmentActive(formData: FormData): Promise<ActionR
     await refreshOperationsPage();
     return {
       success: true,
-      equipment: equipment
-        ? {
-            id: equipment.id as string,
-            name: equipment.name as string,
-            description: equipment.description as string | null,
-            location: equipment.location as string | null,
-            booking_requires_approval: equipment.booking_requires_approval as boolean,
-            is_active: equipment.is_active as boolean,
-          }
-        : undefined,
+      equipment: toEquipmentResult(equipment),
     };
   } catch (error) {
     return {
@@ -834,6 +862,19 @@ export async function deleteLabEquipment(formData: FormData): Promise<ActionResu
 
     const roleCheck = await ensureManagerOrAdmin(supabase, activeLabId!, userId);
     if (roleCheck) return roleCheck;
+
+    const { data: bookingsToDelete, error: bookingLookupError } = await supabase
+      .from("lab_equipment_bookings")
+      .select("id")
+      .eq("equipment_id", equipmentId);
+    if (bookingLookupError) {
+      throw new Error(bookingLookupError.message || "Unable to load equipment bookings before deletion.");
+    }
+
+    const admin = createAdminClient();
+    for (const booking of bookingsToDelete ?? []) {
+      await deleteEquipmentBookingFromOutlook(String(booking.id), { admin });
+    }
 
     const { error } = await supabase.from("lab_equipment").delete().eq("id", equipmentId);
     if (error) {
@@ -874,7 +915,7 @@ export async function updateEquipmentBookingStatus(
 
     const { data: bookingRecord, error: bookingLookupError } = await supabase
       .from("lab_equipment_bookings")
-      .select("id,equipment_id,booked_by")
+      .select("id,equipment_id,booked_by,status")
       .eq("id", bookingId)
       .maybeSingle();
 
@@ -912,6 +953,8 @@ export async function updateEquipmentBookingStatus(
       return { error: "Only lab managers or admins can approve this booking." };
     }
 
+    const admin = createAdminClient();
+    const previousStatus = bookingRecord.status as PlatformBookingStatus;
     const { data: booking, error } = await supabase
       .from("lab_equipment_bookings")
       .update({ status })
@@ -925,6 +968,22 @@ export async function updateEquipmentBookingStatus(
           ? withOperationsSchemaGuidance(error.message)
           : error.message || "Unable to update the booking.",
       );
+    }
+
+    if (booking?.id) {
+      try {
+        if (status === "cancelled") {
+          await deleteEquipmentBookingFromOutlook(booking.id as string, { admin });
+        } else {
+          await syncEquipmentBookingToOutlook(booking.id as string, { admin });
+        }
+      } catch (syncError) {
+        await supabase
+          .from("lab_equipment_bookings")
+          .update({ status: previousStatus })
+          .eq("id", booking.id as string);
+        throw syncError;
+      }
     }
 
     await refreshOperationsPage();
@@ -996,7 +1055,7 @@ export async function updateEquipmentBooking(formData: FormData): Promise<Action
 
     const { data: bookingRecord, error: bookingLookupError } = await supabase
       .from("lab_equipment_bookings")
-      .select("id,equipment_id,booked_by,status")
+      .select("id,equipment_id,booked_by,status,title,notes,task_id,starts_at,ends_at")
       .eq("id", bookingId)
       .maybeSingle();
 
@@ -1059,7 +1118,16 @@ export async function updateEquipmentBooking(formData: FormData): Promise<Action
       return { error: "That time window overlaps an existing active booking." };
     }
 
-    const nextStatus = status ?? bookingRecord.status;
+    const nextStatus = status ?? (bookingRecord.status as PlatformBookingStatus);
+    const previousBookingValues = {
+      equipment_id: bookingRecord.equipment_id as string,
+      title: bookingRecord.title as string,
+      notes: bookingRecord.notes as string | null,
+      task_id: bookingRecord.task_id as string | null,
+      starts_at: bookingRecord.starts_at as string,
+      ends_at: bookingRecord.ends_at as string,
+      status: bookingRecord.status as PlatformBookingStatus,
+    };
     const { data: booking, error } = await supabase
       .from("lab_equipment_bookings")
       .update({
@@ -1081,6 +1149,18 @@ export async function updateEquipmentBooking(formData: FormData): Promise<Action
           ? withOperationsSchemaGuidance(error.message)
           : error.message || "Unable to update the booking.",
       );
+    }
+
+    if (booking?.id) {
+      try {
+        await syncEquipmentBookingToOutlook(booking.id as string, { admin: createAdminClient() });
+      } catch (syncError) {
+        await supabase
+          .from("lab_equipment_bookings")
+          .update(previousBookingValues)
+          .eq("id", booking.id as string);
+        throw syncError;
+      }
     }
 
     await refreshOperationsPage();
@@ -1150,6 +1230,12 @@ export async function deleteEquipmentBooking(formData: FormData): Promise<Action
     const isOwner = bookingRecord.booked_by === userId;
     if (!isOwner && !isManagerOrAdmin) {
       return { error: "Only booking owners, lab managers, or admins can delete this booking." };
+    }
+
+    try {
+      await deleteEquipmentBookingFromOutlook(bookingId, { admin: createAdminClient() });
+    } catch (syncError) {
+      throw syncError;
     }
 
     const { error } = await supabase.from("lab_equipment_bookings").delete().eq("id", bookingId);

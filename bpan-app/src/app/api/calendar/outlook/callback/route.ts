@@ -1,9 +1,11 @@
+import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
   exchangeOutlookCalendarCode,
   getOutlookCalendarEmail,
 } from "@/lib/outlook-calendar";
+import { ACTIVE_LAB_COOKIE } from "@/lib/active-lab-context";
 
 export async function GET(req: NextRequest) {
   const redirectToExperiments = (params: Record<string, string>) => {
@@ -69,6 +71,26 @@ export async function GET(req: NextRequest) {
         msg: "Outlook connection could not be saved. Please try again.",
       });
     }
+
+    const cookieStore = await cookies();
+    const activeLabId = cookieStore.get(ACTIVE_LAB_COOKIE)?.value?.trim() ?? "";
+    if (activeLabId) {
+      const { data: membership } = await supabase
+        .from("lab_members")
+        .select("lab_id")
+        .eq("lab_id", activeLabId)
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (membership) {
+        await supabase
+          .from("labs")
+          .update({ outlook_sync_owner_user_id: user.id })
+          .eq("id", activeLabId);
+      }
+    }
+
     return redirectToExperiments({
       calendar: "connected",
       provider: "outlook",

@@ -64,6 +64,9 @@ type ActionResult = {
     description: string | null;
     location: string | null;
     booking_requires_approval: boolean;
+    outlook_calendar_id: string | null;
+    outlook_calendar_name: string | null;
+    outlook_sync_owner_user_id: string | null;
     is_active: boolean;
   };
   booking?: {
@@ -117,6 +120,9 @@ type EquipmentOption = {
   description: string | null;
   location: string | null;
   bookingRequiresApproval: boolean;
+  outlookCalendarId: string | null;
+  outlookCalendarName: string | null;
+  outlookSyncOwnerUserId: string | null;
   isActive: boolean;
   linkedTaskIds: string[];
   messages: MessageView[];
@@ -763,6 +769,7 @@ export function LabOperationsClient({
   const [reorderVendorInput, setReorderVendorInput] = useState("");
   const [reorderPoInput, setReorderPoInput] = useState("");
   const [reorderEtaInput, setReorderEtaInput] = useState("");
+  const [inventoryDetailOpen, setInventoryDetailOpen] = useState(false);
   const activeSurfaceTab = embedded ? initialTab : surfaceTab;
   const reagentDetailRef = useRef<HTMLDivElement | null>(null);
   const handoffSlideClass = handoffSlideDirection === "back" ? "ops-slide-card-back" : "ops-slide-card-forward";
@@ -771,10 +778,19 @@ export function LabOperationsClient({
   const isInventoryAddMode = reagentSubtabMode === "add";
   const isInventoryChatMode = reagentSubtabMode === "chat";
   const showInventoryListCard = reagentSubtabMode === "default" || isInventorySearchMode;
-  const showInventoryDetailCard = reagentSubtabMode === "default";
+  const showInventoryDetailCard = reagentSubtabMode === "default" || isInventorySearchMode;
   const showInventoryChatCard = isInventoryChatMode;
   const showInventoryAddCard = isInventoryAddMode || reagentSubtabMode === "default" || (isInventorySearchMode && showAddReagentCard);
   const showInventoryRightRail = showInventoryDetailCard || showInventoryChatCard;
+  const shouldUseSlidingInventoryDetail = embedded && showInventoryDetailCard && !showInventoryChatCard;
+  const showInlineInventoryRightRail = showInventoryRightRail && !shouldUseSlidingInventoryDetail;
+
+  function selectInventory(itemId: string, openDetailPanel = false) {
+    setSelectedInventoryId(itemId);
+    if (shouldUseSlidingInventoryDetail && openDetailPanel) {
+      setInventoryDetailOpen(true);
+    }
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -815,7 +831,7 @@ export function LabOperationsClient({
   useEffect(() => {
     if (!initialSelectedInventoryId) return;
     if (!localInventory.some((item) => item.id === initialSelectedInventoryId)) return;
-    setSelectedInventoryId(initialSelectedInventoryId);
+    selectInventory(initialSelectedInventoryId);
     setInventoryTab("all");
   }, [initialSelectedInventoryId, localInventory]);
 
@@ -961,6 +977,12 @@ export function LabOperationsClient({
     () => localInventory.find((item) => item.id === selectedInventoryId) ?? localInventory[0] ?? null,
     [localInventory, selectedInventoryId],
   );
+  useEffect(() => {
+    if (!shouldUseSlidingInventoryDetail) return;
+    if (!inventoryDetailOpen) return;
+    if (selectedInventory) return;
+    setInventoryDetailOpen(false);
+  }, [inventoryDetailOpen, selectedInventory, shouldUseSlidingInventoryDetail]);
   const scopedBookings = useMemo(
     () => (equipmentTab === "all" ? localBookings : localBookings.filter((item) => item.equipmentId === equipmentTab)),
     [equipmentTab, localBookings],
@@ -1788,6 +1810,8 @@ export function LabOperationsClient({
     const optimisticName = String(formData.get("name") ?? "").trim() || "New equipment";
     const optimisticLocation = String(formData.get("location") ?? "").trim() || null;
     const optimisticRequiresApproval = String(formData.get("booking_requires_approval") ?? "").trim() === "true";
+    const optimisticOutlookCalendarId = String(formData.get("outlook_calendar_id") ?? "").trim() || null;
+    const optimisticOutlookCalendarName = String(formData.get("outlook_calendar_name") ?? "").trim() || null;
     const previousEquipment = localEquipmentOptions;
 
     setLocalEquipmentOptions((current) =>
@@ -1799,6 +1823,9 @@ export function LabOperationsClient({
           description: null,
           location: optimisticLocation,
           bookingRequiresApproval: optimisticRequiresApproval,
+          outlookCalendarId: optimisticOutlookCalendarId,
+          outlookCalendarName: optimisticOutlookCalendarId ? (optimisticOutlookCalendarName ?? optimisticName) : null,
+          outlookSyncOwnerUserId: null,
           isActive: true,
           linkedTaskIds: [],
           messages: [],
@@ -1831,6 +1858,9 @@ export function LabOperationsClient({
             description: equipment.description,
             location: equipment.location,
             bookingRequiresApproval: equipment.booking_requires_approval,
+            outlookCalendarId: equipment.outlook_calendar_id,
+            outlookCalendarName: equipment.outlook_calendar_name,
+            outlookSyncOwnerUserId: equipment.outlook_sync_owner_user_id,
             isActive: equipment.is_active,
             linkedTaskIds: [],
             messages: [],
@@ -1860,6 +1890,8 @@ export function LabOperationsClient({
     const location = String(formData.get("location") ?? "").trim() || null;
     const description = String(formData.get("description") ?? "").trim() || null;
     const bookingRequiresApproval = String(formData.get("booking_requires_approval") ?? "").trim() === "true";
+    const outlookCalendarId = String(formData.get("outlook_calendar_id") ?? "").trim() || null;
+    const outlookCalendarName = String(formData.get("outlook_calendar_name") ?? "").trim() || null;
 
     setLocalEquipmentOptions((current) =>
       current.map((item) =>
@@ -1870,6 +1902,9 @@ export function LabOperationsClient({
               location,
               description,
               bookingRequiresApproval,
+              outlookCalendarId,
+              outlookCalendarName: outlookCalendarId ? (outlookCalendarName ?? name ?? item.name) : null,
+              outlookSyncOwnerUserId: item.outlookSyncOwnerUserId,
             }
           : item,
       ),
@@ -1896,6 +1931,9 @@ export function LabOperationsClient({
                     description: actionResult.equipment!.description,
                     location: actionResult.equipment!.location,
                     bookingRequiresApproval: actionResult.equipment!.booking_requires_approval,
+                    outlookCalendarId: actionResult.equipment!.outlook_calendar_id,
+                    outlookCalendarName: actionResult.equipment!.outlook_calendar_name,
+                    outlookSyncOwnerUserId: actionResult.equipment!.outlook_sync_owner_user_id,
                     isActive: actionResult.equipment!.is_active,
                   }
                 : item,
@@ -1952,6 +1990,9 @@ export function LabOperationsClient({
                     description: actionResult.equipment!.description,
                     location: actionResult.equipment!.location,
                     bookingRequiresApproval: actionResult.equipment!.booking_requires_approval,
+                    outlookCalendarId: actionResult.equipment!.outlook_calendar_id,
+                    outlookCalendarName: actionResult.equipment!.outlook_calendar_name,
+                    outlookSyncOwnerUserId: actionResult.equipment!.outlook_sync_owner_user_id,
                     isActive: actionResult.equipment!.is_active,
                   }
                 : item,
@@ -2410,7 +2451,7 @@ export function LabOperationsClient({
     (item) => item.status === "confirmed" || item.status === "in_use",
   ).length;
   const canManageEquipment = labContext.role === "manager" || labContext.role === "admin";
-  const canDeleteReagent = labContext.role === "manager" || labContext.role === "admin";
+  const canDeleteReagent = Boolean(labContext.role);
   const approverNamesText = approverLabels.length > 0
     ? approverLabels.join(", ")
     : "Lab managers and admins";
@@ -3270,11 +3311,11 @@ export function LabOperationsClient({
                           key={item.id}
                           role="button"
                           tabIndex={0}
-                          onClick={() => setSelectedInventoryId(item.id)}
+                          onClick={() => selectInventory(item.id, true)}
                           onKeyDown={(event) => {
                             if (event.key !== "Enter" && event.key !== " ") return;
                             event.preventDefault();
-                            setSelectedInventoryId(item.id);
+                            selectInventory(item.id, true);
                           }}
                           className={cn(
                             "w-full rounded-xl border px-3 py-3 text-left transition-colors",
@@ -3292,7 +3333,7 @@ export function LabOperationsClient({
                                 checked={selectedReagentIds.includes(item.id)}
                                 onChange={(event) => {
                                   const checked = event.target.checked;
-                                  setSelectedInventoryId(item.id);
+                                  selectInventory(item.id);
                                   setSelectedReagentIds((current) => {
                                     if (checked) return [...new Set([...current, item.id])];
                                     return current.filter((id) => id !== item.id);
@@ -3321,8 +3362,15 @@ export function LabOperationsClient({
                           </div>
 
                           {embedded ? (
-                            <details className="mt-2 rounded-lg border border-slate-200 bg-white/90 p-2">
-                              <summary className="cursor-pointer text-xs font-medium text-slate-700">
+                            <details
+                              className="mt-2 rounded-lg border border-slate-200 bg-white/90 p-2"
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              <summary
+                                className="cursor-pointer text-xs font-medium text-slate-700"
+                                onClick={(event) => event.stopPropagation()}
+                              >
                                 More
                               </summary>
                               <div className="mt-2 flex flex-wrap gap-2">
@@ -3499,7 +3547,15 @@ export function LabOperationsClient({
               ) : null}
             </div>
 
-            {showInventoryRightRail ? (
+            {shouldUseSlidingInventoryDetail && inventoryDetailOpen ? (
+              <button
+                type="button"
+                aria-label="Close reagent panel backdrop"
+                className="fixed inset-0 z-40 bg-slate-900/25"
+                onClick={() => setInventoryDetailOpen(false)}
+              />
+            ) : null}
+            {showInlineInventoryRightRail ? (
             <div className="min-w-0 space-y-4">
               {showInventoryDetailCard ? (
               <Card className={cn("bg-white/95", embedded ? "border-slate-200/70 shadow-none" : "border-white/80")}>
@@ -3639,7 +3695,7 @@ export function LabOperationsClient({
                         </div>
                       )}
                       {!canDeleteReagent ? (
-                        <p className="text-xs text-slate-500">Only lab managers or admins can delete reagents.</p>
+                        <p className="text-xs text-slate-500">Active lab membership is required to delete reagents.</p>
                       ) : null}
                       {reagentEditError ? (
                         <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
@@ -4064,6 +4120,246 @@ export function LabOperationsClient({
                 </Card>
               ) : null}
             </div>
+            ) : null}
+            {shouldUseSlidingInventoryDetail ? (
+              <div
+                className={cn(
+                  "fixed inset-y-0 right-0 z-50 w-[min(94vw,460px)] overflow-y-auto border-l border-slate-200 bg-white p-3 shadow-2xl transition-transform duration-200 ease-out",
+                  inventoryDetailOpen ? "translate-x-0" : "translate-x-full pointer-events-none",
+                )}
+              >
+                <div className="mb-2 flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="border-slate-200"
+                    onClick={() => setInventoryDetailOpen(false)}
+                  >
+                    Close
+                  </Button>
+                </div>
+                <div className="space-y-4">
+                  {showInventoryDetailCard ? (
+                    <Card className="border-slate-200/70 bg-white/95 shadow-none">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="text-base text-slate-900">
+                          {selectedInventory ? selectedInventory.name : "Select a reagent"}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        {!selectedInventory ? (
+                          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+                            Select a reagent to view details.
+                          </div>
+                        ) : (
+                          <div ref={reagentDetailRef} className="space-y-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="min-w-0 flex flex-wrap items-center gap-2">
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    "border",
+                                    stockTone(
+                                      selectedInventory,
+                                      localLatestInventoryEventByReagentId[selectedInventory.id],
+                                    ).badge,
+                                  )}
+                                >
+                                  {
+                                    stockTone(
+                                      selectedInventory,
+                                      localLatestInventoryEventByReagentId[selectedInventory.id],
+                                    ).label
+                                  }
+                                </Badge>
+                                <select
+                                  value={groupNameForReagent(selectedInventory.id)}
+                                  onChange={(event) =>
+                                    setReagentGroupById((current) => ({
+                                      ...current,
+                                      [selectedInventory.id]: event.target.value,
+                                    }))
+                                  }
+                                  className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
+                                >
+                                  <option value="Ungrouped">Ungrouped</option>
+                                  {reagentGroups.map((group) => (
+                                    <option key={group} value={group}>
+                                      {group}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="default"
+                                size="sm"
+                                className="w-full bg-slate-900 text-white hover:bg-slate-800 sm:w-auto"
+                                onClick={() => {
+                                  setIsEditingReagent((current) => !current);
+                                  setReagentEditError(null);
+                                }}
+                              >
+                                {isEditingReagent ? "Cancel edit" : "Edit reagent"}
+                              </Button>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 border-red-200 text-red-700 hover:bg-red-50"
+                                disabled={!canDeleteReagent || busy}
+                                onClick={() => void submitDeleteReagent()}
+                              >
+                                Delete
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 border-slate-200"
+                                onClick={() => downloadReagentQr(selectedInventory)}
+                              >
+                                Download QR
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 border-slate-200"
+                                onClick={() => printReagentQr(selectedInventory)}
+                              >
+                                Print QR
+                              </Button>
+                            </div>
+                            {!canDeleteReagent ? (
+                              <p className="text-xs text-slate-500">Active lab membership is required to delete reagents.</p>
+                            ) : null}
+                            {reagentEditError ? (
+                              <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                                {reagentEditError}
+                              </p>
+                            ) : null}
+                            {isEditingReagent ? (
+                              <form
+                                className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  void submitUpdateReagent();
+                                }}
+                              >
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                  <div>
+                                    <Label className="text-xs">Name</Label>
+                                    <Input
+                                      value={reagentEditDraft.name}
+                                      onChange={(event) =>
+                                        setReagentEditDraft((current) => ({ ...current, name: event.target.value }))
+                                      }
+                                      required
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs">Supplier</Label>
+                                    <Input
+                                      value={reagentEditDraft.supplier}
+                                      onChange={(event) =>
+                                        setReagentEditDraft((current) => ({ ...current, supplier: event.target.value }))
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                  <div>
+                                    <Label className="text-xs">Catalog number</Label>
+                                    <Input
+                                      value={reagentEditDraft.catalogNumber}
+                                      onChange={(event) =>
+                                        setReagentEditDraft((current) => ({ ...current, catalogNumber: event.target.value }))
+                                      }
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs">Lot number</Label>
+                                    <Input
+                                      value={reagentEditDraft.lotNumber}
+                                      onChange={(event) =>
+                                        setReagentEditDraft((current) => ({ ...current, lotNumber: event.target.value }))
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                                <div className="grid gap-3 sm:grid-cols-3">
+                                  <div>
+                                    <Label className="text-xs">Quantity</Label>
+                                    <Input
+                                      type="number"
+                                      step="0.01"
+                                      value={reagentEditDraft.quantity}
+                                      onChange={(event) =>
+                                        setReagentEditDraft((current) => ({ ...current, quantity: event.target.value }))
+                                      }
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs">Unit</Label>
+                                    <Input
+                                      value={reagentEditDraft.unit}
+                                      onChange={(event) =>
+                                        setReagentEditDraft((current) => ({ ...current, unit: event.target.value }))
+                                      }
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs">Reorder threshold</Label>
+                                    <Input
+                                      type="number"
+                                      step="0.01"
+                                      value={reagentEditDraft.reorderThreshold}
+                                      onChange={(event) =>
+                                        setReagentEditDraft((current) => ({ ...current, reorderThreshold: event.target.value }))
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                                <div>
+                                  <Label className="text-xs">Storage location</Label>
+                                  <Input
+                                    value={reagentEditDraft.storageLocation}
+                                    onChange={(event) =>
+                                      setReagentEditDraft((current) => ({ ...current, storageLocation: event.target.value }))
+                                    }
+                                  />
+                                </div>
+                                <div>
+                                  <Label className="text-xs">Notes</Label>
+                                  <Textarea
+                                    rows={2}
+                                    value={reagentEditDraft.notes}
+                                    onChange={(event) =>
+                                      setReagentEditDraft((current) => ({ ...current, notes: event.target.value }))
+                                    }
+                                  />
+                                </div>
+                                <div className="flex justify-end gap-2">
+                                  <Button type="button" variant="outline" className="border-slate-200" onClick={() => setIsEditingReagent(false)}>
+                                    Cancel
+                                  </Button>
+                                  <Button type="submit" disabled={busy} className="bg-slate-900 text-white hover:bg-slate-800">
+                                    Save reagent changes
+                                  </Button>
+                                </div>
+                              </form>
+                            ) : null}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ) : null}
+                </div>
+              </div>
             ) : null}
           </div>
         </TabsContent>
@@ -4497,6 +4793,24 @@ export function LabOperationsClient({
                     disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
                   />
                 </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label className="text-xs">Outlook calendar ID</Label>
+                    <Input
+                      name="outlook_calendar_id"
+                      placeholder="AAMkAG..."
+                      disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Outlook calendar label</Label>
+                    <Input
+                      name="outlook_calendar_name"
+                      placeholder="Confocal Microscope"
+                      disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                    />
+                  </div>
+                </div>
                 <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
                   <input
                     type="checkbox"
@@ -4557,18 +4871,36 @@ export function LabOperationsClient({
                         />
                       </div>
                     </div>
-                    <div>
-                      <Label className="text-xs">Description</Label>
-                      <Textarea
-                        name="description"
-                        rows={2}
-                        disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
-                      />
-                    </div>
-                    <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                      <input
-                        type="checkbox"
-                        name="booking_requires_approval"
+                <div>
+                  <Label className="text-xs">Description</Label>
+                  <Textarea
+                    name="description"
+                    rows={2}
+                    disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label className="text-xs">Outlook calendar ID</Label>
+                    <Input
+                      name="outlook_calendar_id"
+                      placeholder="AAMkAG..."
+                      disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Outlook calendar label</Label>
+                    <Input
+                      name="outlook_calendar_name"
+                      placeholder="Confocal Microscope"
+                      disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
+                    />
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    name="booking_requires_approval"
                         value="true"
                         disabled={busy || !labContext.labId || labContext.featureUnavailable || !canManageEquipment}
                       />
@@ -4608,7 +4940,7 @@ export function LabOperationsClient({
                           >
                             <p className="text-sm font-medium text-slate-900">{item.name}</p>
                             <p className="text-xs text-slate-500">
-                              {item.location ?? "No location"} · {item.isActive ? "Active" : "Inactive"}
+                              {item.location ?? "No location"} · {item.isActive ? "Active" : "Inactive"}{item.outlookCalendarId ? " · Outlook sync" : ""}
                             </p>
                           </button>
                           <div className="flex items-center gap-2">
@@ -4678,6 +5010,29 @@ export function LabOperationsClient({
                             disabled={!canManageEquipment || busy}
                           />
                         </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div>
+                            <Label className="text-xs">Outlook calendar ID</Label>
+                            <Input
+                              name="outlook_calendar_id"
+                              defaultValue={selectedEquipment.outlookCalendarId ?? ""}
+                              disabled={!canManageEquipment || busy}
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Outlook calendar label</Label>
+                            <Input
+                              name="outlook_calendar_name"
+                              defaultValue={selectedEquipment.outlookCalendarName ?? ""}
+                              disabled={!canManageEquipment || busy}
+                            />
+                          </div>
+                        </div>
+                        {selectedEquipment.outlookCalendarId ? (
+                          <p className="text-xs text-slate-500">
+                            Outlook sync uses the lab-level connected Outlook account and routes bookings into this specific equipment calendar ID.
+                          </p>
+                        ) : null}
                         <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
                           <input
                             type="checkbox"

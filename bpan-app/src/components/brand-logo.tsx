@@ -15,7 +15,7 @@ export function BrandLogo({
   className,
   imageClassName,
   fallbackClassName,
-  alt = "BPAN Platform logo",
+  alt = "LabLynk logo",
 }: BrandLogoProps) {
   const [failed, setFailed] = useState(false);
 
@@ -38,7 +38,7 @@ export function BrandLogo({
             fallbackClassName,
           )}
         >
-          B
+          L
         </div>
       )}
     </div>

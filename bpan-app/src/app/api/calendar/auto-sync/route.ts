@@ -14,6 +14,8 @@ import {
   getGoogleCalendarEventIdForFeedEvent,
   getWorkspaceCalendarFeedEvents,
 } from "@/lib/workspace-calendar-feed";
+import { syncLabEquipmentBookingsFromOutlook } from "@/lib/outlook-equipment-calendar";
+import { importIcloudCalendarFeedToWorkspace, type IcloudCalendarFeedRow } from "@/lib/icloud-calendar";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
 type GoogleTokenRow = {
@@ -30,6 +32,8 @@ type OutlookTokenRow = {
   refresh_token: string;
   expires_at: string;
 };
+
+type IcloudFeedRow = IcloudCalendarFeedRow;
 
 function parseGoogleEventWindow(ev: {
   start?: { date?: string; dateTime?: string };
@@ -329,7 +333,11 @@ export async function GET(req: Request) {
 
   const admin = createAdminClient();
 
-  const [{ data: googleRows, error: googleErr }, { data: outlookRows, error: outlookErr }] = await Promise.all([
+  const [
+    { data: googleRows, error: googleErr },
+    { data: outlookRows, error: outlookErr },
+    { data: icloudFeedRows, error: icloudErr },
+  ] = await Promise.all([
     admin
       .from("google_calendar_tokens")
       .select("user_id,access_token,refresh_token,expires_at,calendar_id")
@@ -338,11 +346,15 @@ export async function GET(req: Request) {
       .from("outlook_calendar_tokens")
       .select("user_id,access_token,refresh_token,expires_at")
       .limit(500),
+    admin
+      .from("icloud_calendar_feeds")
+      .select("id,user_id,label,feed_url,last_synced_at,last_error")
+      .limit(1000),
   ]);
 
-  if (googleErr || outlookErr) {
+  if (googleErr || outlookErr || icloudErr) {
     return NextResponse.json(
-      { error: googleErr?.message || outlookErr?.message || "Failed to load calendar tokens" },
+      { error: googleErr?.message || outlookErr?.message || icloudErr?.message || "Failed to load calendar integrations" },
       { status: 500 }
     );
   }
@@ -350,6 +362,8 @@ export async function GET(req: Request) {
   const report = {
     google: { users: 0, syncedOut: 0, imported: 0, updated: 0, failedUsers: 0, errors: [] as string[] },
     outlook: { users: 0, syncedOut: 0, imported: 0, updated: 0, failedUsers: 0, errors: [] as string[] },
+    icloud: { feeds: 0, imported: 0, updated: 0, failedFeeds: 0, errors: [] as string[] },
+    equipmentOutlook: { labs: 0, imported: 0, updated: 0, cancelled: 0, failedLabs: 0, errors: [] as string[] },
   };
 
   for (const row of (googleRows || []) as GoogleTokenRow[]) {
@@ -380,13 +394,73 @@ export async function GET(req: Request) {
     }
   }
 
+  for (const feed of (icloudFeedRows || []) as IcloudFeedRow[]) {
+    try {
+      const res = await importIcloudCalendarFeedToWorkspace(admin, feed.user_id, feed);
+      report.icloud.feeds++;
+      report.icloud.imported += res.imported;
+      report.icloud.updated += res.updated;
+      if (res.errors.length > 0) report.icloud.errors.push(...res.errors.slice(0, 2));
+      await admin
+        .from("icloud_calendar_feeds")
+        .update({
+          last_synced_at: new Date().toISOString(),
+          last_error: res.errors[0] || null,
+        })
+        .eq("id", feed.id);
+    } catch (e) {
+      report.icloud.failedFeeds++;
+      const message = e instanceof Error ? e.message : "icloud_feed_sync_failed";
+      report.icloud.errors.push(message);
+      await admin
+        .from("icloud_calendar_feeds")
+        .update({ last_error: message })
+        .eq("id", feed.id);
+    }
+  }
+
+  const { data: equipmentLabRows, error: equipmentLabsError } = await admin
+    .from("lab_equipment")
+    .select("lab_id")
+    .not("outlook_calendar_id", "is", null);
+
+  if (equipmentLabsError) {
+    return NextResponse.json(
+      { error: equipmentLabsError.message || "Failed to load equipment Outlook sync labs" },
+      { status: 500 }
+    );
+  }
+
+  const labIds = Array.from(
+    new Set(
+      (equipmentLabRows || [])
+        .map((row) => (typeof row.lab_id === "string" ? row.lab_id : null))
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+
+  for (const labId of labIds) {
+    try {
+      const res = await syncLabEquipmentBookingsFromOutlook(labId, { admin });
+      report.equipmentOutlook.labs++;
+      report.equipmentOutlook.imported += res.created;
+      report.equipmentOutlook.updated += res.updated;
+      report.equipmentOutlook.cancelled += res.cancelled;
+      if (res.errors.length > 0) report.equipmentOutlook.errors.push(...res.errors.slice(0, 2));
+    } catch (e) {
+      report.equipmentOutlook.failedLabs++;
+      report.equipmentOutlook.errors.push(e instanceof Error ? e.message : "equipment_outlook_lab_sync_failed");
+    }
+  }
+
   return NextResponse.json({
     success: true,
     ranAt: new Date().toISOString(),
     report: {
       google: { ...report.google, errors: report.google.errors.slice(0, 20) },
       outlook: { ...report.outlook, errors: report.outlook.errors.slice(0, 20) },
+      icloud: { ...report.icloud, errors: report.icloud.errors.slice(0, 20) },
+      equipmentOutlook: { ...report.equipmentOutlook, errors: report.equipmentOutlook.errors.slice(0, 20) },
     },
   });
 }
-

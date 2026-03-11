@@ -223,6 +223,51 @@ export async function updateLabPolicies(formData: FormData) {
   revalidatePath("/experiments");
 }
 
+export async function setLabOutlookSyncOwner(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error("Unauthorized");
+  }
+
+  const labId = normalizeOptionalString(formData.get("lab_id"));
+  if (!labId) {
+    throw new Error("Lab id is required.");
+  }
+  assertActiveLabContext(formData, labId);
+
+  const role = await getCurrentMembershipRole(labId, user.id);
+  if (role !== "admin" && role !== "manager") {
+    throw new Error("Only lab managers or admins can set the Outlook sync account.");
+  }
+
+  const { data: tokenRow, error: tokenError } = await supabase
+    .from("outlook_calendar_tokens")
+    .select("user_id")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (tokenError) {
+    throw new Error(tokenError.message || "Unable to validate the connected Outlook account.");
+  }
+  if (!tokenRow) {
+    throw new Error("Connect your Outlook account before assigning it to this lab.");
+  }
+
+  const { error } = await supabase
+    .from("labs")
+    .update({ outlook_sync_owner_user_id: user.id })
+    .eq("id", labId);
+  if (error) {
+    throw new Error(withLabSchemaGuidance(error.message));
+  }
+
+  revalidatePath("/labs");
+  revalidatePath("/experiments");
+}
+
 export async function addLabMemberByEmail(formData: FormData) {
   const supabase = await createClient();
   const {
@@ -444,8 +489,21 @@ type IncomingMeetingActionItem = {
   status?: "open" | "completed";
   responsibleMemberId?: string | null;
   responsibleLabel?: string | null;
+  responsibleMemberIds?: string[] | null;
+  responsibleLabels?: string[] | null;
   source?: "manual" | "ai";
 };
+
+function parseJsonStringArray(value: string | null | undefined) {
+  if (!value) return [] as string[];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [] as string[];
+    return [...new Set(parsed.map((item) => String(item || "").trim()).filter(Boolean))];
+  } catch {
+    return [] as string[];
+  }
+}
 
 async function assertMeetingBelongsToLab(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -620,8 +678,18 @@ export async function createLabMeetingActionItems(formData: FormData) {
       details: item.details ? String(item.details).trim() : null,
       category: item.category === "inspection" ? "inspection" as const : "general" as const,
       status: item.status === "completed" ? "completed" as const : "open" as const,
-      responsibleMemberId: item.responsibleMemberId ? String(item.responsibleMemberId).trim() : null,
-      responsibleLabel: item.responsibleLabel ? String(item.responsibleLabel).trim() : null,
+      responsibleMemberIds: [
+        ...(Array.isArray(item.responsibleMemberIds) ? item.responsibleMemberIds : []),
+        ...(item.responsibleMemberId ? [item.responsibleMemberId] : []),
+      ]
+        .map((id) => String(id || "").trim())
+        .filter(Boolean),
+      responsibleLabels: [
+        ...(Array.isArray(item.responsibleLabels) ? item.responsibleLabels : []),
+        ...(item.responsibleLabel ? [item.responsibleLabel] : []),
+      ]
+        .map((label) => String(label || "").trim())
+        .filter(Boolean),
       source: item.source === "ai" ? "ai" as const : "manual" as const,
     }))
     .filter((item) => item.text.length > 0);
@@ -630,25 +698,31 @@ export async function createLabMeetingActionItems(formData: FormData) {
   await assertResponsibleMembersInLab(
     supabase,
     labId,
-    items.map((item) => item.responsibleMemberId).filter((id): id is string => Boolean(id)),
+    items.flatMap((item) => item.responsibleMemberIds),
   );
 
-  const payload = items.map((item) => ({
-    lab_meeting_id: meetingId,
-    text: item.text,
-    details: item.details,
-    category: item.category,
-    status: item.status,
-    responsible_member_id: item.responsibleMemberId,
-    responsible_label: item.responsibleLabel,
-    source: item.source,
-    created_by: user.id,
-  }));
+  const payload = items.map((item) => {
+    const firstResponsibleMemberId = item.responsibleMemberIds[0] ?? null;
+    const firstResponsibleLabel = item.responsibleLabels[0] ?? null;
+    return {
+      lab_meeting_id: meetingId,
+      text: item.text,
+      details: item.details,
+      category: item.category,
+      status: item.status,
+      responsible_member_id: firstResponsibleMemberId,
+      responsible_label: firstResponsibleLabel,
+      responsible_member_ids: item.responsibleMemberIds,
+      responsible_labels: item.responsibleLabels,
+      source: item.source,
+      created_by: user.id,
+    };
+  });
 
   const { data, error } = await supabase
     .from("lab_meeting_action_items")
     .insert(payload)
-    .select("id,lab_meeting_id,text,details,category,status,responsible_member_id,responsible_label,source,created_at,updated_at");
+    .select("id,lab_meeting_id,text,details,category,status,responsible_member_id,responsible_label,responsible_member_ids,responsible_labels,source,created_at,updated_at");
 
   if (error) throw new Error(error.message || "Failed to save action items.");
   revalidatePath("/labs");
@@ -677,23 +751,40 @@ export async function updateLabMeetingActionItem(formData: FormData) {
   if (!existing?.id || !existing.lab_meeting_id) throw new Error("Action item not found.");
   await assertMeetingBelongsToLab(supabase, String(existing.lab_meeting_id), labId);
 
-  const responsibleMemberId = normalizeOptionalString(formData.get("responsible_member_id"));
-  await assertResponsibleMembersInLab(supabase, labId, responsibleMemberId ? [responsibleMemberId] : []);
+  const responsibleMemberIds = [
+    ...parseJsonStringArray(normalizeOptionalString(formData.get("responsible_member_ids"))),
+    ...(() => {
+      const fallback = normalizeOptionalString(formData.get("responsible_member_id"));
+      return fallback ? [fallback] : [];
+    })(),
+  ];
+  const uniqueResponsibleMemberIds = [...new Set(responsibleMemberIds)];
+  const responsibleLabels = [
+    ...parseJsonStringArray(normalizeOptionalString(formData.get("responsible_labels"))),
+    ...(() => {
+      const fallback = normalizeOptionalString(formData.get("responsible_label"));
+      return fallback ? [fallback] : [];
+    })(),
+  ];
+  const uniqueResponsibleLabels = [...new Set(responsibleLabels)];
+  await assertResponsibleMembersInLab(supabase, labId, uniqueResponsibleMemberIds);
 
   const updatePayload = {
     text: normalizeRequiredString(formData.get("text"), "Action item text is required."),
     details: normalizeOptionalString(formData.get("details")),
     category: parseMeetingCategory(formData.get("category")),
     status: parseMeetingStatus(formData.get("status")),
-    responsible_member_id: responsibleMemberId,
-    responsible_label: normalizeOptionalString(formData.get("responsible_label")),
+    responsible_member_id: uniqueResponsibleMemberIds[0] ?? null,
+    responsible_label: uniqueResponsibleLabels[0] ?? null,
+    responsible_member_ids: uniqueResponsibleMemberIds,
+    responsible_labels: uniqueResponsibleLabels,
   };
 
   const { data, error } = await supabase
     .from("lab_meeting_action_items")
     .update(updatePayload)
     .eq("id", actionItemId)
-    .select("id,lab_meeting_id,text,details,category,status,responsible_member_id,responsible_label,source,created_at,updated_at")
+    .select("id,lab_meeting_id,text,details,category,status,responsible_member_id,responsible_label,responsible_member_ids,responsible_labels,source,created_at,updated_at")
     .single();
 
   if (error) throw new Error(error.message || "Failed to update action item.");

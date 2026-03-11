@@ -19,9 +19,9 @@ export async function POST() {
       }
     })();
 
-    const uniqueTestTag = `bpan-push-test-${Date.now()}`;
+    const uniqueTestTag = `lablynk-push-test-${Date.now()}`;
     const summary = await sendWebPushToUser(deliveryClient, user.id, {
-      title: "BPAN test notification",
+      title: "LabLynk test notification",
       body: "Push notifications are enabled on this device.",
       url: "/notifications",
       tag: uniqueTestTag,

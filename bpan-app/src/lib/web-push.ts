@@ -8,6 +8,7 @@ type PushPayload = {
   body: string;
   url?: string;
   tag?: string;
+  threadId?: string;
   urgency?: "very-low" | "low" | "normal" | "high";
   ttlSeconds?: number;
 };

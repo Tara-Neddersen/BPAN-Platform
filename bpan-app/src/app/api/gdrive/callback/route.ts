@@ -26,8 +26,8 @@ export async function GET(req: NextRequest) {
     // Get the Google email
     const googleEmail = await getGoogleEmail(tokens.access_token);
 
-    // Create root folder "BPAN Platform" on their Drive
-    const rootFolderId = await findOrCreateFolder(tokens.access_token, "BPAN Platform");
+    // Create root folder "LabLynk" on their Drive
+    const rootFolderId = await findOrCreateFolder(tokens.access_token, "LabLynk");
 
     // Store tokens in database
     const supabase = createServiceClient();
@@ -55,4 +55,3 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL("/colony?drive=error&msg=exchange_failed", req.url));
   }
 }
-

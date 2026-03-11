@@ -39,6 +39,8 @@ type LabMeetingActionItemRecord = {
   status: "open" | "completed";
   responsible_member_id: string | null;
   responsible_label: string | null;
+  responsible_member_ids: string[] | null;
+  responsible_labels: string[] | null;
   source: "manual" | "ai";
   created_at: string;
   updated_at: string;
@@ -54,8 +56,8 @@ type ExtractedActionDraft = {
   keep: boolean;
   text: string;
   category: "general" | "inspection";
-  responsibleMemberId: string | null;
-  responsibleLabel: string | null;
+  responsibleMemberIds: string[];
+  responsibleLabels: string[];
 };
 
 type LabMeetingsClientProps = {
@@ -231,6 +233,69 @@ function uniqueAttendees(raw: string) {
     .join(", ");
 }
 
+function actionItemAssigneeIds(item: LabMeetingActionItemRecord) {
+  const ids = item.responsible_member_ids || [];
+  if (ids.length > 0) return ids;
+  return item.responsible_member_id ? [item.responsible_member_id] : [];
+}
+
+function actionItemAssigneeLabels(item: LabMeetingActionItemRecord) {
+  const labels = item.responsible_labels || [];
+  if (labels.length > 0) return labels;
+  return item.responsible_label ? [item.responsible_label] : [];
+}
+
+function toggleMemberId(ids: string[], memberId: string) {
+  return ids.includes(memberId) ? ids.filter((id) => id !== memberId) : [...ids, memberId];
+}
+
+function labelsForMemberIds(memberOptions: MemberOption[], memberIds: string[]) {
+  return memberOptions.filter((option) => memberIds.includes(option.memberId)).map((option) => option.label);
+}
+
+type AssigneeSelectorProps = {
+  memberOptions: MemberOption[];
+  selectedIds: string[];
+  onChange: (nextIds: string[]) => void;
+  className?: string;
+};
+
+function AssigneeSelector({ memberOptions, selectedIds, onChange, className }: AssigneeSelectorProps) {
+  return (
+    <div className={`rounded-lg border border-slate-200 bg-white p-2 ${className || ""}`}>
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <p className="text-[11px] font-medium text-slate-600">Assign people</p>
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          className="text-[11px] text-slate-500 transition hover:text-slate-900"
+        >
+          Clear
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {memberOptions.map((member) => {
+          const selected = selectedIds.includes(member.memberId);
+          return (
+            <button
+              key={member.memberId}
+              type="button"
+              onClick={() => onChange(toggleMemberId(selectedIds, member.memberId))}
+              className={`rounded-full border px-2.5 py-1 text-xs transition ${
+                selected
+                  ? "border-blue-600 bg-blue-600 text-white"
+                  : "border-slate-300 bg-slate-50 text-slate-700 hover:border-slate-400 hover:bg-slate-100"
+              }`}
+            >
+              {member.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, actionItems: initialActionItems, memberOptions }: LabMeetingsClientProps) {
   const [isNarrowMobile, setIsNarrowMobile] = useState(false);
   const [mobileView, setMobileView] = useState<"meetings" | "detail">("meetings");
@@ -251,7 +316,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
   const [manualActionText, setManualActionText] = useState("");
   const [manualActionDetails, setManualActionDetails] = useState("");
   const [manualActionCategory, setManualActionCategory] = useState<"general" | "inspection">("general");
-  const [manualActionAssigneeMemberId, setManualActionAssigneeMemberId] = useState("");
+  const [manualActionAssigneeMemberIds, setManualActionAssigneeMemberIds] = useState<string[]>([]);
   const [extractDraft, setExtractDraft] = useState<ExtractedActionDraft[]>([]);
   const insertedDictationPrefixRef = useRef(false);
 
@@ -309,7 +374,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
       .filter((item) => (categoryFilter === "all" ? true : item.category === categoryFilter))
       .filter((item) => {
         if (!search.trim()) return true;
-        const haystack = `${item.text} ${item.details || ""} ${item.responsible_label || ""} ${item.meetingTitle}`.toLowerCase();
+        const haystack = `${item.text} ${item.details || ""} ${actionItemAssigneeLabels(item).join(" ")} ${item.meetingTitle}`.toLowerCase();
         return haystack.includes(search.trim().toLowerCase());
       })
       .sort((a, b) => {
@@ -317,6 +382,8 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       });
   }, [actionItems, boardFilter, categoryFilter, meetings, search]);
+
+  const openActionCount = useMemo(() => actionItems.filter((item) => item.status === "open").length, [actionItems]);
 
   async function runBusy<T>(key: string, fn: () => Promise<T>) {
     setBusy(key);
@@ -450,6 +517,8 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
         category?: string;
         responsibleMemberId?: string | null;
         responsibleLabel?: string | null;
+        responsibleMemberIds?: string[] | null;
+        responsibleLabels?: string[] | null;
       }> = Array.isArray(data.items) ? data.items : [];
       const drafts: ExtractedActionDraft[] = [];
       for (const item of items) {
@@ -460,8 +529,14 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
           keep: true,
           text,
           category: item.category === "inspection" ? "inspection" : "general",
-          responsibleMemberId: item.responsibleMemberId ? String(item.responsibleMemberId) : null,
-          responsibleLabel: item.responsibleLabel ? String(item.responsibleLabel) : null,
+          responsibleMemberIds: [
+            ...(Array.isArray(item.responsibleMemberIds) ? item.responsibleMemberIds : []),
+            ...(item.responsibleMemberId ? [String(item.responsibleMemberId)] : []),
+          ].filter(Boolean),
+          responsibleLabels: [
+            ...(Array.isArray(item.responsibleLabels) ? item.responsibleLabels : []),
+            ...(item.responsibleLabel ? [String(item.responsibleLabel)] : []),
+          ].filter(Boolean),
         });
       }
 
@@ -530,8 +605,8 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
               text: item.text,
               category: item.category,
               status: "open",
-              responsibleMemberId: item.responsibleMemberId,
-              responsibleLabel: item.responsibleLabel,
+              responsibleMemberIds: item.responsibleMemberIds,
+              responsibleLabels: item.responsibleLabels,
               source: "ai",
             })),
           ),
@@ -559,8 +634,12 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
         formData.set("details", item.details || "");
         formData.set("category", item.category);
         formData.set("status", nextStatus);
-        formData.set("responsible_member_id", item.responsible_member_id || "");
-        formData.set("responsible_label", item.responsible_label || "");
+        const responsibleMemberIds = actionItemAssigneeIds(item);
+        const responsibleLabels = actionItemAssigneeLabels(item);
+        formData.set("responsible_member_ids", JSON.stringify(responsibleMemberIds));
+        formData.set("responsible_labels", JSON.stringify(responsibleLabels));
+        formData.set("responsible_member_id", responsibleMemberIds[0] || "");
+        formData.set("responsible_label", responsibleLabels[0] || "");
         return await updateLabMeetingActionItem(formData);
       });
       setActionItems((prev) => prev.map((entry) => (entry.id === item.id ? (row as LabMeetingActionItemRecord) : entry)));
@@ -569,8 +648,8 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
     }
   }
 
-  async function updateActionAssignee(item: LabMeetingActionItemRecord, memberId: string) {
-    const member = memberOptions.find((option) => option.memberId === memberId);
+  async function updateActionAssignees(item: LabMeetingActionItemRecord, memberIds: string[]) {
+    const selectedMembers = memberOptions.filter((option) => memberIds.includes(option.memberId));
     try {
       const row = await runBusy(`assign-item-${item.id}`, async () => {
         const formData = new FormData();
@@ -581,13 +660,15 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
         formData.set("details", item.details || "");
         formData.set("category", item.category);
         formData.set("status", item.status);
-        formData.set("responsible_member_id", member?.memberId || "");
-        formData.set("responsible_label", member?.label || "");
+        formData.set("responsible_member_ids", JSON.stringify(selectedMembers.map((member) => member.memberId)));
+        formData.set("responsible_labels", JSON.stringify(selectedMembers.map((member) => member.label)));
+        formData.set("responsible_member_id", selectedMembers[0]?.memberId || "");
+        formData.set("responsible_label", selectedMembers[0]?.label || "");
         return await updateLabMeetingActionItem(formData);
       });
       setActionItems((prev) => prev.map((entry) => (entry.id === item.id ? (row as LabMeetingActionItemRecord) : entry)));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update assignee.");
+      toast.error(error instanceof Error ? error.message : "Failed to update assignees.");
     }
   }
 
@@ -617,7 +698,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
       return;
     }
 
-    const assignee = memberOptions.find((option) => option.memberId === manualActionAssigneeMemberId);
+    const assignees = memberOptions.filter((option) => manualActionAssigneeMemberIds.includes(option.memberId));
     try {
       const rows = await runBusy("create-manual-action", async () => {
         const formData = new FormData();
@@ -632,8 +713,8 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
               details: manualActionDetails.trim() || null,
               category: manualActionCategory,
               status: "open",
-              responsibleMemberId: assignee?.memberId || null,
-              responsibleLabel: assignee?.label || null,
+              responsibleMemberIds: assignees.map((assignee) => assignee.memberId),
+              responsibleLabels: assignees.map((assignee) => assignee.label),
               source: "manual",
             },
           ]),
@@ -657,25 +738,42 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
 
   return (
     <div className="space-y-3">
-      <div className="sticky-section-switcher flex items-center gap-1 p-1">
-        <Button
-          type="button"
-          size="sm"
-          variant={contentMode === "workspace" ? "default" : "ghost"}
-          className="h-8 flex-1 rounded-xl text-xs"
-          onClick={() => setContentMode("workspace")}
-        >
-          Meeting workspace
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={contentMode === "board" ? "default" : "ghost"}
-          className="h-8 flex-1 rounded-xl text-xs"
-          onClick={() => setContentMode("board")}
-        >
-          Action board
-        </Button>
+      <div className="sticky-section-switcher rounded-2xl border border-slate-300 bg-gradient-to-r from-slate-100 via-white to-blue-50 p-1.5">
+        <div className="grid gap-1.5 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setContentMode("workspace")}
+            className={`rounded-xl border px-3 py-2 text-left transition ${
+              contentMode === "workspace"
+                ? "border-slate-900 bg-slate-900 text-white shadow-sm"
+                : "border-transparent bg-white/70 text-slate-700 hover:border-slate-200 hover:bg-white"
+            }`}
+          >
+            <p className="text-sm font-semibold">Meeting Workspace</p>
+            <p className={`text-xs ${contentMode === "workspace" ? "text-slate-200" : "text-slate-500"}`}>
+              Notes, AI extraction, and summaries
+            </p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setContentMode("board")}
+            className={`rounded-xl border px-3 py-2 text-left transition ${
+              contentMode === "board"
+                ? "border-blue-700 bg-blue-700 text-white shadow-sm"
+                : "border-transparent bg-white/70 text-slate-700 hover:border-slate-200 hover:bg-white"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Action Board</p>
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${contentMode === "board" ? "bg-white/20 text-white" : "bg-blue-100 text-blue-700"}`}>
+                {openActionCount} open
+              </span>
+            </div>
+            <p className={`text-xs ${contentMode === "board" ? "text-blue-100" : "text-slate-500"}`}>
+              Assign and track all lab actions
+            </p>
+          </button>
+        </div>
       </div>
 
       {contentMode === "workspace" ? (
@@ -870,7 +968,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                         </Button>
                       </div>
                       {extractDraft.map((item) => (
-                        <div key={item.id} className="grid gap-2 rounded-lg border border-slate-200 bg-white p-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
+                        <div key={item.id} className="grid gap-2 rounded-lg border border-slate-200 bg-white p-2">
                           <input
                             type="checkbox"
                             checked={item.keep}
@@ -891,27 +989,19 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                             <option value="general">General</option>
                             <option value="inspection">Inspection</option>
                           </select>
-                          <select
-                            value={item.responsibleMemberId || ""}
-                            onChange={(event) => {
-                              const member = memberOptions.find((option) => option.memberId === event.target.value);
+                          <AssigneeSelector
+                            memberOptions={memberOptions}
+                            selectedIds={item.responsibleMemberIds}
+                            onChange={(nextIds) =>
                               setExtractDraft((prev) =>
                                 prev.map((row) =>
                                   row.id === item.id
-                                    ? { ...row, responsibleMemberId: member?.memberId || null, responsibleLabel: member?.label || null }
+                                    ? { ...row, responsibleMemberIds: nextIds, responsibleLabels: labelsForMemberIds(memberOptions, nextIds) }
                                     : row,
                                 ),
-                              );
-                            }}
-                            className="h-9 rounded-md border border-input bg-white px-2 text-xs"
-                          >
-                            <option value="">Unassigned</option>
-                            {memberOptions.map((member) => (
-                              <option key={`extract-member-${item.id}-${member.memberId}`} value={member.memberId}>
-                                {member.label}
-                              </option>
-                            ))}
-                          </select>
+                              )
+                            }
+                          />
                         </div>
                       ))}
                     </div>
@@ -973,18 +1063,11 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                   </option>
                 ))}
               </select>
-              <select
-                value={manualActionAssigneeMemberId}
-                onChange={(event) => setManualActionAssigneeMemberId(event.target.value)}
-                className="h-9 rounded-md border border-input bg-white px-2 text-xs"
-              >
-                <option value="">Unassigned</option>
-                {memberOptions.map((member) => (
-                  <option key={`manual-action-member-${member.memberId}`} value={member.memberId}>
-                    {member.label}
-                  </option>
-                ))}
-              </select>
+              <AssigneeSelector
+                memberOptions={memberOptions}
+                selectedIds={manualActionAssigneeMemberIds}
+                onChange={setManualActionAssigneeMemberIds}
+              />
             </div>
             <Input
               value={manualActionText}
@@ -1038,19 +1121,14 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                     </div>
                   </div>
 
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <select
-                      value={item.responsible_member_id || ""}
-                      onChange={(event) => void updateActionAssignee(item, event.target.value)}
-                      className="h-9 min-w-44 rounded-md border border-input bg-white px-2 text-xs"
-                    >
-                      <option value="">Unassigned</option>
-                      {memberOptions.map((member) => (
-                        <option key={`board-member-${item.id}-${member.memberId}`} value={member.memberId}>
-                          {member.label}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="mt-2 space-y-2">
+                    <AssigneeSelector
+                      memberOptions={memberOptions}
+                      selectedIds={actionItemAssigneeIds(item)}
+                      onChange={(nextIds) => void updateActionAssignees(item, nextIds)}
+                      className="w-full"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
                     <Button type="button" size="sm" variant="outline" onClick={() => void toggleActionStatus(item)} disabled={busy === `toggle-item-${item.id}`}>
                       <Check className="mr-1 h-3.5 w-3.5" />
                       {item.status === "open" ? "Mark done" : "Re-open"}
@@ -1058,7 +1136,8 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
                     <Button type="button" size="sm" variant="ghost" onClick={() => void removeActionItem(item.id)} disabled={busy === `delete-item-${item.id}`}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
-                    <span className="inline-flex items-center gap-1 text-[11px] text-slate-500"><User className="h-3 w-3" />{item.responsible_label || "Unassigned"}</span>
+                    <span className="inline-flex items-center gap-1 text-[11px] text-slate-500"><User className="h-3 w-3" />{actionItemAssigneeLabels(item).join(", ") || "Unassigned"}</span>
+                    </div>
                   </div>
                 </div>
               ))

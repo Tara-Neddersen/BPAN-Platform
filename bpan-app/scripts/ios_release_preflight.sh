@@ -39,7 +39,7 @@ VERSION="$(rg -N "MARKETING_VERSION =" "$PROJECT_FILE" | head -n 1 | sed -E 's/.
 BUILD="$(rg -N "CURRENT_PROJECT_VERSION =" "$PROJECT_FILE" | head -n 1 | sed -E 's/.*= ([^;]+);/\1/')"
 DISPLAY_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST" 2>/dev/null || true)"
 
-if [[ -z "$BUNDLE_ID" || "$BUNDLE_ID" == "com.bpan.platform" ]]; then
+if [[ -z "$BUNDLE_ID" || "$BUNDLE_ID" == "com.lablynk.app" ]]; then
   echo "Warning: Bundle ID appears default ($BUNDLE_ID). Set final value before App Store upload."
 fi
 

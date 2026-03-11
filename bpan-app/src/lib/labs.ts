@@ -34,6 +34,8 @@ function normalizeLab(value: unknown): Lab | null {
     slug: typeof value.slug === "string" ? value.slug : null,
     description: typeof value.description === "string" ? value.description : null,
     created_by: typeof value.created_by === "string" ? value.created_by : null,
+    outlook_sync_owner_user_id:
+      typeof value.outlook_sync_owner_user_id === "string" ? value.outlook_sync_owner_user_id : null,
     shared_template_edit_policy:
       value.shared_template_edit_policy === "open_edit" ? "open_edit" : "manager_controlled",
     shared_protocol_edit_policy:
@@ -83,7 +85,7 @@ export async function fetchLabShellSummary(
   const { data, error } = await supabase
     .from("lab_members")
     .select(
-      "id, lab_id, user_id, role, display_title, is_active, joined_at, invited_by, created_at, updated_at, labs!inner(id, name, slug, description, created_by, shared_template_edit_policy, shared_protocol_edit_policy, timezone, created_at, updated_at)",
+      "id, lab_id, user_id, role, display_title, is_active, joined_at, invited_by, created_at, updated_at, labs!inner(id, name, slug, description, created_by, outlook_sync_owner_user_id, shared_template_edit_policy, shared_protocol_edit_policy, timezone, created_at, updated_at)",
     )
     .eq("user_id", userId)
     .eq("is_active", true)

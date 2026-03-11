@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type ExternalCalendarImportEvent = {
-  provider: "google" | "outlook";
+  provider: "google" | "outlook" | "icloud";
   providerEventId: string;
   title: string;
   description?: string | null;

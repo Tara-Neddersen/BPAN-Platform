@@ -205,6 +205,17 @@ export interface WorkspaceCalendarEvent {
   updated_at: string;
 }
 
+export interface IcloudCalendarFeed {
+  id: string;
+  user_id: string;
+  label: string;
+  feed_url: string;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 // ─── Research Ideas Board ────────────────────────────────────────────────────
 
 export interface ResearchIdea {
@@ -732,6 +743,7 @@ export interface Lab {
   slug: string | null;
   description: string | null;
   created_by: string | null;
+  outlook_sync_owner_user_id: string | null;
   shared_template_edit_policy: PlatformSharedEditPolicy;
   shared_protocol_edit_policy: PlatformSharedEditPolicy;
   timezone: string;
@@ -952,6 +964,9 @@ export interface LabEquipment {
   description: string | null;
   location: string | null;
   booking_requires_approval: boolean;
+  outlook_calendar_id: string | null;
+  outlook_calendar_name: string | null;
+  outlook_sync_owner_user_id: string | null;
   is_active: boolean;
   created_by: string | null;
   created_at: string;

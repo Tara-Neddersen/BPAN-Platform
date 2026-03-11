@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 if [[ -z "${CAP_SERVER_URL:-}" ]]; then
   echo "Error: CAP_SERVER_URL is required."
-  echo "Example: CAP_SERVER_URL=https://bpan-platform.vercel.app npm run ios:prepare-release"
+  echo "Example: CAP_SERVER_URL=https://lablynk.vercel.app npm run ios:prepare-release"
   exit 1
 fi
 

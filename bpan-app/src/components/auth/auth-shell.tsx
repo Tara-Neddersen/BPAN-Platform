@@ -24,17 +24,17 @@ export function AuthShell({ mode, children }: AuthShellProps) {
                   className="h-10 w-10"
                   imageClassName="drop-shadow-[0_4px_8px_rgba(15,23,42,0.12)]"
                   fallbackClassName="shadow-lg shadow-slate-900/20"
-                  alt="BPAN mouse scientist logo"
+                  alt="LabLynk logo"
                 />
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">BPAN Platform</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">LabLynk</p>
                   <p className="text-sm text-slate-700">Neuro care + research workspace</p>
                 </div>
               </div>
 
               <div>
                 <h1 className="text-3xl font-semibold leading-tight text-slate-900 sm:text-4xl">
-                  {isLogin ? "Welcome back to the lab." : "Create your BPAN workspace."}
+                  {isLogin ? "Welcome back to the lab." : "Create your LabLynk workspace."}
                 </h1>
                 <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-base">
                   Track care workflows, monitor outcomes, and keep neuroplasticity insights in one place with a calmer, clearer interface.

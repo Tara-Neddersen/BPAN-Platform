@@ -1,6 +1,6 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
-const serverUrl = process.env.CAP_SERVER_URL || 'https://bpan-platform.vercel.app';
+const serverUrl = process.env.CAP_SERVER_URL || 'https://lablynk.vercel.app';
 const allowedHost = (() => {
   try {
     return new URL(serverUrl).host;
@@ -10,8 +10,8 @@ const allowedHost = (() => {
 })();
 
 const config: CapacitorConfig = {
-  appId: 'com.bpan.platform',
-  appName: 'BPAN Platform',
+  appId: 'com.lablynk.app',
+  appName: 'LabLynk',
   webDir: 'public',
   server: {
     url: serverUrl,

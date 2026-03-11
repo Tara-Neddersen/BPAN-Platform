@@ -1,7 +1,7 @@
 {
-  "name": "BPAN Platform",
-  "short_name": "BPAN",
-  "description": "Lab operations and collaboration workspace for BPAN research.",
+  "name": "LabLynk",
+  "short_name": "LabLynk",
+  "description": "Lab operations and collaboration workspace for modern research teams.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

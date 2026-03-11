@@ -69,6 +69,7 @@ import type {
   Cohort,
   ColonyTimepoint,
   WorkspaceCalendarEvent,
+  IcloudCalendarFeed,
   ScheduleTemplate,
   ScheduleDay,
   ScheduleSlot,
@@ -543,10 +544,16 @@ function CalendarView({
   const [googleCalendarStatus, setGoogleCalendarStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null } | null>(null);
   const [outlookCalendarStatus, setOutlookCalendarStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null } | null>(null);
   const [calendarFeed, setCalendarFeed] = useState<{ icsUrl: string } | null>(null);
+  const [icloudFeeds, setIcloudFeeds] = useState<IcloudCalendarFeed[]>([]);
+  const [icloudFeedLabel, setIcloudFeedLabel] = useState("");
+  const [icloudFeedUrl, setIcloudFeedUrl] = useState("");
   const [syncingGoogleCalendar, setSyncingGoogleCalendar] = useState(false);
   const [syncingOutlookCalendar, setSyncingOutlookCalendar] = useState(false);
   const [importingGoogleCalendar, setImportingGoogleCalendar] = useState(false);
   const [importingOutlookCalendar, setImportingOutlookCalendar] = useState(false);
+  const [savingIcloudFeed, setSavingIcloudFeed] = useState(false);
+  const [importingIcloudFeedId, setImportingIcloudFeedId] = useState<string | null>(null);
+  const [importingAllIcloudFeeds, setImportingAllIcloudFeeds] = useState(false);
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
@@ -841,17 +848,20 @@ function CalendarView({
 
   const loadCalendarIntegrations = useCallback(async () => {
     try {
-      const [gRes, oRes, feedRes] = await Promise.all([
+      const [gRes, oRes, feedRes, icloudRes] = await Promise.all([
         fetch("/api/calendar/google/status"),
         fetch("/api/calendar/outlook/status"),
         fetch("/api/calendar/feed/status"),
+        fetch("/api/calendar/icloud/feeds"),
       ]);
       const g = await gRes.json();
       const o = await oRes.json();
       const feed = await feedRes.json();
+      const icloud = await icloudRes.json();
       setGoogleCalendarStatus(g);
       setOutlookCalendarStatus(o);
       if (feed?.icsUrl) setCalendarFeed({ icsUrl: feed.icsUrl });
+      setIcloudFeeds(Array.isArray(icloud?.feeds) ? icloud.feeds : []);
     } catch {
       toast.error("Failed to load calendar integrations");
     }
@@ -879,6 +889,78 @@ function CalendarView({
 
     router.replace("/experiments", { scroll: false });
   }, [loadCalendarIntegrations, router, searchParams]);
+
+  const handleAddIcloudFeed = useCallback(async () => {
+    const label = icloudFeedLabel.trim();
+    const feedUrl = icloudFeedUrl.trim();
+    if (!label || !feedUrl) {
+      toast.error("Add a label and calendar link first.");
+      return;
+    }
+    setSavingIcloudFeed(true);
+    try {
+      const res = await fetch("/api/calendar/icloud/feeds", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ label, feedUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Could not save iCloud calendar link.");
+        return;
+      }
+      toast.success("iCloud calendar link saved.");
+      setIcloudFeedLabel("");
+      setIcloudFeedUrl("");
+      await loadCalendarIntegrations();
+    } catch {
+      toast.error("Could not save iCloud calendar link.");
+    } finally {
+      setSavingIcloudFeed(false);
+    }
+  }, [icloudFeedLabel, icloudFeedUrl, loadCalendarIntegrations]);
+
+  const handleImportIcloudFeed = useCallback(async (feedId?: string) => {
+    if (feedId) setImportingIcloudFeedId(feedId);
+    else setImportingAllIcloudFeeds(true);
+    try {
+      const res = await fetch("/api/calendar/icloud/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(feedId ? { feedId } : {}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "iCloud import failed.");
+        return;
+      }
+      toast.success(
+        `Imported ${data.imported || 0}, updated ${data.updated || 0} iCloud event${((data.imported || 0) + (data.updated || 0)) === 1 ? "" : "s"} into LabLynk`
+      );
+      await loadCalendarIntegrations();
+      router.refresh();
+    } catch {
+      toast.error("Could not import iCloud calendar events.");
+    } finally {
+      if (feedId) setImportingIcloudFeedId(null);
+      else setImportingAllIcloudFeeds(false);
+    }
+  }, [loadCalendarIntegrations, router]);
+
+  const handleDeleteIcloudFeed = useCallback(async (feedId: string) => {
+    try {
+      const res = await fetch(`/api/calendar/icloud/feeds/${feedId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.error || "Could not remove iCloud calendar link.");
+        return;
+      }
+      toast.success("iCloud calendar link removed.");
+      await loadCalendarIntegrations();
+    } catch {
+      toast.error("Could not remove iCloud calendar link.");
+    }
+  }, [loadCalendarIntegrations]);
 
   return (
     <div className="space-y-4">
@@ -950,7 +1032,7 @@ function CalendarView({
 
       {calendarIntegrationsOpen && (
         <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
-          <div className="grid gap-3 lg:grid-cols-3">
+          <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-md border bg-background p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium">Google Calendar</p>
@@ -1185,8 +1267,101 @@ function CalendarView({
                 Apple/Outlook use this URL for subscription sync. Google also supports subscription, but direct Google sync above gives richer event updates.
               </p>
               <p className="text-[11px] text-muted-foreground">
-                External-provider imports create BPAN workspace events (category: external) and skip BPAN-managed events to avoid duplicates.
+                External-provider imports create LabLynk workspace events (category: external) and skip LabLynk-managed events to avoid duplicates.
               </p>
+            </div>
+
+            <div className="rounded-md border bg-background p-3 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium">iCloud Calendars</p>
+                <Badge variant={icloudFeeds.length > 0 ? "default" : "secondary"} className="text-[10px]">
+                  {icloudFeeds.length > 0 ? `${icloudFeeds.length} linked` : "Read only"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Paste public iCloud calendar links here to show those events inside LabLynk. These imports are read only.
+              </p>
+              <div className="space-y-2">
+                <Input
+                  value={icloudFeedLabel}
+                  onChange={(e) => setIcloudFeedLabel(e.target.value)}
+                  className="h-8 text-xs"
+                  placeholder="Calendar name"
+                />
+                <Input
+                  value={icloudFeedUrl}
+                  onChange={(e) => setIcloudFeedUrl(e.target.value)}
+                  className="h-8 text-xs"
+                  placeholder="webcal:// or https:// calendar link"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={savingIcloudFeed}
+                    onClick={() => void handleAddIcloudFeed()}
+                  >
+                    {savingIcloudFeed ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                    Save link
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="h-8 text-xs"
+                    disabled={importingAllIcloudFeeds || icloudFeeds.length === 0}
+                    onClick={() => void handleImportIcloudFeed()}
+                  >
+                    {importingAllIcloudFeeds ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                    Import all
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {icloudFeeds.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    No iCloud links saved yet. Turn on Public Calendar in Apple Calendar, then paste that link here.
+                  </p>
+                ) : (
+                  icloudFeeds.map((feed) => (
+                    <div key={feed.id} className="rounded-md border border-border/70 p-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium">{feed.label}</p>
+                          <p className="truncate text-[11px] text-muted-foreground">{feed.feed_url}</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {feed.last_synced_at
+                              ? `Last import ${new Date(feed.last_synced_at).toLocaleString()}`
+                              : "Not imported yet"}
+                          </p>
+                          {feed.last_error ? (
+                            <p className="text-[11px] text-destructive">{feed.last_error}</p>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-[11px]"
+                            disabled={importingIcloudFeedId === feed.id}
+                            onClick={() => void handleImportIcloudFeed(feed.id)}
+                          >
+                            {importingIcloudFeedId === feed.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                            Import
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-[11px] text-destructive"
+                            onClick={() => void handleDeleteIcloudFeed(feed.id)}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
         </div>

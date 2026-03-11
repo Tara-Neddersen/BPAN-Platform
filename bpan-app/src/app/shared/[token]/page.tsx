@@ -267,9 +267,8 @@ export default function SharedPage({
       )}
 
       <div className="text-center text-xs text-muted-foreground py-4">
-        Powered by BPAN Research Platform
+        Powered by LabLynk
       </div>
     </div>
   );
 }
-

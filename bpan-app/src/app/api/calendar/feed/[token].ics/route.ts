@@ -38,15 +38,15 @@ export async function GET(_: Request, context: { params: Promise<Record<string, 
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//BPAN Platform//Workspace Calendar//EN",
+    "PRODID:-//LabLynk//Workspace Calendar//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    "X-WR-CALNAME:BPAN Workspace",
+    "X-WR-CALNAME:LabLynk Workspace",
   ];
 
   const pushEvent = (uid: string, summary: string, startDateOrDateTime: string, opts?: { end?: string | null; allDay?: boolean; description?: string | null; location?: string | null }) => {
     lines.push("BEGIN:VEVENT");
-    lines.push(`UID:${uid}@bpan`);
+    lines.push(`UID:${uid}@lablynk`);
     lines.push(`DTSTAMP:${dtStamp()}`);
     if (opts?.allDay) {
       const start = fmtDate(startDateOrDateTime.slice(0, 10));

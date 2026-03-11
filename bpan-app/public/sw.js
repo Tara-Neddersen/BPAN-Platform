@@ -4,13 +4,49 @@ self.addEventListener('push', (event) => {
     payload = event.data ? event.data.json() : {};
   } catch {
     payload = {
-      title: 'BPAN Platform',
+      title: 'LabLynk',
       body: event.data ? event.data.text() : 'New notification',
     };
   }
 
-  const title = payload.title || 'BPAN Platform';
-  const tag = payload.tag || `bpan-notification-${Date.now()}`;
+  const resolveThreadId = (rawPayload) => {
+    const explicit = typeof rawPayload.threadId === 'string' ? rawPayload.threadId.trim() : '';
+    if (explicit) return explicit;
+    const rawUrl = typeof rawPayload.url === 'string' ? rawPayload.url : '';
+    if (!rawUrl) return '';
+    try {
+      const parsed = new URL(rawUrl, self.location.origin);
+      return (parsed.searchParams.get('thread_id') || '').trim();
+    } catch {
+      return '';
+    }
+  };
+
+  const shouldSuppressChatNotification = async () => {
+    const rawUrl = typeof payload.url === 'string' ? payload.url : '';
+    if (!rawUrl.includes('/labs/chat')) return false;
+    const threadId = resolveThreadId(payload);
+    if (!threadId) return false;
+
+    const windows = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of windows) {
+      if (client.visibilityState !== 'visible') continue;
+      try {
+        const parsed = new URL(client.url);
+        if (!parsed.pathname.includes('/labs/chat')) continue;
+        const activeThreadId = (parsed.searchParams.get('thread_id') || '').trim();
+        if (activeThreadId && activeThreadId === threadId) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  };
+
+  const title = payload.title || 'LabLynk';
+  const tag = payload.tag || `lablynk-notification-${Date.now()}`;
   const options = {
     body: payload.body || 'New notification',
     icon: '/icons/icon-192.png',
@@ -24,7 +60,11 @@ self.addEventListener('push', (event) => {
     },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    const suppress = await shouldSuppressChatNotification();
+    if (suppress) return;
+    await self.registration.showNotification(title, options);
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
