@@ -61,6 +61,7 @@ import {
   reconcileDataWithSchemaSnapshot,
   type SnapshotReconciliationGuardrails,
 } from "@/lib/results-run-adapters";
+import { maybeDecodeRtf, parseMetricReportPreview } from "@/lib/results-import";
 
 // Dynamically import Plotly (it's heavy and client-only)
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -162,6 +163,47 @@ function detectPasteDelimiter(text: string) {
   if (tabCount >= commaCount && tabCount >= semicolonCount && tabCount > 0) return "\t";
   if (semicolonCount > commaCount && semicolonCount > 0) return ";";
   return ",";
+}
+
+function parseDelimitedTextPreview(text: string) {
+  const delimiter = detectPasteDelimiter(text);
+  const result = Papa.parse(text.trim(), {
+    header: true,
+    dynamicTyping: true,
+    skipEmptyLines: true,
+    delimiter,
+  });
+  const parseError = result.errors?.length
+    ? `Parse warning: ${result.errors[0]?.message || "Unknown parsing issue"}`
+    : null;
+  const data = result.data as Record<string, unknown>[];
+  const { normalized: colNames, blankHeaders, duplicateHeaders } = normalizeHeaders(result.meta.fields || []);
+  if (blankHeaders.length > 0) {
+    return {
+      columns: [] as DatasetColumn[],
+      data: [] as Record<string, unknown>[],
+      parseError: "Column header is blank. Add a name to every header cell in the first row.",
+    };
+  }
+  if (duplicateHeaders.length > 0) {
+    return {
+      columns: [] as DatasetColumn[],
+      data: [] as Record<string, unknown>[],
+      parseError: `Duplicate header names found: ${formatColumnList(duplicateHeaders)}. Rename duplicates before import.`,
+    };
+  }
+  if (colNames.length === 0) {
+    return {
+      columns: [] as DatasetColumn[],
+      data: [] as Record<string, unknown>[],
+      parseError: "No header row detected. Include a first row with column names.",
+    };
+  }
+  const columns: DatasetColumn[] = colNames.map((name) => ({
+    name,
+    type: detectColumnType(data.map((row) => row[name])),
+  }));
+  return { columns, data, parseError };
 }
 
 // ─── Chart Colors ────────────────────────────────────────────────────────────
@@ -2303,6 +2345,50 @@ function ImportDialog({
           setIsParsingFile(false);
         },
       });
+    } else if (ext === "txt" || ext === "rtf") {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const rawText = String(e.target?.result || "");
+          const reportPreview = parseMetricReportPreview(rawText);
+          if (reportPreview) {
+            if (reportPreview.errors.length > 0) {
+              setParseError(reportPreview.errors[0]);
+              return;
+            }
+            setPreview({ columns: reportPreview.columns, data: reportPreview.data });
+            if (reportPreview.data.length === 0) {
+              setParseError("No data rows detected in the report file.");
+            }
+            return;
+          }
+
+          const text = maybeDecodeRtf(rawText);
+          const delimitedPreview = parseDelimitedTextPreview(text);
+          if (delimitedPreview.columns.length === 0) {
+            setParseError(
+              delimitedPreview.parseError ||
+                "Could not detect a supported table in the text file. Use CSV, TSV, Excel, or the behavioral report export format."
+            );
+            return;
+          }
+          setPreview({ columns: delimitedPreview.columns, data: delimitedPreview.data });
+          if (delimitedPreview.parseError) {
+            setParseError(delimitedPreview.parseError);
+          } else if (delimitedPreview.data.length === 0) {
+            setParseError("No data rows detected. Keep the header row and add at least one data row.");
+          }
+        } catch (error) {
+          setParseError(error instanceof Error ? error.message : "Failed to read text file.");
+        } finally {
+          setIsParsingFile(false);
+        }
+      };
+      reader.onerror = () => {
+        setParseError("Failed to read selected file.");
+        setIsParsingFile(false);
+      };
+      reader.readAsText(file, ext === "rtf" ? "windows-1252" : undefined);
     } else if (ext === "xlsx" || ext === "xls") {
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -2348,7 +2434,7 @@ function ImportDialog({
       };
       reader.readAsArrayBuffer(file);
     } else {
-      setParseError("Unsupported file type. Use CSV, TSV, XLSX, or XLS.");
+      setParseError("Unsupported file type. Use CSV, TSV, TXT, RTF, XLSX, or XLS.");
       setIsParsingFile(false);
     }
   }
@@ -2505,13 +2591,13 @@ function ImportDialog({
             onClick={() => fileRef.current?.click()}
           >
             <Upload className="h-8 w-8 mx-auto text-muted-foreground/50 mb-2" />
-            <p className="text-sm font-medium">Click to upload CSV or Excel file</p>
-            <p className="text-xs text-muted-foreground mt-1">Supports .csv, .tsv, .xlsx, .xls</p>
+            <p className="text-sm font-medium">Click to upload CSV, text report, or Excel file</p>
+            <p className="text-xs text-muted-foreground mt-1">Supports .csv, .tsv, .txt, .rtf, .xlsx, .xls</p>
             <input
               ref={fileRef}
               type="file"
               className="hidden"
-              accept=".csv,.tsv,.xlsx,.xls"
+              accept=".csv,.tsv,.txt,.rtf,.xlsx,.xls"
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) handleFile(file);
@@ -3151,44 +3237,15 @@ function PasteDialog({
 
   const preview = useMemo(() => {
     if (!rawText.trim()) return null;
-    const delimiter = detectPasteDelimiter(rawText);
-    const result = Papa.parse(rawText.trim(), {
-      header: true,
-      dynamicTyping: true,
-      skipEmptyLines: true,
-      delimiter,
-    });
-    const parseError = result.errors?.length
-      ? `Paste parse warning: ${result.errors[0]?.message || "Unknown parsing issue"}`
-      : null;
-    const data = result.data as Record<string, unknown>[];
-    const { normalized: colNames, blankHeaders, duplicateHeaders } = normalizeHeaders(result.meta.fields || []);
-    if (blankHeaders.length > 0) {
+    const reportPreview = parseMetricReportPreview(rawText);
+    if (reportPreview) {
       return {
-        columns: [],
-        data: [],
-        parseError: "Column header is blank. Add a name to every header cell in the first row.",
+        columns: reportPreview.columns,
+        data: reportPreview.data,
+        parseError: reportPreview.errors[0] || null,
       };
     }
-    if (duplicateHeaders.length > 0) {
-      return {
-        columns: [],
-        data: [],
-        parseError: `Duplicate header names found: ${formatColumnList(duplicateHeaders)}. Rename duplicates before import.`,
-      };
-    }
-    if (colNames.length === 0) {
-      return {
-        columns: [],
-        data: [],
-        parseError: "No header row detected. Include a first row with column names.",
-      };
-    }
-    const columns: DatasetColumn[] = colNames.map((n) => ({
-      name: n,
-      type: detectColumnType(data.map((r) => r[n])),
-    }));
-    return { columns, data, parseError };
+    return parseDelimitedTextPreview(rawText);
   }, [rawText]);
   const reconciliation = useMemo(
     () =>
