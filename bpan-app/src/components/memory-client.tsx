@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Brain, Pin, PinOff, Trash2, Plus, Search, Filter,
+  Brain, Pin, PinOff, Trash2, Search, Filter,
   Bot, Edit2, Save, X, Sparkles, CheckCircle2, Shield,
 } from "lucide-react";
 
@@ -62,10 +62,10 @@ function formatDate(d: string) {
 export function MemoryClient({ memories: initMemories, actions }: MemoryClientProps) {
   const router = useRouter();
   const [memories, setMemories] = useState(initMemories);
+  const [viewMode, setViewMode] = useState<"memories" | "add" | "overview">("memories");
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<MemoryCategory | "all">("all");
   const [showPinnedOnly, setShowPinnedOnly] = useState(false);
-  const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
   const [busy, setBusy] = useState(false);
@@ -101,7 +101,7 @@ export function MemoryClient({ memories: initMemories, actions }: MemoryClientPr
     const fd = new FormData(e.currentTarget);
     const result = await actions.createMemory(fd);
     if (result.success) {
-      setShowAdd(false);
+      setViewMode("memories");
       router.refresh();
     }
     setBusy(false);
@@ -135,51 +135,61 @@ export function MemoryClient({ memories: initMemories, actions }: MemoryClientPr
 
   return (
     <div className="space-y-6">
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card>
-          <CardContent className="py-3 flex items-center gap-3">
-            <Brain className="h-5 w-5 text-purple-500" />
-            <div>
-              <div className="text-2xl font-bold">{stats.total}</div>
-              <div className="text-xs text-muted-foreground">Total Memories</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-3 flex items-center gap-3">
-            <Pin className="h-5 w-5 text-blue-500" />
-            <div>
-              <div className="text-2xl font-bold">{stats.pinned}</div>
-              <div className="text-xs text-muted-foreground">Pinned</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-3 flex items-center gap-3">
-            <Bot className="h-5 w-5 text-green-500" />
-            <div>
-              <div className="text-2xl font-bold">{stats.auto}</div>
-              <div className="text-xs text-muted-foreground">AI Learned</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-3 flex items-center gap-3">
-            <Edit2 className="h-5 w-5 text-orange-500" />
-            <div>
-              <div className="text-2xl font-bold">{stats.manual}</div>
-              <div className="text-xs text-muted-foreground">You Added</div>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="sticky-section-switcher flex items-center gap-1 p-1">
+        <Button type="button" size="sm" variant={viewMode === "memories" ? "default" : "ghost"} className="h-8 flex-1 rounded-xl text-xs" onClick={() => setViewMode("memories")}>
+          Memories
+        </Button>
+        <Button type="button" size="sm" variant={viewMode === "add" ? "default" : "ghost"} className="h-8 flex-1 rounded-xl text-xs" onClick={() => setViewMode("add")}>
+          Add
+        </Button>
+        <Button type="button" size="sm" variant={viewMode === "overview" ? "default" : "ghost"} className="h-8 flex-1 rounded-xl text-xs" onClick={() => setViewMode("overview")}>
+          Overview
+        </Button>
       </div>
 
-      {/* Toolbar */}
+      {viewMode === "overview" ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Card>
+            <CardContent className="flex items-center gap-3 py-3">
+              <Brain className="h-5 w-5 text-purple-500" />
+              <div>
+                <div className="text-2xl font-bold">{stats.total}</div>
+                <div className="text-xs text-muted-foreground">Total Memories</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 py-3">
+              <Pin className="h-5 w-5 text-blue-500" />
+              <div>
+                <div className="text-2xl font-bold">{stats.pinned}</div>
+                <div className="text-xs text-muted-foreground">Pinned</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 py-3">
+              <Bot className="h-5 w-5 text-green-500" />
+              <div>
+                <div className="text-2xl font-bold">{stats.auto}</div>
+                <div className="text-xs text-muted-foreground">AI Learned</div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="flex items-center gap-3 py-3">
+              <Edit2 className="h-5 w-5 text-orange-500" />
+              <div>
+                <div className="text-2xl font-bold">{stats.manual}</div>
+                <div className="text-xs text-muted-foreground">You Added</div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
+      {viewMode === "memories" ? (
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={() => setShowAdd(!showAdd)} size="sm" className="gap-1.5">
-          <Plus className="h-3.5 w-3.5" /> Add Memory
-        </Button>
         <Button
           variant={showPinnedOnly ? "default" : "outline"}
           size="sm"
@@ -209,9 +219,9 @@ export function MemoryClient({ memories: initMemories, actions }: MemoryClientPr
           />
         </div>
       </div>
+      ) : null}
 
-      {/* Add Form */}
-      {showAdd && (
+      {viewMode === "add" ? (
         <Card>
           <CardHeader className="py-3">
             <CardTitle className="text-sm">Add a Memory</CardTitle>
@@ -244,7 +254,7 @@ export function MemoryClient({ memories: initMemories, actions }: MemoryClientPr
                   Pin (always include in AI context)
                 </label>
                 <div className="flex-1" />
-                <Button type="button" variant="ghost" size="sm" onClick={() => setShowAdd(false)}>Cancel</Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setViewMode("memories")}>Cancel</Button>
                 <Button type="submit" size="sm" disabled={busy}>
                   <Save className="h-3.5 w-3.5 mr-1" /> Save
                 </Button>
@@ -252,10 +262,9 @@ export function MemoryClient({ memories: initMemories, actions }: MemoryClientPr
             </form>
           </CardContent>
         </Card>
-      )}
+      ) : null}
 
-      {/* Memory List */}
-      {filtered.length === 0 ? (
+      {viewMode === "memories" && (filtered.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
             <Brain className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -369,9 +378,9 @@ export function MemoryClient({ memories: initMemories, actions }: MemoryClientPr
             );
           })}
         </div>
-      )}
+      ))}
 
-      {/* Explanation */}
+      {viewMode === "overview" ? (
       <Card>
         <CardContent className="py-4">
           <h3 className="text-sm font-semibold flex items-center gap-2 mb-2">
@@ -386,7 +395,7 @@ export function MemoryClient({ memories: initMemories, actions }: MemoryClientPr
           </ul>
         </CardContent>
       </Card>
+      ) : null}
     </div>
   );
 }
-

@@ -19,11 +19,12 @@ export async function POST() {
       }
     })();
 
+    const uniqueTestTag = `bpan-push-test-${Date.now()}`;
     const summary = await sendWebPushToUser(deliveryClient, user.id, {
       title: "BPAN test notification",
       body: "Push notifications are enabled on this device.",
       url: "/notifications",
-      tag: "bpan-push-test",
+      tag: uniqueTestTag,
     });
 
     if (!summary.configured) {
@@ -42,11 +43,17 @@ export async function POST() {
 
     if (summary.delivered === 0) {
       const firstFailure = summary.failures[0];
+      const statusCode = firstFailure?.statusCode ?? null;
+      const isLikelyStaleSubscription = statusCode === 403;
       const errorSuffix = firstFailure
-        ? ` (${firstFailure.statusCode ?? "no-status"}: ${firstFailure.message})`
+        ? ` (${statusCode ?? "no-status"}: ${firstFailure.message})`
         : "";
       return NextResponse.json(
-        { error: `Push provider rejected delivery${errorSuffix}` },
+        {
+          error: isLikelyStaleSubscription
+            ? `Push subscription is stale after key rotation. Disable Push and Enable Push again, then retry.${errorSuffix}`
+            : `Push provider rejected delivery${errorSuffix}`,
+        },
         { status: 502 },
       );
     }

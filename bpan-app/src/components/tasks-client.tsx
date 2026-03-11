@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import {
   Plus, Trash2, Loader2, Check, Calendar,
@@ -121,6 +121,7 @@ interface TasksClientProps {
 type ViewFilter = "all" | "today" | "upcoming" | "overdue" | "completed";
 type SourceFilter = "all" | "meeting_action" | "manual" | "experiment" | "cage_change";
 type TasksPanel = "queue" | "schedule" | "calendar";
+const TASKS_PANEL_STORAGE_KEY = "tasks.panel.v1";
 
 interface UpcomingExperimentLite {
   id: string;
@@ -357,6 +358,19 @@ export function TasksClient({
   const [showAddTask, setShowAddTask] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedPanel = window.localStorage.getItem(TASKS_PANEL_STORAGE_KEY);
+    if (storedPanel === "queue" || storedPanel === "schedule" || storedPanel === "calendar") {
+      setPanel(storedPanel);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(TASKS_PANEL_STORAGE_KEY, panel);
+  }, [panel]);
 
   // ─── Stats ──────────────────────────────────
   const today = toDateStr();

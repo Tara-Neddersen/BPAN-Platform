@@ -17,7 +17,7 @@ export default async function LibraryPage() {
 
   // Get note counts per paper
   const paperIds = typedPapers.map((p) => p.id);
-  let noteCounts: Record<string, number> = {};
+  const noteCounts: Record<string, number> = {};
   if (paperIds.length > 0) {
     const { data: notes } = await supabase
       .from("notes")
@@ -33,32 +33,34 @@ export default async function LibraryPage() {
   }
 
   return (
-    <div className="space-y-8">
-      <div>
+    <div className="page-shell">
+      <section className="section-card card-density-comfy space-y-1.5">
         <h1 className="text-2xl font-bold tracking-tight">Library</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p className="text-sm text-muted-foreground">
           Your saved papers. Click to read and annotate.
         </p>
-      </div>
+      </section>
 
-      {typedPapers.length === 0 ? (
-        <div className="rounded-2xl border-2 border-dashed border-primary/20 bg-primary/[0.02] p-12 text-center">
-          <p className="text-muted-foreground">
-            No saved papers yet. Search for papers and click &ldquo;Save&rdquo; to add them here.
-          </p>
-        </div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
-          {typedPapers.map((paper) => (
-            <SavedPaperCard
-              key={paper.id}
-              paper={paper}
-              noteCount={noteCounts[paper.id] || 0}
-              unsaveAction={unsavePaper}
-            />
-          ))}
-        </div>
-      )}
+      <section className="section-card card-density-comfy">
+        {typedPapers.length === 0 ? (
+          <div className="rounded-2xl border-2 border-dashed border-primary/20 bg-primary/[0.02] p-12 text-center">
+            <p className="text-muted-foreground">
+              No saved papers yet. Search for papers and click &ldquo;Save&rdquo; to add them here.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {typedPapers.map((paper) => (
+              <SavedPaperCard
+                key={paper.id}
+                paper={paper}
+                noteCount={noteCounts[paper.id] || 0}
+                unsaveAction={unsavePaper}
+              />
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

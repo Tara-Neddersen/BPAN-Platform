@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 import { fetchLabShellSummary } from "@/lib/labs";
 import { getRequestedActiveLabId, resolveActiveLabContext } from "@/lib/active-lab-context";
 import {
@@ -9,6 +10,7 @@ import {
 } from "@/components/labs-chat-client";
 import type { Message, MessageRead, MessageThread, MessageThreadParticipant } from "@/types";
 import {
+  createTaskFromLabChatMessage,
   createLabChatThread,
   deleteLabChatThread,
   editLabChatMessage,
@@ -246,6 +248,9 @@ export default async function LabsChatPage() {
   }
 
   const messageIds = messages.map((message) => message.id);
+  const ownMessageIds = messages
+    .filter((message) => message.author_user_id === user.id)
+    .map((message) => message.id);
 
   const { data: messageReadsData } = messageIds.length
     ? await supabase
@@ -256,6 +261,19 @@ export default async function LabsChatPage() {
     : { data: [] };
   const messageReads = (messageReadsData || []) as MessageRead[];
   const readMessageIdSet = new Set(messageReads.map((row) => row.message_id));
+
+  let seenByOthersMessageIdSet = new Set<string>();
+  if (ownMessageIds.length > 0) {
+    const serviceSupabase = createServiceClient();
+    const { data: seenRows } = await serviceSupabase
+      .from("message_reads")
+      .select("message_id,user_id")
+      .in("message_id", ownMessageIds)
+      .neq("user_id", user.id);
+    seenByOthersMessageIdSet = new Set(
+      (seenRows || []).map((row) => String((row as { message_id: string }).message_id)),
+    );
+  }
 
   const participantIds = [
     ...new Set(participants.map((participant) => participant.user_id).filter((id): id is string => Boolean(id))),
@@ -380,6 +398,7 @@ export default async function LabsChatPage() {
     updatedAt: message.updated_at,
     isOwn: message.author_user_id === user.id,
     isRead: message.author_user_id === user.id || readMessageIdSet.has(message.id),
+    seenByOthers: message.author_user_id === user.id && seenByOthersMessageIdSet.has(message.id),
   }));
 
   return (
@@ -394,6 +413,7 @@ export default async function LabsChatPage() {
         createThread: createLabChatThread,
         sendMessage: sendLabChatMessage,
         editMessage: editLabChatMessage,
+        createTaskFromMessage: createTaskFromLabChatMessage,
         markThreadRead: markLabChatThreadRead,
         markThreadUnread: markLabChatThreadUnread,
         deleteThread: deleteLabChatThread,

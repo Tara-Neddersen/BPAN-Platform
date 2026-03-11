@@ -52,36 +52,40 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
 
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="page-shell">
+      <section className="section-card card-density-comfy space-y-1.5">
         <h1 className="text-2xl font-bold tracking-tight">Search Results</h1>
-      </div>
+      </section>
 
-      <SearchBar defaultQuery={query} />
+      <section className="section-card card-density-comfy">
+        <SearchBar defaultQuery={query} />
+      </section>
 
-      {query ? (
-        <Suspense
-          fallback={
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">Searching PubMed...</p>
-              {[1, 2, 3].map((i) => (
-                <div
-                  key={i}
-                  className="h-40 animate-pulse rounded-lg border bg-muted"
-                />
-              ))}
-            </div>
-          }
-        >
-          <SearchResults query={query} page={page} />
-        </Suspense>
-      ) : (
-        <div className="rounded-lg border border-dashed p-8 text-center">
-          <p className="text-muted-foreground">
-            Enter a search term above to find papers on PubMed.
-          </p>
-        </div>
-      )}
+      <section className="section-card card-density-comfy">
+        {query ? (
+          <Suspense
+            fallback={
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">Searching PubMed...</p>
+                {[1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    className="h-40 animate-pulse rounded-lg border bg-muted"
+                  />
+                ))}
+              </div>
+            }
+          >
+            <SearchResults query={query} page={page} />
+          </Suspense>
+        ) : (
+          <div className="rounded-lg border border-dashed p-8 text-center">
+            <p className="text-muted-foreground">
+              Enter a search term above to find papers on PubMed.
+            </p>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

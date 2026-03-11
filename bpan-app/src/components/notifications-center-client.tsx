@@ -270,28 +270,32 @@ export function NotificationsCenterClient({
             <Filter className="h-3.5 w-3.5" />
             Category
           </div>
-          <Button
-            type="button"
-            size="sm"
-            variant={categoryFilter === "all" ? "default" : "outline"}
-            onClick={() => setCategoryFilter("all")}
-            disabled={isPending}
-          >
-            All
-          </Button>
-          {(Object.keys(CATEGORY_LABELS) as NotificationCategory[]).map((value) => (
+          <div className="flex w-full gap-2 overflow-x-auto pb-0.5 sm:w-auto sm:flex-wrap">
             <Button
-              key={value}
               type="button"
               size="sm"
-              variant={categoryFilter === value ? "default" : "outline"}
-              onClick={() => setCategoryFilter(value)}
+              className="!flex-none"
+              variant={categoryFilter === "all" ? "default" : "outline"}
+              onClick={() => setCategoryFilter("all")}
               disabled={isPending}
             >
-              {CATEGORY_LABELS[value]}
+              All
             </Button>
-          ))}
-          <div className="ml-auto flex items-center gap-2">
+            {(Object.keys(CATEGORY_LABELS) as NotificationCategory[]).map((value) => (
+              <Button
+                key={value}
+                type="button"
+                size="sm"
+                className="!flex-none"
+                variant={categoryFilter === value ? "default" : "outline"}
+                onClick={() => setCategoryFilter(value)}
+                disabled={isPending}
+              >
+                {CATEGORY_LABELS[value]}
+              </Button>
+            ))}
+          </div>
+          <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
             <Button type="button" size="sm" onClick={onBulkMarkRead} disabled={isPending || unreadVisibleIds.length === 0}>
               <CheckCheck className="mr-1.5 h-4 w-4" />
               Mark visible read
@@ -334,9 +338,9 @@ export function NotificationsCenterClient({
                 <ul className="mt-3 space-y-3">
                   {dayItems.map((item) => (
                     <li key={item.id} className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
+                      <div className="space-y-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
                             {item.isRead ? (
                               <CircleCheck className="h-4 w-4 text-emerald-600" />
                             ) : (
@@ -357,11 +361,12 @@ export function NotificationsCenterClient({
                           </div>
                         </div>
 
-                        <div className="shrink-0 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2 border-t border-slate-200/80 pt-2">
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
+                            className="h-8 px-2.5 text-xs"
                             onClick={() => onSetRead(item.id, !item.isRead)}
                             disabled={isPending}
                           >
@@ -372,6 +377,7 @@ export function NotificationsCenterClient({
                               type="button"
                               size="sm"
                               variant="outline"
+                              className="h-8 px-2.5 text-xs"
                               onClick={() => onSnooze(item.id, 1)}
                               disabled={isPending}
                             >
@@ -384,6 +390,7 @@ export function NotificationsCenterClient({
                               type="button"
                               size="sm"
                               variant="outline"
+                              className="h-8 px-2.5 text-xs"
                               onClick={() => onDismiss(item.id)}
                               disabled={isPending}
                             >

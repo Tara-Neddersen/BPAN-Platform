@@ -1,11 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { Nav } from "@/components/nav";
-import { AdvisorSidebar } from "@/components/advisor-sidebar";
-import { UnifiedSearch } from "@/components/unified-search";
 import { fetchLabShellSummary } from "@/lib/labs";
 import { getRequestedActiveLabId, resolveActiveLabContext } from "@/lib/active-lab-context";
-import { isNotificationRead, isNotificationTask, normalizeTags } from "@/lib/notifications";
 import { PwaBootstrap } from "@/components/pwa-bootstrap";
+import { DeferredGlobalTools } from "@/components/deferred-global-tools";
 
 export const dynamic = "force-dynamic";
 
@@ -16,30 +14,48 @@ export default async function ProtectedLayout({
 }) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  const [labSummary, notificationTaskRows] = user
+  const [labSummary, unreadNotificationCount] = user
     ? await Promise.all([
         fetchLabShellSummary(supabase, user.id),
-        supabase
-          .from("tasks")
-          .select("id,source_type,tags,status")
-          .eq("user_id", user.id)
-          .neq("status", "skipped")
-          .neq("status", "completed")
-          .order("updated_at", { ascending: false })
-          .limit(300),
+        (async () => {
+          const { data, error } = await supabase.rpc("count_unread_notification_tasks", { p_user_id: user.id });
+          if (!error && typeof data === "number") return data;
+
+          // Fallback for environments where the RPC has not been migrated yet.
+          const { data: tasks } = await supabase
+            .from("tasks")
+            .select("source_type,tags,status")
+            .eq("user_id", user.id)
+            .neq("status", "skipped")
+            .neq("status", "completed")
+            .order("updated_at", { ascending: false })
+            .limit(300);
+
+          return (tasks || []).filter((task) => {
+            const tags = Array.isArray(task.tags) ? task.tags.filter((tag): tag is string => typeof tag === "string") : [];
+            const isNotification =
+              task.source_type === "reminder"
+              || tags.some((tag) =>
+                [
+                  "automation",
+                  "notification",
+                  "protocol_change",
+                  "low_stock",
+                  "booking_conflict",
+                  "template_workflow",
+                  "ai_assist",
+                  "ops_update",
+                ].includes(tag),
+              );
+            return isNotification && !tags.includes("notification_read");
+          }).length;
+        })(),
       ])
-    : [null, null];
+    : [null, 0];
   const requestedActiveLabId = user ? await getRequestedActiveLabId() : null;
   const activeLabContext = labSummary
     ? resolveActiveLabContext(labSummary, requestedActiveLabId)
     : null;
-  const unreadNotificationCount = notificationTaskRows?.data
-    ? notificationTaskRows.data.filter((task) => {
-        const tags = normalizeTags(task.tags);
-        return isNotificationTask({ source_type: task.source_type, tags }) && !isNotificationRead(tags);
-      }).length
-    : 0;
-
   return (
     <div className="native-app-bg min-h-screen">
       {user ? <PwaBootstrap /> : null}
@@ -54,8 +70,7 @@ export default async function ProtectedLayout({
           {children}
         </div>
       </main>
-      {user && <AdvisorSidebar />}
-      {user && <UnifiedSearch />}
+      {user && <DeferredGlobalTools />}
     </div>
   );
 }

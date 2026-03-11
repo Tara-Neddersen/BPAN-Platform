@@ -114,6 +114,10 @@ export function resolveNotificationHref({
   sourceId: string | null;
   links: NotificationLinkRef[];
 }) {
+  if (sourceId?.startsWith("announcement:")) {
+    return "/labs?panel=announcements";
+  }
+
   for (const link of links) {
     const href = linkHrefForObject(link);
     if (href) return href;

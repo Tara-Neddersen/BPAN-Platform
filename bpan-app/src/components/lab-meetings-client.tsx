@@ -235,6 +235,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
   const [isNarrowMobile, setIsNarrowMobile] = useState(false);
   const [mobileView, setMobileView] = useState<"meetings" | "detail">("meetings");
   const [meetingPanelMode, setMeetingPanelMode] = useState<"existing" | "new">("existing");
+  const [contentMode, setContentMode] = useState<"workspace" | "board">("workspace");
   const [meetings, setMeetings] = useState<LabMeetingRecord[]>(initialMeetings);
   const [actionItems, setActionItems] = useState<LabMeetingActionItemRecord[]>(initialActionItems);
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(initialMeetings[0]?.id ?? null);
@@ -656,6 +657,29 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
 
   return (
     <div className="space-y-3">
+      <div className="sticky-section-switcher flex items-center gap-1 p-1">
+        <Button
+          type="button"
+          size="sm"
+          variant={contentMode === "workspace" ? "default" : "ghost"}
+          className="h-8 flex-1 rounded-xl text-xs"
+          onClick={() => setContentMode("workspace")}
+        >
+          Meeting workspace
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={contentMode === "board" ? "default" : "ghost"}
+          className="h-8 flex-1 rounded-xl text-xs"
+          onClick={() => setContentMode("board")}
+        >
+          Action board
+        </Button>
+      </div>
+
+      {contentMode === "workspace" ? (
+      <>
       <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
         <Button
           type="button"
@@ -911,7 +935,10 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
           </CardContent>
         </Card>
       </div>
+      </>
+      ) : null}
 
+      {contentMode === "board" ? (
       <Card className="border-slate-200">
         <CardContent className="space-y-2.5 p-3 sm:space-y-3 sm:p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1039,6 +1066,7 @@ export function LabMeetingsClient({ activeLabId, meetings: initialMeetings, acti
           </div>
         </CardContent>
       </Card>
+      ) : null}
     </div>
   );
 }

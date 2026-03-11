@@ -16,9 +16,13 @@ export default async function WritingPage() {
   ]);
 
   return (
-    <WritingClient
-      figures={(figures as Figure[]) || []}
-      initialOutlines={(outlines as PaperOutline[]) || []}
-    />
+    <div className="page-shell">
+      <section className="section-card card-density-comfy">
+        <WritingClient
+          figures={(figures as Figure[]) || []}
+          initialOutlines={(outlines as PaperOutline[]) || []}
+        />
+      </section>
+    </div>
   );
 }

@@ -1137,12 +1137,12 @@ export function ColonyClient({
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         {showTabList ? (
-          <TabsList className="w-full flex flex-wrap gap-1 p-1.5 rounded-2xl" style={{ background: "rgba(255,255,255,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(99,102,241,0.15)", height: "auto" }}>
-            <TabsTrigger value="animals" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Animals</TabsTrigger>
-            <TabsTrigger value="cohorts" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cohorts</TabsTrigger>
-            <TabsTrigger value="breeders" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Breeders</TabsTrigger>
-            <TabsTrigger value="housing" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Housing</TabsTrigger>
-            <TabsTrigger value="cages" className="flex-1 min-w-[80px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cage Changes</TabsTrigger>
+          <TabsList className="sticky-section-switcher h-auto w-full justify-start gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white/85 p-1">
+            <TabsTrigger value="animals" className="!flex-none min-w-[78px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Animals</TabsTrigger>
+            <TabsTrigger value="cohorts" className="!flex-none min-w-[78px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cohorts</TabsTrigger>
+            <TabsTrigger value="breeders" className="!flex-none min-w-[78px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Breeders</TabsTrigger>
+            <TabsTrigger value="housing" className="!flex-none min-w-[78px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Housing</TabsTrigger>
+            <TabsTrigger value="cages" className="!flex-none min-w-[98px] rounded-xl text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm">Cage Changes</TabsTrigger>
           </TabsList>
         ) : null}
 
@@ -1285,7 +1285,7 @@ export function ColonyClient({
                 const awaitingWean = !!(cage && cage.pup_birth_date === c.birth_date && !cage.pups_weaned);
                 return (
                   <Card key={c.id}>
-                    <CardContent className="py-3">
+                    <CardContent className="py-2.5">
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="font-semibold text-sm flex items-center gap-2">
@@ -1440,91 +1440,82 @@ export function ColonyClient({
                 const daysToBirth = c.expected_birth_date
                   ? Math.ceil((new Date(c.expected_birth_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
                   : null;
+                const statusBadge = waitingToWean
+                  ? { className: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300", label: "🍼 Waiting to wean" }
+                  : needsCheck
+                    ? { className: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300", label: "⏰ Check needed" }
+                    : c.is_pregnant
+                      ? { className: "bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300", label: `🤰 Pregnant${daysPregnant != null ? ` (${daysPregnant}d)` : ""}` }
+                      : c.is_temporary_split
+                        ? { className: "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300", label: "Split cage" }
+                        : null;
                 return (
                   <Card
                     key={c.id}
                     className={
-                      waitingToWean
-                        ? "border-amber-300 bg-amber-50/40 dark:border-amber-700 dark:bg-amber-950/20"
-                        : needsCheck
-                          ? "border-pink-300 bg-pink-50/30 dark:border-pink-800 dark:bg-pink-950/20"
+                      c.is_pregnant
+                        ? "border-pink-300 bg-pink-50/35 dark:border-pink-800 dark:bg-pink-950/20"
+                        : waitingToWean
+                          ? "border-amber-300 bg-amber-50/40 dark:border-amber-700 dark:bg-amber-950/20"
                           : ""
                     }
                   >
                     <CardContent className="py-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-semibold text-sm flex items-center gap-2">
+                      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1 text-xs font-semibold sm:text-sm">
                             {c.name}
                             {c.barcode && <Badge variant="outline" className="text-xs font-mono">{c.barcode}</Badge>}
-                            <Badge variant="outline" className="text-xs">{BREEDER_CAGE_TYPE_LABELS[c.cage_type || "normal"] || "Normal"}</Badge>
-                            {c.strain && <Badge variant="outline" className="text-xs">{c.strain}</Badge>}
                             <Badge variant="secondary" className="text-xs">{cageCohorts.length} cohorts</Badge>
-                            {c.is_pregnant && (
-                              <Badge className="bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300 text-xs">
-                                🤰 Pregnant{daysPregnant != null ? ` (${daysPregnant}d)` : ""}
-                              </Badge>
-                            )}
-                            {needsCheck && (
-                              <Badge className="bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 text-xs animate-pulse">
-                                ⏰ Check needed
-                              </Badge>
-                            )}
-                            {waitingToWean && (
-                              <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 text-xs">
-                                🍼 Waiting to wean
-                              </Badge>
-                            )}
-                            {c.is_temporary_split && (
-                              <Badge className="bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300 text-xs">
-                                Split cage
-                              </Badge>
-                            )}
+                            {statusBadge ? <Badge className={`text-xs ${statusBadge.className}`}>{statusBadge.label}</Badge> : null}
                           </div>
-                          <div className="text-xs text-muted-foreground mt-0.5 flex flex-wrap gap-2">
+                          <div className="mt-0.5 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
                             <span>{c.location || "No location"}{c.breeding_start ? ` · Since: ${c.breeding_start}` : ""}</span>
-                            {c.male_location && (
-                              <span>· Male: {c.male_location === "this_cage" ? "this cage" : c.male_location === "linked_cage" ? "linked cage" : "separated"}</span>
-                            )}
-                            {c.linked_breeder_cage_id && (
-                              <span>· Linked: {(cages.find((other) => other.id === c.linked_breeder_cage_id)?.name) || "paired cage"}</span>
-                            )}
-                            {c.is_pregnant && daysToBirth != null && daysToBirth > 0 && (
-                              <span className="text-pink-600">· Expected birth in {daysToBirth}d ({c.expected_birth_date})</span>
-                            )}
-                            {c.is_pregnant && daysToBirth != null && daysToBirth <= 0 && (
-                              <span className="text-red-600 font-medium">· Birth expected {Math.abs(daysToBirth)}d ago!</span>
-                            )}
-                            {c.last_check_date && (
-                              <span>· Last checked: {c.last_check_date}</span>
-                            )}
-                            {c.pup_birth_date && (
-                              <span className="text-amber-700">· Pup DOB: {c.pup_birth_date}</span>
-                            )}
-                            {c.pup_wean_due_date && !c.pups_weaned && (
-                              <span className="text-amber-700">· DOW: {c.pup_wean_due_date}</span>
-                            )}
-                            {c.pups_weaned && c.pups_weaned_date && (
-                              <span className="text-emerald-700">· Weaned: {c.pups_weaned_date}</span>
-                            )}
+                            {c.pup_birth_date ? <span className="text-amber-700">· Pup DOB: {c.pup_birth_date}</span> : null}
+                            {c.pup_wean_due_date && !c.pups_weaned ? <span className="text-amber-700">· DOW: {c.pup_wean_due_date}</span> : null}
                           </div>
-                          <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-2">
-                            {[
-                              breederGenotypeLabel("♀1", c.female_1_genotype, c.female_1_birth_date),
-                              breederGenotypeLabel("♀2", c.female_2_genotype, c.female_2_birth_date),
-                              breederGenotypeLabel("♀3", c.female_3_genotype, c.female_3_birth_date),
-                              breederGenotypeLabel("♂", c.male_genotype, c.male_birth_date),
-                            ].filter((label): label is string => Boolean(label)).map((label) => (
-                              <span key={label}>{label}</span>
-                            ))}
-                          </div>
+                          <details className="mt-1 rounded-lg border border-slate-200 bg-slate-50/70 px-2 py-1.5">
+                            <summary className="cursor-pointer text-[11px] font-medium text-slate-600">More details</summary>
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              <Badge variant="outline" className="text-[10px]">
+                                {BREEDER_CAGE_TYPE_LABELS[c.cage_type || "normal"] || "Normal"}
+                              </Badge>
+                              {c.strain ? <Badge variant="outline" className="text-[10px]">{c.strain}</Badge> : null}
+                            </div>
+                            <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                              {c.male_location && (
+                                <span>Male: {c.male_location === "this_cage" ? "this cage" : c.male_location === "linked_cage" ? "linked cage" : "separated"}</span>
+                              )}
+                              {c.linked_breeder_cage_id && (
+                                <span>Linked: {(cages.find((other) => other.id === c.linked_breeder_cage_id)?.name) || "paired cage"}</span>
+                              )}
+                              {c.is_pregnant && daysToBirth != null && daysToBirth > 0 && (
+                                <span className="text-pink-600">Expected birth in {daysToBirth}d ({c.expected_birth_date})</span>
+                              )}
+                              {c.is_pregnant && daysToBirth != null && daysToBirth <= 0 && (
+                                <span className="font-medium text-red-600">Birth expected {Math.abs(daysToBirth)}d ago!</span>
+                              )}
+                              {c.last_check_date ? <span>Last checked: {c.last_check_date}</span> : null}
+                              {c.pups_weaned && c.pups_weaned_date ? <span className="text-emerald-700">Weaned: {c.pups_weaned_date}</span> : null}
+                            </div>
+                            <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                              {[
+                                breederGenotypeLabel("♀1", c.female_1_genotype, c.female_1_birth_date),
+                                breederGenotypeLabel("♀2", c.female_2_genotype, c.female_2_birth_date),
+                                breederGenotypeLabel("♀3", c.female_3_genotype, c.female_3_birth_date),
+                                breederGenotypeLabel("♂", c.male_genotype, c.male_birth_date),
+                              ].filter((label): label is string => Boolean(label)).map((label) => (
+                                <span key={label}>{label}</span>
+                              ))}
+                            </div>
+                          </details>
                         </div>
-                        <div className="flex gap-1">
+                        <div className="grid w-full grid-cols-2 gap-1 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
                           {!c.is_temporary_split && (
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-7 text-xs gap-1"
+                              className="h-6 px-1.5 text-[10px] gap-1 sm:h-7 sm:px-2 sm:text-xs"
                               onClick={async () => {
                                 const result = await act(actions.createTempSplitCageFromBreeder(c.id));
                                 if (!result.error) toast.success(`Created temp split cage from ${c.name}`);
@@ -1536,7 +1527,7 @@ export function ColonyClient({
                           <Button
                             variant="outline"
                             size="sm"
-                            className="h-7 text-xs gap-1"
+                            className="h-6 px-1.5 text-[10px] gap-1 sm:h-7 sm:px-2 sm:text-xs"
                             onClick={() => seedCohortFromBreeder(c)}
                           >
                             <Plus className="h-3 w-3" /> Cohort
@@ -1545,7 +1536,7 @@ export function ColonyClient({
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-7 text-xs gap-1"
+                              className="h-6 px-1.5 text-[10px] gap-1 sm:h-7 sm:px-2 sm:text-xs"
                               onClick={async () => {
                                 const fd = buildBreederCageFormData(c, {
                                   is_pregnant: "true",
@@ -1559,10 +1550,10 @@ export function ColonyClient({
                               <Check className="h-3 w-3" /> Checked
                             </Button>
                           )}
-                          <Button variant="ghost" size="sm" onClick={() => setEditingCage(c)}>
+                          <Button variant="ghost" size="sm" className="h-6 px-1.5 sm:h-7 sm:px-2" onClick={() => setEditingCage(c)}>
                             <Edit className="h-3.5 w-3.5" />
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => act(actions.deleteBreederCage(c.id))}>
+                          <Button variant="ghost" size="sm" className="h-6 px-1.5 sm:h-7 sm:px-2" onClick={() => act(actions.deleteBreederCage(c.id))}>
                             <Trash2 className="h-3.5 w-3.5 text-destructive" />
                           </Button>
                         </div>

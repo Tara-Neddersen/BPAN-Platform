@@ -16,20 +16,21 @@ export default async function MemoryPage() {
     .order("created_at", { ascending: false });
 
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="page-shell">
+      <section className="section-card card-density-comfy space-y-1.5">
         <h1 className="text-2xl font-bold tracking-tight">AI Memory</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p className="text-sm text-muted-foreground">
           Everything the AI remembers about your research. Pinned items are always included in every AI interaction.
           Auto-learned facts come from your advisor chats, meetings, and paper analysis.
         </p>
-      </div>
+      </section>
 
-      <MemoryClient
-        memories={(memories || []) as AIMemory[]}
-        actions={{ createMemory, updateMemory, deleteMemory, togglePin }}
-      />
+      <section className="section-card card-density-comfy">
+        <MemoryClient
+          memories={(memories || []) as AIMemory[]}
+          actions={{ createMemory, updateMemory, deleteMemory, togglePin }}
+        />
+      </section>
     </div>
   );
 }
-

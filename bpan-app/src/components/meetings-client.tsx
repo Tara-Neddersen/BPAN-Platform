@@ -834,6 +834,7 @@ export function MeetingsClient({
   actions,
 }: MeetingsClientProps) {
   const [meetings, setMeetings] = useState(initMeetings);
+  const [viewMode, setViewMode] = useState<"meetings" | "create">("meetings");
   const [showAddMeeting, setShowAddMeeting] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<MeetingNote | null>(null);
   const [busy, setBusy] = useState(false);
@@ -874,14 +875,23 @@ export function MeetingsClient({
 
   return (
     <>
-      {/* Meeting list */}
-      <div className="flex justify-end mb-4">
-        <Button onClick={() => setShowAddMeeting(true)} size="sm">
-          <Plus className="h-4 w-4 mr-1" /> New Meeting
+      <div className="sticky-section-switcher mb-4 flex items-center gap-1 p-1">
+        <Button type="button" size="sm" variant={viewMode === "meetings" ? "default" : "ghost"} className="h-8 flex-1 rounded-xl text-xs" onClick={() => setViewMode("meetings")}>
+          Meetings
+        </Button>
+        <Button type="button" size="sm" variant={viewMode === "create" ? "default" : "ghost"} className="h-8 flex-1 rounded-xl text-xs" onClick={() => setViewMode("create")}>
+          Create
         </Button>
       </div>
 
-      {meetings.length === 0 ? (
+      {viewMode === "create" ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-sm text-slate-600 mb-3">Create a new meeting note, then capture transcript and action items.</p>
+          <Button onClick={() => setShowAddMeeting(true)} size="sm">
+            <Plus className="h-4 w-4 mr-1" /> New Meeting
+          </Button>
+        </div>
+      ) : meetings.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground">
           <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-30" />
           <p className="text-lg">No meeting notes yet</p>

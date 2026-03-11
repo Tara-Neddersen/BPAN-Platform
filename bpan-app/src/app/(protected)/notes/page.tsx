@@ -64,7 +64,8 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
   const totalNotes = (notes ?? []).length;
 
   return (
-    <div className="space-y-6">
+    <div className="page-shell">
+      <section className="section-card card-density-comfy">
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Notes</h1>
@@ -74,8 +75,10 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
         </div>
         <ExportButtons noteCount={totalNotes} />
       </div>
+      </section>
 
       {/* Standard text search */}
+      <section className="section-card card-density-comfy">
       <form className="flex gap-2">
         <Input
           name="q"
@@ -91,7 +94,9 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
 
       {/* Semantic search */}
       <SemanticSearch />
+      </section>
 
+      <section className="section-card card-density-comfy">
       <div className="flex gap-6">
         {/* Sidebar: tags + type filters */}
         <aside className="hidden md:block w-48 shrink-0 space-y-4">
@@ -169,6 +174,7 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
           )}
         </div>
       </div>
+      </section>
     </div>
   );
 }

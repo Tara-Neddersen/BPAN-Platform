@@ -430,8 +430,13 @@ export async function deliverChatMessageNotifications({
 
   for (const recipientId of uniqueRecipientIds) {
     try {
-      const { data: authRecipient } = await admin.auth.admin.getUserById(recipientId);
-      const preferences = readChatNotificationPreferences(authRecipient?.user?.user_metadata || {});
+      let preferences = defaultChatNotificationPreferences();
+      try {
+        const { data: authRecipient } = await admin.auth.admin.getUserById(recipientId);
+        preferences = readChatNotificationPreferences(authRecipient?.user?.user_metadata || {});
+      } catch {
+        // Keep defaults when auth metadata lookup fails.
+      }
       const recipientProfile = profileById.get(recipientId);
       const channelPreferences = preferences.channels[channel];
 
@@ -444,14 +449,18 @@ export async function deliverChatMessageNotifications({
           threadLabel,
           messageBody,
         });
-
-        await sendWebPushToUser(admin, recipientId, {
-          title: `${senderName} sent a message`,
-          body: `${threadLabel}: ${messageSnippet}`,
-          url: "/labs/chat",
-          tag: `chat-${channel}`,
-        });
       }
+
+      // Push alerts are device-level delivery and should not be coupled to
+      // in-app feed visibility preferences.
+      await sendWebPushToUser(admin, recipientId, {
+        title: `${senderName} sent a message`,
+        body: `${threadLabel}: ${messageSnippet}`,
+        url: "/labs/chat",
+        tag: `chat-${channel}-${messageId}`,
+        urgency: "high",
+        ttlSeconds: 60,
+      });
 
       if (channelPreferences.email && recipientProfile?.email) {
         await sendChatEmailNotification({

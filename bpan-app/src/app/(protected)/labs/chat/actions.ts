@@ -153,10 +153,11 @@ export async function sendLabChatMessage(formData: FormData) {
 
   if (error || !data?.id) return { error: error?.message || "Unable to send message." };
 
-  void deliverChatMessageNotifications({
-    senderUserId: userId,
-    messageId: String(data.id),
-    messageBody: String(data.body),
+  try {
+    await deliverChatMessageNotifications({
+      senderUserId: userId,
+      messageId: String(data.id),
+      messageBody: String(data.body),
       thread: {
         id: String(threadCheck.thread.id),
         lab_id: (threadCheck.thread.lab_id as string | null) || null,
@@ -165,8 +166,11 @@ export async function sendLabChatMessage(formData: FormData) {
         subject: (threadCheck.thread.subject as string | null) || null,
         linked_object_type: String(threadCheck.thread.linked_object_type),
         linked_object_id: String(threadCheck.thread.linked_object_id),
-    },
-  });
+      },
+    });
+  } catch {
+    // Best-effort fallback: message send should still succeed.
+  }
 
   revalidateLabChat();
   return {
@@ -267,6 +271,20 @@ export async function markLabChatThreadRead(formData: FormData) {
 
   if (error) return { error: error.message };
 
+  const sourceIds = unreadTargetIds.map((messageId) => `chat_message:${messageId}`);
+  if (sourceIds.length > 0) {
+    await supabase
+      .from("tasks")
+      .update({
+        status: "skipped",
+        completed_at: now,
+        source_label: "Seen in chat",
+      })
+      .eq("user_id", userId)
+      .eq("source_type", "reminder")
+      .in("source_id", sourceIds);
+  }
+
   revalidateLabChat();
   return { success: true, updated: unreadTargetIds.length };
 }
@@ -354,4 +372,48 @@ export async function deleteLabChatThread(formData: FormData) {
 
   revalidateLabChat();
   return { success: true, threadId };
+}
+
+export async function createTaskFromLabChatMessage(formData: FormData) {
+  const { supabase, userId } = await requireUser();
+  const activeLabId = normalizeOptionalString(formData.get("active_lab_id"));
+  const messageId = normalizeOptionalString(formData.get("message_id"));
+
+  if (!activeLabId) return { error: "Active lab context is required." };
+  if (!messageId) return { error: "Message id is required." };
+
+  const { data: message, error: messageError } = await supabase
+    .from("messages")
+    .select("id,thread_id,body")
+    .eq("id", messageId)
+    .maybeSingle();
+  if (messageError) return { error: messageError.message };
+  if (!message) return { error: "Message not found." };
+
+  const threadCheck = await assertLabRootThread(supabase, {
+    threadId: String(message.thread_id),
+    labId: activeLabId,
+  });
+  if ("error" in threadCheck) return threadCheck;
+
+  const body = String(message.body || "").trim();
+  const snippet = body.length > 100 ? `${body.slice(0, 100).trim()}...` : body;
+  const title = snippet.length > 0 ? snippet : "Task from lab chat";
+
+  const { error: insertError } = await supabase.from("tasks").insert({
+    user_id: userId,
+    title,
+    description: body.length > 0 ? body : null,
+    priority: "medium",
+    status: "pending",
+    source_type: "manual",
+    source_id: `chat_message:${String(message.id)}`,
+    source_label: "From lab chat",
+    tags: ["chat_message"],
+  });
+  if (insertError) return { error: insertError.message || "Unable to create task." };
+
+  revalidatePath("/tasks");
+  revalidateLabChat();
+  return { success: true };
 }

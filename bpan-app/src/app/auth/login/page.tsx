@@ -15,7 +15,7 @@ function LoginPageContent() {
   const nextPath =
     requestedNext && requestedNext.startsWith("/") && !requestedNext.startsWith("//")
       ? requestedNext
-      : "/dashboard";
+      : "/operations";
   const callbackError = searchParams.get("error");
   const callbackErrorMessage = callbackError ? callbackError.replace(/\+/g, " ") : null;
   const hasSupabaseEnv = Boolean(

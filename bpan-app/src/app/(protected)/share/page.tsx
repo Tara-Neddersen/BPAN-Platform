@@ -19,10 +19,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +51,7 @@ const INCLUDE_OPTIONS = [
 
 export default function SharePage() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+  const [viewMode, setViewMode] = useState<"snapshots" | "create">("snapshots");
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -94,8 +94,9 @@ export default function SharePage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="page-shell">
+      <section className="section-card card-density-comfy">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Share</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
@@ -103,96 +104,119 @@ export default function SharePage() {
             lab members, or collaborators.
           </p>
         </div>
-        <Button onClick={() => setShowCreate(true)} className="gap-2">
-          <Plus className="h-4 w-4" /> New Share
+      </div>
+      </section>
+
+      <div className="sticky-section-switcher flex items-center gap-1 p-1">
+        <Button type="button" size="sm" variant={viewMode === "snapshots" ? "default" : "ghost"} className="h-8 flex-1 rounded-xl text-xs" onClick={() => setViewMode("snapshots")}>
+          Snapshots
+        </Button>
+        <Button type="button" size="sm" variant={viewMode === "create" ? "default" : "ghost"} className="h-8 flex-1 rounded-xl text-xs" onClick={() => setViewMode("create")}>
+          Create
         </Button>
       </div>
 
-      {loading ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      ) : snapshots.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center">
-          <Share2 className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
-          <h3 className="font-medium mb-1">No shared snapshots</h3>
-          <p className="text-sm text-muted-foreground max-w-md mx-auto">
-            Create a snapshot to generate a read-only link you can send to your PI
-            or collaborators. They don&apos;t need an account.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {snapshots.map((s) => (
-            <Card key={s.id}>
-              <CardContent className="py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-medium text-sm">{s.title}</h3>
-                    {s.description && (
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {s.description}
-                      </p>
-                    )}
-                    <div className="flex items-center gap-2 mt-2 flex-wrap">
-                      {s.includes.map((inc) => {
-                        const opt = INCLUDE_OPTIONS.find((o) => o.key === inc);
-                        return (
-                          <Badge key={inc} variant="secondary" className="text-xs gap-1">
-                            {opt?.icon}
-                            {opt?.label || inc}
-                          </Badge>
-                        );
-                      })}
-                    </div>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground mt-2">
-                      <span className="flex items-center gap-1">
-                        <Eye className="h-3 w-3" /> {s.view_count} views
-                      </span>
-                      <span>
-                        Created {new Date(s.created_at).toLocaleDateString()}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex gap-1 flex-shrink-0">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1 text-xs"
-                      onClick={() => copyLink(s.token)}
-                    >
-                      {copiedId === s.token ? (
-                        <Check className="h-3 w-3 text-green-500" />
-                      ) : (
-                        <Copy className="h-3 w-3" />
+      {viewMode === "snapshots" ? (
+      <section className="section-card card-density-comfy">
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : snapshots.length === 0 ? (
+          <div className="rounded-lg border border-dashed p-12 text-center">
+            <Share2 className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
+            <h3 className="font-medium mb-1">No shared snapshots</h3>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              Create a snapshot to generate a read-only link you can send to your PI
+              or collaborators. They don&apos;t need an account.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {snapshots.map((s) => (
+              <Card key={s.id}>
+                <CardContent className="py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-medium text-sm">{s.title}</h3>
+                      {s.description && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {s.description}
+                        </p>
                       )}
-                      {copiedId === s.token ? "Copied!" : "Copy Link"}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs"
-                      onClick={() =>
-                        window.open(`/shared/${s.token}`, "_blank")
-                      }
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive"
-                      onClick={() => handleDelete(s.id)}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        {s.includes.map((inc) => {
+                          const opt = INCLUDE_OPTIONS.find((o) => o.key === inc);
+                          return (
+                            <Badge key={inc} variant="secondary" className="text-xs gap-1">
+                              {opt?.icon}
+                              {opt?.label || inc}
+                            </Badge>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground mt-2">
+                        <span className="flex items-center gap-1">
+                          <Eye className="h-3 w-3" /> {s.view_count} views
+                        </span>
+                        <span>
+                          Created {new Date(s.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1 text-xs"
+                        onClick={() => copyLink(s.token)}
+                      >
+                        {copiedId === s.token ? (
+                          <Check className="h-3 w-3 text-green-500" />
+                        ) : (
+                          <Copy className="h-3 w-3" />
+                        )}
+                        {copiedId === s.token ? "Copied!" : "Copy Link"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs"
+                        onClick={() =>
+                          window.open(`/shared/${s.token}`, "_blank")
+                        }
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive"
+                        onClick={() => handleDelete(s.id)}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+      ) : null}
+
+      {viewMode === "create" ? (
+      <section className="section-card card-density-comfy space-y-3">
+        <h2 className="text-sm font-semibold text-slate-900">Create new snapshot</h2>
+        <p className="text-sm text-muted-foreground">
+          Build a shareable, read-only research snapshot and copy the link.
+        </p>
+        <Button onClick={() => setShowCreate(true)} className="h-9 gap-2 self-start">
+          <Plus className="h-4 w-4" /> Open creator
+        </Button>
+      </section>
+      ) : null}
 
       {showCreate && (
         <CreateShareDialog
@@ -334,4 +358,3 @@ function CreateShareDialog({
     </Dialog>
   );
 }
-

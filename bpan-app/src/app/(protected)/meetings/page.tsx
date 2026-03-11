@@ -41,24 +41,26 @@ export default async function MeetingsPage({
   }
 
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="page-shell">
+      <section className="section-card card-density-comfy space-y-1.5">
         <h1 className="text-2xl font-bold tracking-tight">Meetings</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p className="text-sm text-muted-foreground">
           Keep notes from advisor meetings — track action items, decisions, and follow-ups.
         </p>
-      </div>
+      </section>
 
-      <MeetingsClient
-        meetings={(meetingNotes || []) as MeetingNote[]}
-        initialOpenMeetingId={params?.meeting ?? null}
-        linkedTaskCounts={linkedTaskCounts}
-        actions={{
-          createMeetingNote,
-          updateMeetingNote,
-          deleteMeetingNote,
-        }}
-      />
+      <section className="section-card card-density-comfy">
+        <MeetingsClient
+          meetings={(meetingNotes || []) as MeetingNote[]}
+          initialOpenMeetingId={params?.meeting ?? null}
+          linkedTaskCounts={linkedTaskCounts}
+          actions={{
+            createMeetingNote,
+            updateMeetingNote,
+            deleteMeetingNote,
+          }}
+        />
+      </section>
     </div>
   );
 }

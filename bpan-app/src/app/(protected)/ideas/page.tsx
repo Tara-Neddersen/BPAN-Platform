@@ -36,12 +36,15 @@ export default async function IdeasPage() {
   ]);
 
   return (
-    <IdeasClient
-      ideas={(ideas as ResearchIdea[]) || []}
-      entries={(entries as IdeaEntryWithSources[]) || []}
-      papers={(papers as SavedPaper[]) || []}
-      notes={(notes as NoteWithPaper[]) || []}
-    />
+    <div className="page-shell">
+      <section className="section-card card-density-comfy">
+        <IdeasClient
+          ideas={(ideas as ResearchIdea[]) || []}
+          entries={(entries as IdeaEntryWithSources[]) || []}
+          papers={(papers as SavedPaper[]) || []}
+          notes={(notes as NoteWithPaper[]) || []}
+        />
+      </section>
+    </div>
   );
 }
-

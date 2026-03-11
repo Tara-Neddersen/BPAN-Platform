@@ -188,7 +188,7 @@ export default async function DashboardPage({
           <div>
             <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-cyan-200/80 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-800">
               <span className="inline-block h-2 w-2 rounded-full bg-cyan-500" />
-              Workspace Overview
+              Paper Search
             </div>
             <p className="mb-1 text-sm font-medium text-cyan-800/80">{greeting},</p>
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">

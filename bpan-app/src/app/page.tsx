@@ -8,7 +8,7 @@ export default async function HomePage() {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (user) {
-    redirect("/dashboard");
+    redirect("/operations");
   } else {
     redirect("/preview/dashboard");
   }

@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { TasksClient } from "@/components/tasks-client";
+import { isNotificationTask, normalizeTags } from "@/lib/notifications";
 import type { Task } from "@/types";
 import {
   createTask,
@@ -20,6 +21,13 @@ export default async function TasksPage() {
     .select("*")
     .eq("user_id", user.id)
     .order("due_date", { ascending: true, nullsFirst: false });
+
+  const personalTasks = (tasks || []).filter((task) =>
+    !isNotificationTask({
+      source_type: task.source_type,
+      tags: normalizeTags(task.tags),
+    }),
+  );
 
   // Get upcoming experiments with cohort info for batch grouping
   const { data: upcomingExps } = await supabase
@@ -67,7 +75,7 @@ export default async function TasksPage() {
       </div>
 
       <TasksClient
-        tasks={(tasks || []) as Task[]}
+        tasks={personalTasks as Task[]}
         upcomingExperiments={upcomingExps || []}
         cohorts={cohorts || []}
         upcomingCageChanges={upcomingCageChanges || []}

@@ -115,7 +115,7 @@ export async function renderColonyPageView({
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
     return (
-      <section className="rounded-3xl border border-slate-200/80 bg-white/90 px-6 py-10 shadow-sm backdrop-blur sm:px-10 sm:py-14">
+      <section className="section-card card-density-comfy rounded-3xl px-6 py-10 sm:px-10 sm:py-14">
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-10">
           <div className="space-y-4">
             <p className="inline-flex w-fit rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-800">
@@ -198,74 +198,76 @@ export async function renderColonyPageView({
   ]);
 
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="page-shell">
+      <section className="section-card card-density-comfy space-y-1.5">
         <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p className="text-sm text-muted-foreground">
           {description}
         </p>
-      </div>
+      </section>
 
-      <ColonyClient
-        defaultTab={defaultTab}
-        showTabList={showTabList}
-        breederCages={(breederCages || []) as BreederCage[]}
-        cohorts={(cohorts || []) as Cohort[]}
-        animals={(animals || []) as Animal[]}
-        animalExperiments={(animalExperiments || []) as AnimalExperiment[]}
-        timepoints={(timepoints || []) as ColonyTimepoint[]}
-        advisorPortals={(advisorPortals || []) as AdvisorPortal[]}
-        advisorPortalAccessLogs={(advisorPortalAccessLogs || []) as AdvisorPortalAccessLog[]}
-        meetingNotes={(meetingNotes || []) as MeetingNote[]}
-        cageChanges={(cageChanges || []) as CageChange[]}
-        colonyPhotos={(colonyPhotos || []) as ColonyPhoto[]}
-        housingCages={(housingCages || []) as HousingCage[]}
-        colonyResults={(colonyResults || []) as ColonyResult[]}
-        batchUpsertColonyResults={batchUpsertColonyResults}
-        reconcileTrackerFromExistingColonyResults={reconcileTrackerFromExistingColonyResults}
-        deleteColonyResultMeasureColumn={deleteColonyResultMeasureColumn}
-        actions={{
-          createBreederCage,
-          updateBreederCage,
-          createTempSplitCageFromBreeder,
-          deleteBreederCage,
-          createCohort,
-          updateCohort,
-          deleteCohort,
-          createAnimal,
-          updateAnimal,
-          deleteAnimal,
-          createColonyTimepoint,
-          updateColonyTimepoint,
-          deleteColonyTimepoint,
-          createAnimalExperiment,
-          updateAnimalExperiment,
-          deleteAnimalExperiment,
-          scheduleExperimentsForAnimal,
-          scheduleExperimentsForCohort,
-          deleteExperimentsForAnimal,
-          deleteExperimentsForCohort,
-          createAdvisorAccess,
-          deleteAdvisorAccess,
-          createMeetingNote,
-          updateMeetingNote,
-          deleteMeetingNote,
-          generateCageChanges,
-          toggleCageChange,
-          deleteCageChange,
-          addColonyPhoto,
-          deleteColonyPhoto,
-          createHousingCage,
-          updateHousingCage,
-          deleteHousingCage,
-          assignAnimalToCage,
-          rescheduleTimepointExperiments,
-          batchUpdateExperimentStatus,
-          batchScheduleSingleExperiment,
-          rescheduleExperimentsAfterTimepointEdit,
-        }}
-      />
-      {footer}
+      <section className="section-card card-density-comfy">
+        <ColonyClient
+          defaultTab={defaultTab}
+          showTabList={showTabList}
+          breederCages={(breederCages || []) as BreederCage[]}
+          cohorts={(cohorts || []) as Cohort[]}
+          animals={(animals || []) as Animal[]}
+          animalExperiments={(animalExperiments || []) as AnimalExperiment[]}
+          timepoints={(timepoints || []) as ColonyTimepoint[]}
+          advisorPortals={(advisorPortals || []) as AdvisorPortal[]}
+          advisorPortalAccessLogs={(advisorPortalAccessLogs || []) as AdvisorPortalAccessLog[]}
+          meetingNotes={(meetingNotes || []) as MeetingNote[]}
+          cageChanges={(cageChanges || []) as CageChange[]}
+          colonyPhotos={(colonyPhotos || []) as ColonyPhoto[]}
+          housingCages={(housingCages || []) as HousingCage[]}
+          colonyResults={(colonyResults || []) as ColonyResult[]}
+          batchUpsertColonyResults={batchUpsertColonyResults}
+          reconcileTrackerFromExistingColonyResults={reconcileTrackerFromExistingColonyResults}
+          deleteColonyResultMeasureColumn={deleteColonyResultMeasureColumn}
+          actions={{
+            createBreederCage,
+            updateBreederCage,
+            createTempSplitCageFromBreeder,
+            deleteBreederCage,
+            createCohort,
+            updateCohort,
+            deleteCohort,
+            createAnimal,
+            updateAnimal,
+            deleteAnimal,
+            createColonyTimepoint,
+            updateColonyTimepoint,
+            deleteColonyTimepoint,
+            createAnimalExperiment,
+            updateAnimalExperiment,
+            deleteAnimalExperiment,
+            scheduleExperimentsForAnimal,
+            scheduleExperimentsForCohort,
+            deleteExperimentsForAnimal,
+            deleteExperimentsForCohort,
+            createAdvisorAccess,
+            deleteAdvisorAccess,
+            createMeetingNote,
+            updateMeetingNote,
+            deleteMeetingNote,
+            generateCageChanges,
+            toggleCageChange,
+            deleteCageChange,
+            addColonyPhoto,
+            deleteColonyPhoto,
+            createHousingCage,
+            updateHousingCage,
+            deleteHousingCage,
+            assignAnimalToCage,
+            rescheduleTimepointExperiments,
+            batchUpdateExperimentStatus,
+            batchScheduleSingleExperiment,
+            rescheduleExperimentsAfterTimepointEdit,
+          }}
+        />
+      </section>
+      {footer ? <section className="section-card card-density-compact">{footer}</section> : null}
     </div>
   );
 }

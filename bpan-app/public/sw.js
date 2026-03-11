@@ -10,11 +10,15 @@ self.addEventListener('push', (event) => {
   }
 
   const title = payload.title || 'BPAN Platform';
+  const tag = payload.tag || `bpan-notification-${Date.now()}`;
   const options = {
     body: payload.body || 'New notification',
     icon: '/icons/icon-192.png',
     badge: '/icons/icon-192.png',
-    tag: payload.tag || 'bpan-notification',
+    tag,
+    renotify: true,
+    timestamp: Date.now(),
+    vibrate: [160, 80, 220],
     data: {
       url: payload.url || '/notifications',
     },

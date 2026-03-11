@@ -60,7 +60,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // If authenticated user visits auth pages, redirect to dashboard
+  // If authenticated user visits auth pages, redirect to operations hub
   const authPaths = ["/auth/login", "/auth/signup"];
   const isAuthPage = authPaths.some((path) =>
     request.nextUrl.pathname.startsWith(path)
@@ -68,7 +68,7 @@ export async function updateSession(request: NextRequest) {
 
   if (isAuthPage && user) {
     const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
+    url.pathname = "/operations";
     return NextResponse.redirect(url);
   }
 

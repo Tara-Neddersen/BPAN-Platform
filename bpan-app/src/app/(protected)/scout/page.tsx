@@ -44,27 +44,28 @@ export default async function ScoutPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="page-shell">
+      <section className="section-card card-density-comfy space-y-1.5">
         <h1 className="text-2xl font-bold tracking-tight">AI Literature Scout</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
+        <p className="text-sm text-muted-foreground">
           Your AI assistant reads ~10 new papers from your research area, summarizes the interesting ones, 
           and brainstorms ideas for your research. Completely free.
         </p>
-      </div>
+      </section>
 
-      <ScoutClient
-        findings={(findings || []) as ScoutFinding[]}
-        runs={(runs || []) as ScoutRun[]}
-        watchlistKeywords={keywords}
-        actions={{
-          updateStatus: updateScoutStatus,
-          updateNotes: updateScoutNotes,
-          deleteFinding: deleteScoutFinding,
-          saveToPapers: saveFindingToPapers,
-        }}
-      />
+      <section className="section-card card-density-comfy">
+        <ScoutClient
+          findings={(findings || []) as ScoutFinding[]}
+          runs={(runs || []) as ScoutRun[]}
+          watchlistKeywords={keywords}
+          actions={{
+            updateStatus: updateScoutStatus,
+            updateNotes: updateScoutNotes,
+            deleteFinding: deleteScoutFinding,
+            saveToPapers: saveFindingToPapers,
+          }}
+        />
+      </section>
     </div>
   );
 }
-

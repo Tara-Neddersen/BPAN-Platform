@@ -8,6 +8,8 @@ type PushPayload = {
   body: string;
   url?: string;
   tag?: string;
+  urgency?: "very-low" | "low" | "normal" | "high";
+  ttlSeconds?: number;
 };
 
 type PushDeliveryFailure = {
@@ -32,6 +34,13 @@ type WebPushSubscriptionRow = {
 };
 
 let vapidConfigured = false;
+
+function toWebPushTopic(value: string | undefined) {
+  if (!value) return undefined;
+  const normalized = value.replace(/[^A-Za-z0-9_-]/g, "-");
+  if (normalized.length === 0 || normalized.length > 32) return undefined;
+  return normalized;
+}
 
 function configureWebPush() {
   if (vapidConfigured) return true;
@@ -75,7 +84,11 @@ async function sendToRows(
   let delivered = 0;
   for (const row of rows) {
     try {
-      await webpush.sendNotification(toSubscription(row), body);
+      await webpush.sendNotification(toSubscription(row), body, {
+        TTL: Math.max(0, Math.floor(payload.ttlSeconds ?? 120)),
+        urgency: payload.urgency ?? "high",
+        topic: toWebPushTopic(payload.tag),
+      });
       delivered += 1;
     } catch (error) {
       const statusCode = typeof error === "object" && error && "statusCode" in error
@@ -91,7 +104,9 @@ async function sendToRows(
         message,
       });
 
-      if (statusCode === 404 || statusCode === 410) {
+      // 403 is commonly returned when a subscription was created with a different
+      // VAPID keypair. Treat it as stale so clients can re-subscribe cleanly.
+      if (statusCode === 403 || statusCode === 404 || statusCode === 410) {
         await admin.from("web_push_subscriptions").delete().eq("id", row.id);
       }
     }

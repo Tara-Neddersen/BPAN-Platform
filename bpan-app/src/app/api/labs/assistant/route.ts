@@ -10,6 +10,7 @@ import {
   citationSchema,
 } from "@/lib/labs-assistant/contracts";
 import { routeLabsAssistantIntent, type LabsAssistantIntent } from "@/lib/labs-assistant/intent-router";
+import { deliverLabAnnouncementNotifications } from "@/lib/lab-announcement-notification-delivery";
 
 type ReagentRow = {
   id: string;
@@ -1510,6 +1511,14 @@ export async function POST(req: NextRequest) {
         if (announcementError || !announcementRow?.id) {
           return NextResponse.json({ error: announcementError?.message || "Failed to post announcement." }, { status: 400 });
         }
+
+        void deliverLabAnnouncementNotifications({
+          labId,
+          senderUserId: user.id,
+          announcementId: String(announcementRow.id),
+          title: String(actionPlanRaw.title),
+          body: String(actionPlanRaw.body),
+        });
 
         const threadId = await ensureGeneralLabThread(supabase, labId, user.id);
         if (!threadId) {

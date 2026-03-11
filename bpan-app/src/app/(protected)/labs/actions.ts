@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { fetchLabShellSummary, isMissingLabRelationError } from "@/lib/labs";
 import { createServiceClient } from "@/lib/supabase/service";
+import { deliverLabAnnouncementNotifications } from "@/lib/lab-announcement-notification-delivery";
 import type { PlatformLabRole, PlatformSharedEditPolicy } from "@/types";
 import { ACTIVE_LAB_COOKIE } from "@/lib/active-lab-context";
 
@@ -758,6 +759,15 @@ export async function createLabAnnouncement(formData: FormData) {
     .single();
 
   if (error) throw new Error(error.message || "Failed to post announcement.");
+
+  void deliverLabAnnouncementNotifications({
+    labId,
+    senderUserId: user.id,
+    announcementId: String(data.id),
+    title: String(data.title),
+    body: String(data.body),
+  });
+
   revalidatePath("/labs");
   return data;
 }
