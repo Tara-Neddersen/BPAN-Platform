@@ -29,6 +29,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
+import { maybeDecodeRtf } from "@/lib/results-import";
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -264,15 +265,17 @@ export function BehaviorImportDialog({
   // ── File upload ──
   const handleFile = useCallback(
     (file: File) => {
+      const ext = file.name.split(".").pop()?.toLowerCase();
       const reader = new FileReader();
       reader.onload = (e) => {
-        const text = e.target?.result as string;
+        const raw = String(e.target?.result || "");
+        const text = ext === "rtf" ? maybeDecodeRtf(raw) : raw;
         if (text) {
           setRawText(text);
           doParse(text);
         }
       };
-      reader.readAsText(file);
+      reader.readAsText(file, ext === "rtf" ? "windows-1252" : undefined);
     },
     [doParse]
   );
@@ -508,14 +511,14 @@ export function BehaviorImportDialog({
                   Upload tracking output file
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Drag & drop or click — supports .txt files from EthoVision,
+                  Drag & drop or click — supports .txt/.rtf files from EthoVision,
                   ABET II, and similar systems
                 </p>
                 <input
                   ref={fileRef}
                   type="file"
                   className="hidden"
-                  accept=".txt,.text,.csv,.tsv,.dat"
+                  accept=".txt,.text,.rtf,.csv,.tsv,.dat"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) handleFile(file);
