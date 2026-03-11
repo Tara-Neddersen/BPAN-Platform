@@ -4,8 +4,6 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
   Upload,
   FileText,
-  Check,
-  AlertTriangle,
   Loader2,
   X,
 } from "lucide-react";
@@ -29,7 +27,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
-import { maybeDecodeRtf } from "@/lib/results-import";
+import { maybeDecodeRtf, parseMetricReportPreview } from "@/lib/results-import";
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +38,11 @@ export interface ParsedMeasure {
   type: "numeric" | "text";
   data: Record<string, number | string>; // fileAnimalId → value
 }
+
+type ParseBehaviorTrackingResult = {
+  measures: ParsedMeasure[];
+  errors: string[];
+};
 
 function measureNameToKey(name: string): string {
   return name
@@ -53,7 +56,7 @@ function measureNameToKey(name: string): string {
  * Parse raw text output from behavioral tracking systems (Noldus EthoVision, ABET II, etc.)
  * Expects sections with a measure header followed by rows of animal data.
  */
-export function parseBehaviorTrackingOutput(rawText: string): ParsedMeasure[] {
+function parseBehaviorTrackingOutputLegacy(rawText: string): ParsedMeasure[] {
   const lines = rawText.split("\n");
   const measures: ParsedMeasure[] = [];
   let currentMeasure: ParsedMeasure | null = null;
@@ -152,6 +155,57 @@ export function parseBehaviorTrackingOutput(rawText: string): ParsedMeasure[] {
   return measures.filter((m) => Object.keys(m.data).length > 0);
 }
 
+export function parseBehaviorTrackingOutput(rawText: string): ParseBehaviorTrackingResult {
+  const reportPreview = parseMetricReportPreview(rawText);
+  if (reportPreview) {
+    const ignoredColumns = new Set([
+      "Animal number",
+      "BPAN cohort number",
+      "BPAN animal number",
+    ]);
+
+    const measures: ParsedMeasure[] = reportPreview.columns
+      .filter((column) => !ignoredColumns.has(column.name))
+      .map((column) => {
+        const metricName = column.name;
+        const unitMatch = metricName.match(/\(([^)]+)\)\s*$/);
+        const unit = unitMatch ? unitMatch[1] : undefined;
+        const name = unitMatch
+          ? metricName.slice(0, metricName.lastIndexOf(`(${unit})`)).trim()
+          : metricName;
+
+        const data = Object.fromEntries(
+          reportPreview.data.flatMap((row) => {
+            const animalId = String(row["Animal number"] ?? "").trim();
+            const value = row[metricName];
+            if (!animalId || value === null || value === undefined || value === "") return [];
+            if (typeof value !== "number" && typeof value !== "string") return [];
+            return [[animalId, value]];
+          })
+        ) as Record<string, number | string>;
+
+        return {
+          key: measureNameToKey(name),
+          name,
+          unit,
+          type: (column.type === "numeric" ? "numeric" : "text") as "numeric" | "text",
+          data,
+        };
+      })
+      .filter((measure) => Object.keys(measure.data).length > 0);
+
+    return {
+      measures,
+      errors: reportPreview.errors,
+    };
+  }
+
+  return {
+    measures: parseBehaviorTrackingOutputLegacy(rawText),
+    errors: [],
+  };
+}
+
 // ─── Dialog Props ────────────────────────────────────────────────────────────
 
 const EXPERIMENT_LABELS: Record<string, string> = {
@@ -243,11 +297,17 @@ export function BehaviorImportDialog({
   // ── Parse the raw text ──
   const doParse = useCallback((text: string) => {
     const result = parseBehaviorTrackingOutput(text);
-    setParsed(result);
+    if (result.errors.length > 0) {
+      setParsed(null);
+      toast.error(result.errors[0]);
+      return;
+    }
+
+    setParsed(result.measures);
 
     // Auto-select measures that have meaningful (non-all-zero) data
     const autoSelect = new Set<string>();
-    for (const m of result) {
+    for (const m of result.measures) {
       const values = Object.values(m.data);
       if (values.length === 0) continue;
       const numericValues = values.filter(
