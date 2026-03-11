@@ -235,7 +235,7 @@ export function parseMetricReportPreview(rawInput: string): ParsedImportPreview 
         (dataIndex >= 0 ? cells[dataIndex] : undefined) ?? cells[cells.length - 1];
       const value = cleanMetricValue(preferredValue, animalId) ?? cleanMetricValue(fallbackValue, animalId);
 
-      const row = rowsByAnimal.get(animalId) ?? (() => {
+      const row: Record<string, unknown> = rowsByAnimal.get(animalId) ?? (() => {
         const identifiers = extractAnimalIdentifiers(animalId);
         return {
           "Animal number": animalId,
