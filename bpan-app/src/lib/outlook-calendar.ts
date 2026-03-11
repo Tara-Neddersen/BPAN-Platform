@@ -1,7 +1,7 @@
 const MS_AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 const MS_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const MS_GRAPH_BASE = "https://graph.microsoft.com/v1.0";
-const OUTLOOK_SCOPE = "offline_access User.Read Calendars.ReadWrite";
+const OUTLOOK_SCOPE = "offline_access User.Read Calendars.ReadWrite Calendars.ReadWrite.Shared";
 
 function getBaseUrl() {
   return process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
@@ -86,6 +86,7 @@ export async function getOutlookCalendarEmail(accessToken: string): Promise<stri
 }
 
 type OutlookEventInput = {
+  calendarId?: string | null;
   eventId?: string | null;
   subject: string;
   body?: string | null;
@@ -107,9 +108,12 @@ export async function upsertOutlookCalendarEvent(accessToken: string, input: Out
     end: { dateTime: end.toISOString(), timeZone: "UTC" },
   };
 
+  const calendarPath = input.calendarId
+    ? `/me/calendars/${encodeURIComponent(input.calendarId)}/events`
+    : "/me/events";
   const url = input.eventId
-    ? `${MS_GRAPH_BASE}/me/events/${encodeURIComponent(input.eventId)}`
-    : `${MS_GRAPH_BASE}/me/events`;
+    ? `${MS_GRAPH_BASE}${calendarPath}/${encodeURIComponent(input.eventId)}`
+    : `${MS_GRAPH_BASE}${calendarPath}`;
   const method = input.eventId ? "PATCH" : "POST";
   const res = await fetch(url, {
     method,
@@ -125,11 +129,31 @@ export async function upsertOutlookCalendarEvent(accessToken: string, input: Out
   return data as { id: string; webLink?: string };
 }
 
+export async function deleteOutlookCalendarEvent(
+  accessToken: string,
+  input: { eventId: string; calendarId?: string | null },
+) {
+  const calendarPath = input.calendarId
+    ? `/me/calendars/${encodeURIComponent(input.calendarId)}/events`
+    : "/me/events";
+  const res = await fetch(`${MS_GRAPH_BASE}${calendarPath}/${encodeURIComponent(input.eventId)}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Prefer: 'outlook.timezone="UTC"',
+    },
+  });
+  if (!res.ok) throw new Error(`Outlook Calendar event delete failed: ${await res.text()}`);
+}
+
 export async function listOutlookCalendarEvents(
   accessToken: string,
-  input?: { startDateTime?: string; endDateTime?: string; top?: number }
+  input?: { calendarId?: string | null; startDateTime?: string; endDateTime?: string; top?: number }
 ) {
-  const url = new URL(`${MS_GRAPH_BASE}/me/calendarView`);
+  const basePath = input?.calendarId
+    ? `${MS_GRAPH_BASE}/me/calendars/${encodeURIComponent(input.calendarId)}/calendarView`
+    : `${MS_GRAPH_BASE}/me/calendarView`;
+  const url = new URL(basePath);
   if (input?.startDateTime) url.searchParams.set("startDateTime", input.startDateTime);
   if (input?.endDateTime) url.searchParams.set("endDateTime", input.endDateTime);
   url.searchParams.set("$top", String(input?.top ?? 200));
@@ -151,6 +175,8 @@ export async function listOutlookCalendarEvents(
     end?: { dateTime?: string; timeZone?: string };
     location?: { displayName?: string };
     webLink?: string;
+    isCancelled?: boolean;
+    body?: { content?: string; contentType?: string };
     lastModifiedDateTime?: string;
   }>;
 }
