@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Loader2, Save, ChevronDown, ChevronRight, Plus, Check, Upload, Eye, EyeOff, Camera, ExternalLink, Image as ImageIcon, Download, MoreHorizontal, Trash2, RotateCcw } from "lucide-react";
+import { Loader2, Save, ChevronDown, ChevronRight, Plus, Check, Upload, Eye, EyeOff, Camera, ExternalLink, Image as ImageIcon, Download, MoreHorizontal, Trash2, RotateCcw, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,6 +38,8 @@ const CAGE_IMAGE_KEY = "__cage_image";
 const CAGE_IMAGE_LIST_KEY = "__cage_images";
 const RAW_DATA_URL_KEY = "__raw_data_url";
 const RAW_DATA_URL_LIST_KEY = "__raw_data_urls";
+const ATTACHMENT_FOLDER_URL_KEY = "__attachment_folder_url";
+const ATTACHMENT_FOLDER_URL_LIST_KEY = "__attachment_folder_urls";
 
 function isRotarodTrialWithAveragesExperiment(exp: string) {
   return exp === "rotarod_test1" || exp === "rotarod_test2";
@@ -66,6 +68,12 @@ function applyAttachmentUrls(measures: MeasureMap, arrayKey: string, legacyKey: 
     [arrayKey]: normalized,
     [legacyKey]: normalized[0] ?? null,
   };
+}
+
+function normalizeUrlList(urls: string[]) {
+  return urls
+    .map((url) => (typeof url === "string" ? url.trim() : ""))
+    .filter((url, index, arr) => url.length > 0 && arr.indexOf(url) === index);
 }
 
 function toNumericOrNull(value: MeasureValue | undefined) {
@@ -554,7 +562,7 @@ export function ColonyResultsTab({
       });
       setDirtyKeys((prev) => new Set(prev).add(key));
     },
-    [applyAttachmentUrls, getRowData]
+    [getRowData]
   );
 
   // Update notes for an animal
@@ -1468,8 +1476,12 @@ function CohortGroup({
                     experiment={experiment}
                     timepoint={timepoint}
                     currentUrls={getAttachmentUrls(data.measures, CAGE_IMAGE_LIST_KEY, CAGE_IMAGE_KEY)}
+                    currentFolderUrls={getAttachmentUrls(data.measures, ATTACHMENT_FOLDER_URL_LIST_KEY, ATTACHMENT_FOLDER_URL_KEY)}
                     onChange={(urls) =>
                       updateAttachments(animal.id, timepoint, experiment, CAGE_IMAGE_LIST_KEY, CAGE_IMAGE_KEY, urls)
+                    }
+                    onFoldersChange={(urls) =>
+                      updateAttachments(animal.id, timepoint, experiment, ATTACHMENT_FOLDER_URL_LIST_KEY, ATTACHMENT_FOLDER_URL_KEY, urls)
                     }
                   />
                 ) : (
@@ -1479,8 +1491,12 @@ function CohortGroup({
                     experiment={experiment}
                     timepoint={timepoint}
                     currentUrls={getAttachmentUrls(data.measures, RAW_DATA_URL_LIST_KEY, RAW_DATA_URL_KEY)}
+                    currentFolderUrls={getAttachmentUrls(data.measures, ATTACHMENT_FOLDER_URL_LIST_KEY, ATTACHMENT_FOLDER_URL_KEY)}
                     onChange={(urls) =>
                       updateAttachments(animal.id, timepoint, experiment, RAW_DATA_URL_LIST_KEY, RAW_DATA_URL_KEY, urls)
+                    }
+                    onFoldersChange={(urls) =>
+                      updateAttachments(animal.id, timepoint, experiment, ATTACHMENT_FOLDER_URL_LIST_KEY, ATTACHMENT_FOLDER_URL_KEY, urls)
                     }
                   />
                 )}
@@ -1511,16 +1527,23 @@ function CageImageCell({
   experiment,
   timepoint,
   currentUrls,
+  currentFolderUrls,
   onChange,
+  onFoldersChange,
 }: {
   cohortName: string;
   animalIdentifier: string;
   experiment: string;
   timepoint: number;
   currentUrls: string[];
+  currentFolderUrls: string[];
   onChange: (urls: string[]) => void;
+  onFoldersChange: (urls: string[]) => void;
 }) {
   const [uploading, setUploading] = useState(false);
+  const [editingFolder, setEditingFolder] = useState(false);
+  const [folderInputVal, setFolderInputVal] = useState("");
+  const [editingFolderIndex, setEditingFolderIndex] = useState<number | null>(null);
   const fileRef = useCallback((input: HTMLInputElement | null) => {
     if (input) input.value = "";
   }, []);
@@ -1593,6 +1616,88 @@ function CageImageCell({
           ))}
         </div>
       )}
+      {editingFolder ? (
+        <div className="flex items-center gap-1">
+          <Input
+            className="h-6 text-[10px] w-full min-w-[120px]"
+            placeholder="Paste folder URL..."
+            value={folderInputVal}
+            autoFocus
+            onChange={(e) => setFolderInputVal(e.target.value)}
+            onBlur={() => {
+              const nextUrls = [...currentFolderUrls];
+              const trimmed = folderInputVal.trim();
+              if (editingFolderIndex === null) {
+                if (trimmed) nextUrls.push(trimmed);
+              } else if (trimmed) {
+                nextUrls[editingFolderIndex] = trimmed;
+              } else {
+                nextUrls.splice(editingFolderIndex, 1);
+              }
+              onFoldersChange(normalizeUrlList(nextUrls));
+              setEditingFolder(false);
+              setEditingFolderIndex(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const nextUrls = [...currentFolderUrls];
+                const trimmed = folderInputVal.trim();
+                if (editingFolderIndex === null) {
+                  if (trimmed) nextUrls.push(trimmed);
+                } else if (trimmed) {
+                  nextUrls[editingFolderIndex] = trimmed;
+                } else {
+                  nextUrls.splice(editingFolderIndex, 1);
+                }
+                onFoldersChange(normalizeUrlList(nextUrls));
+                setEditingFolder(false);
+                setEditingFolderIndex(null);
+              }
+              if (e.key === "Escape") {
+                setEditingFolder(false);
+                setEditingFolderIndex(null);
+              }
+            }}
+          />
+        </div>
+      ) : null}
+      {currentFolderUrls.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {currentFolderUrls.map((url, index) => (
+            <div key={`${url}-${index}`} className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[10px]">
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-amber-600 hover:text-amber-800 transition-colors"
+                title={url}
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+              </a>
+              <button
+                type="button"
+                className="text-slate-500 hover:text-slate-700"
+                title="Edit folder URL"
+                onClick={() => {
+                  setFolderInputVal(url);
+                  setEditingFolderIndex(index);
+                  setEditingFolder(true);
+                }}
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                className="text-red-500 hover:text-red-700"
+                title="Remove folder"
+                onClick={() => onFoldersChange(currentFolderUrls.filter((_, currentIndex) => currentIndex !== index))}
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <label className="cursor-pointer flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors" title={currentUrls.length > 0 ? "Upload more images to Google Drive" : "Upload cage image to Google Drive"}>
           {uploading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1610,6 +1715,19 @@ function CageImageCell({
             disabled={uploading}
           />
       </label>
+      <button
+        type="button"
+        onClick={() => {
+          setFolderInputVal("");
+          setEditingFolderIndex(null);
+          setEditingFolder(true);
+        }}
+        className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+        title="Attach folder link"
+      >
+        <FolderOpen className="w-3.5 h-3.5" />
+        <span className="text-[10px]">{currentFolderUrls.length > 0 ? "Add folder" : "Folder"}</span>
+      </button>
     </div>
   );
 }
@@ -1622,16 +1740,20 @@ function RawDataLinkCell({
   experiment,
   timepoint,
   currentUrls,
+  currentFolderUrls,
   onChange,
+  onFoldersChange,
 }: {
   cohortName: string;
   animalIdentifier: string;
   experiment: string;
   timepoint: number;
   currentUrls: string[];
+  currentFolderUrls: string[];
   onChange: (urls: string[]) => void;
+  onFoldersChange: (urls: string[]) => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState<"file" | "folder" | null>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [inputVal, setInputVal] = useState("");
@@ -1682,12 +1804,13 @@ function RawDataLinkCell({
       <div className="flex items-center gap-1 min-w-[70px]">
         <Input
           className="h-6 text-[10px] w-full min-w-[120px]"
-          placeholder="Paste Google Drive URL..."
+          placeholder={editing === "folder" ? "Paste folder URL..." : "Paste file URL..."}
           value={inputVal}
           autoFocus
           onChange={(e) => setInputVal(e.target.value)}
           onBlur={() => {
-            const nextUrls = [...currentUrls];
+            const sourceUrls = editing === "folder" ? currentFolderUrls : currentUrls;
+            const nextUrls = [...sourceUrls];
             const trimmed = inputVal.trim();
             if (editingIndex === null) {
               if (trimmed) nextUrls.push(trimmed);
@@ -1696,13 +1819,15 @@ function RawDataLinkCell({
             } else if (editingIndex !== null) {
               nextUrls.splice(editingIndex, 1);
             }
-            onChange(nextUrls);
-            setEditing(false);
+            if (editing === "folder") onFoldersChange(normalizeUrlList(nextUrls));
+            else onChange(normalizeUrlList(nextUrls));
+            setEditing(null);
             setEditingIndex(null);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
-              const nextUrls = [...currentUrls];
+              const sourceUrls = editing === "folder" ? currentFolderUrls : currentUrls;
+              const nextUrls = [...sourceUrls];
               const trimmed = inputVal.trim();
               if (editingIndex === null) {
                 if (trimmed) nextUrls.push(trimmed);
@@ -1711,12 +1836,13 @@ function RawDataLinkCell({
               } else {
                 nextUrls.splice(editingIndex, 1);
               }
-              onChange(nextUrls);
-              setEditing(false);
+              if (editing === "folder") onFoldersChange(normalizeUrlList(nextUrls));
+              else onChange(normalizeUrlList(nextUrls));
+              setEditing(null);
               setEditingIndex(null);
             }
             if (e.key === "Escape") {
-              setEditing(false);
+              setEditing(null);
               setEditingIndex(null);
             }
           }}
@@ -1747,7 +1873,7 @@ function RawDataLinkCell({
                 onClick={() => {
                   setInputVal(url);
                   setEditingIndex(index);
-                  setEditing(true);
+                  setEditing("file");
                 }}
               >
                 ✎
@@ -1764,18 +1890,69 @@ function RawDataLinkCell({
           ))}
         </div>
       )}
+      {currentFolderUrls.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {currentFolderUrls.map((url, index) => (
+            <div key={`${url}-${index}`} className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[10px]">
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-amber-600 hover:text-amber-800 transition-colors"
+                title={url}
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+              </a>
+              <button
+                type="button"
+                className="text-slate-500 hover:text-slate-700"
+                title="Edit folder URL"
+                onClick={() => {
+                  setInputVal(url);
+                  setEditingIndex(index);
+                  setEditing("folder");
+                }}
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                className="text-red-500 hover:text-red-700"
+                title="Remove folder"
+                onClick={() => onFoldersChange(currentFolderUrls.filter((_, currentIndex) => currentIndex !== index))}
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="flex items-center gap-1.5">
         <button
           onClick={() => {
             setInputVal("");
             setEditingIndex(null);
-            setEditing(true);
+            setEditing("file");
           }}
           className="flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors"
-          title="Paste a URL"
+          title="Paste a file URL"
         >
           <ExternalLink className="w-3.5 h-3.5" />
           <span className="text-[10px]">{currentUrls.length > 0 ? "Add link" : "Link"}</span>
+        </button>
+        <span className="text-muted-foreground/30 text-[10px]">|</span>
+        <button
+          type="button"
+          onClick={() => {
+            setInputVal("");
+            setEditingIndex(null);
+            setEditing("folder");
+          }}
+          className="flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors"
+          title="Paste a folder URL"
+        >
+          <FolderOpen className="w-3.5 h-3.5" />
+          <span className="text-[10px]">{currentFolderUrls.length > 0 ? "Add folder" : "Folder"}</span>
         </button>
         <span className="text-muted-foreground/30 text-[10px]">|</span>
         <label className="cursor-pointer flex items-center gap-0.5 text-muted-foreground hover:text-foreground transition-colors" title="Upload file to Google Drive">
