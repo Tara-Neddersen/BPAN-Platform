@@ -30,6 +30,7 @@ import {
   Upload,
   Layers3,
   Play,
+  Sparkles,
 } from "lucide-react";
 import {
   createExperiment,
@@ -90,11 +91,8 @@ const PRIMARY_TABS: Array<{ key: TabKey; label: string; icon: React.ReactNode }>
   { key: "templates", label: "Templates", icon: <Layers3 className="h-4 w-4" /> },
   { key: "runs", label: "Runs", icon: <Play className="h-4 w-4" /> },
   { key: "schedule", label: "Schedule", icon: <GripVertical className="h-4 w-4" /> },
-];
-
-const OVERFLOW_TABS: Array<{ key: TabKey; label: string }> = [
-  { key: "protocols", label: "Protocols" },
-  { key: "reagents", label: "Reagents" },
+  { key: "protocols", label: "Protocols", icon: <FileText className="h-4 w-4" /> },
+  { key: "reagents", label: "Reagents", icon: <Beaker className="h-4 w-4" /> },
 ];
 
 const COLONY_EXP_LABELS: Record<string, string> = {
@@ -219,8 +217,6 @@ export function ExperimentsClient({
   const [tab, setTab] = useState<TabKey>("calendar");
   const [showNewExperiment, setShowNewExperiment] = useState(false);
   const [editingExperiment, setEditingExperiment] = useState<Experiment | null>(null);
-  const activeOverflowTab =
-    OVERFLOW_TABS.find((overflowTab) => overflowTab.key === tab)?.key || "";
 
   return (
     <div className="page-shell">
@@ -261,7 +257,7 @@ export function ExperimentsClient({
       </details>
 
       {/* Tab bar */}
-      <div className="sticky-section-switcher flex items-end justify-between gap-2 border-b px-2 pt-1.5">
+      <div className="sticky-section-switcher border-b px-2 pt-1.5">
         <div className="flex overflow-x-auto">
           {PRIMARY_TABS.map((t) => (
             <button
@@ -276,24 +272,6 @@ export function ExperimentsClient({
               {t.icon} {t.label}
             </button>
           ))}
-        </div>
-        <div className="pb-2">
-          <select
-            value={activeOverflowTab}
-            onChange={(event) => {
-              const next = event.target.value as TabKey;
-              if (next) setTab(next);
-            }}
-            className="touch-target h-10 rounded-md border border-input bg-background px-3 text-sm"
-            aria-label="More experiments tabs"
-          >
-            <option value="">More sections</option>
-            {OVERFLOW_TABS.map((overflowTab) => (
-              <option key={overflowTab.key} value={overflowTab.key}>
-                {overflowTab.label}
-              </option>
-            ))}
-          </select>
         </div>
       </div>
 
@@ -2527,7 +2505,12 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Protocol | null>(null);
   const [steps, setSteps] = useState<ProtocolStep[]>([]);
+  const [protocolTitle, setProtocolTitle] = useState("");
+  const [protocolCategory, setProtocolCategory] = useState("");
+  const [protocolDescription, setProtocolDescription] = useState("");
+  const [protocolSourceText, setProtocolSourceText] = useState("");
   const [pending, setPending] = useState(false);
+  const [aiFilling, setAiFilling] = useState(false);
   const [protocolFigureLinksText, setProtocolFigureLinksText] = useState("");
   const [protocolFigureUploadBusy, setProtocolFigureUploadBusy] = useState(false);
   const [protocolFileLinksText, setProtocolFileLinksText] = useState("");
@@ -2537,6 +2520,10 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
 
   function startNew() {
     setEditing(null);
+    setProtocolTitle("");
+    setProtocolCategory("");
+    setProtocolDescription("");
+    setProtocolSourceText("");
     setSteps([{ id: crypto.randomUUID(), text: "", duration: "" }]);
     setProtocolFigureLinksText("");
     setProtocolFileLinksText("");
@@ -2545,10 +2532,55 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
 
   function startEdit(p: Protocol) {
     setEditing(p);
+    setProtocolTitle(p.title || "");
+    setProtocolCategory(p.category || "");
+    setProtocolDescription(p.description || "");
+    setProtocolSourceText("");
     setSteps(p.steps.length > 0 ? p.steps : [{ id: crypto.randomUUID(), text: "", duration: "" }]);
     setProtocolFigureLinksText(getProtocolFigureLinks(p).join("\n"));
     setProtocolFileLinksText((p.file_links || []).join("\n"));
     setShowForm(true);
+  }
+
+  async function autofillProtocolDraft() {
+    if (protocolSourceText.trim().length < 20) {
+      toast.error("Paste some protocol text first so AI has something to extract.");
+      return;
+    }
+
+    setAiFilling(true);
+    try {
+      const res = await fetch("/api/protocol-assist", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sourceText: protocolSourceText }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "AI fill failed.");
+      }
+
+      setProtocolTitle(typeof data.title === "string" ? data.title : "");
+      setProtocolCategory(typeof data.category === "string" ? data.category : "");
+      setProtocolDescription(typeof data.description === "string" ? data.description : "");
+      setSteps(
+        Array.isArray(data.steps) && data.steps.length > 0
+          ? data.steps.map((step: { text?: string; duration?: string }, index: number) => ({
+              id: crypto.randomUUID(),
+              text: typeof step.text === "string" ? step.text : `Step ${index + 1}`,
+              duration: typeof step.duration === "string" ? step.duration : "",
+            }))
+          : [{ id: crypto.randomUUID(), text: "", duration: "" }],
+      );
+      toast.success("Protocol draft filled. You can edit anything before saving.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "AI fill failed.");
+    } finally {
+      setAiFilling(false);
+    }
   }
 
   async function uploadProtocolFigureToDrive(file: File) {
@@ -2611,6 +2643,9 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
 
   async function handleSubmit(formData: FormData) {
     setPending(true);
+    formData.set("title", protocolTitle);
+    formData.set("category", protocolCategory);
+    formData.set("description", protocolDescription);
     formData.set("steps", JSON.stringify(steps.filter((s) => s.text.trim())));
     formData.set("figure_links", protocolFigureLinksText);
     formData.set("file_links", protocolFileLinksText);
@@ -2623,6 +2658,10 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
       }
       setShowForm(false);
       setEditing(null);
+      setProtocolTitle("");
+      setProtocolCategory("");
+      setProtocolDescription("");
+      setProtocolSourceText("");
       setProtocolFigureLinksText("");
       setProtocolFileLinksText("");
     } catch (err) {
@@ -2648,20 +2687,52 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="text-xs font-medium mb-1 block">Title *</label>
-                  <Input name="title" defaultValue={editing?.title || ""} required placeholder="e.g. Western Blot Protocol" />
+                  <Input
+                    name="title"
+                    value={protocolTitle}
+                    onChange={(e) => setProtocolTitle(e.target.value)}
+                    required
+                    placeholder="e.g. Western Blot Protocol"
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-medium mb-1 block">Category</label>
-                  <Input name="category" defaultValue={editing?.category || ""} placeholder="e.g. Protein Analysis" />
+                  <Input
+                    name="category"
+                    value={protocolCategory}
+                    onChange={(e) => setProtocolCategory(e.target.value)}
+                    placeholder="e.g. Protein Analysis"
+                  />
                 </div>
               </div>
               <div>
                 <label className="text-xs font-medium mb-1 block">Description</label>
                 <textarea
                   name="description"
-                  defaultValue={editing?.description || ""}
+                  value={protocolDescription}
+                  onChange={(e) => setProtocolDescription(e.target.value)}
                   placeholder="Protocol description..."
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-none h-16"
+                />
+              </div>
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-medium">AI Fill From Protocol Text</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Paste a protocol section, SOP, or methods text and BPAN will draft the title, description, and steps for you.
+                    </p>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={autofillProtocolDraft} disabled={aiFilling}>
+                    {aiFilling ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1 h-3.5 w-3.5" />}
+                    AI Fill
+                  </Button>
+                </div>
+                <textarea
+                  value={protocolSourceText}
+                  onChange={(e) => setProtocolSourceText(e.target.value)}
+                  placeholder="Paste the protocol text here. Example: acclimate mice for 30 min, run LDB for 10 min, clean arena with 70% ethanol..."
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm resize-y min-h-28"
                 />
               </div>
               <div>
@@ -2788,7 +2859,17 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                 </Button>
               </div>
               <div className="flex gap-2 justify-end">
-                <Button type="button" variant="outline" onClick={() => { setShowForm(false); setEditing(null); }}>Cancel</Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setShowForm(false);
+                    setEditing(null);
+                    setProtocolSourceText("");
+                  }}
+                >
+                  Cancel
+                </Button>
                 <Button type="submit" disabled={pending}>
                   {pending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
                   {editing ? "Update" : "Create"}

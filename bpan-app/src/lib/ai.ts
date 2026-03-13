@@ -380,6 +380,120 @@ Highlighted text to extract methods from: "${highlight}"`;
   return JSON.parse(extractJSON(text)) as ExtractedMethods;
 }
 
+const PROTOCOL_DRAFT_SYSTEM_PROMPT = `You are a biomedical research assistant helping a lab software user turn an unstructured protocol into a clean editable protocol draft.
+
+Read the provided protocol text and extract the best possible draft for a protocol form.
+
+Respond with ONLY valid JSON using this exact shape:
+{
+  "title": "short protocol title",
+  "category": "short category label or null",
+  "description": "1-3 sentence summary for the protocol form",
+  "steps": [
+    { "text": "step instruction", "duration": "optional duration or empty string" }
+  ]
+}
+
+Rules:
+- Keep the title concise and human-friendly.
+- Category should be short, like "Behavior", "Imaging", "Surgery", "Histology", or null if unclear.
+- Description should summarize the protocol in plain language.
+- Break the protocol into clear ordered steps.
+- Preserve specific timings and quantities when they appear.
+- If durations are not explicit, use an empty string.
+- Do not invent file links, figures, or metadata outside this schema.
+- If the source is messy, still return the best usable draft.`;
+
+export interface ExtractedProtocolDraft {
+  title: string;
+  category: string | null;
+  description: string;
+  steps: Array<{ text: string; duration?: string }>;
+}
+
+export async function extractProtocolDraft(sourceText: string): Promise<ExtractedProtocolDraft> {
+  const text = await callAI(
+    PROTOCOL_DRAFT_SYSTEM_PROMPT,
+    `Protocol source text:\n\n${sourceText}`,
+    900,
+  );
+
+  const parsed = JSON.parse(extractJSON(text)) as Partial<ExtractedProtocolDraft>;
+  const steps: Array<{ text: string; duration?: string }> = Array.isArray(parsed.steps)
+    ? parsed.steps.reduce<Array<{ text: string; duration?: string }>>((acc, step) => {
+        if (!step || typeof step !== "object") return acc;
+        const record = step as Record<string, unknown>;
+        const text = typeof record.text === "string" ? record.text.trim() : "";
+        if (!text) return acc;
+        const duration = typeof record.duration === "string" ? record.duration.trim() : "";
+        acc.push({ text, duration });
+        return acc;
+      }, [])
+    : [];
+
+  return {
+    title: typeof parsed.title === "string" ? parsed.title.trim() : "",
+    category:
+      typeof parsed.category === "string" && parsed.category.trim().length > 0 ? parsed.category.trim() : null,
+    description: typeof parsed.description === "string" ? parsed.description.trim() : "",
+    steps,
+  };
+}
+
+const TEMPLATE_DRAFT_SYSTEM_PROMPT = `You are a biomedical research assistant helping a lab software user create a reusable experiment template draft.
+
+Given free-form experiment, SOP, or study-planning text, extract the best editable template draft.
+
+Respond with ONLY valid JSON using this exact shape:
+{
+  "title": "template title",
+  "category": "short category label or null",
+  "description": "1-3 sentence summary",
+  "defaultAssignmentScope": "animal" | "cohort" | "study",
+  "schemaName": "result schema name",
+  "schemaDescription": "short explanation of what operators should capture"
+}
+
+Rules:
+- Keep the title concise and reusable.
+- Prefer category values like Behavior, Imaging, Surgery, Histology, Electrophysiology, Molecular, or null if unclear.
+- Choose the default assignment scope that best matches the described workflow.
+- Schema name should be short and operator-friendly.
+- Schema description should describe the expected result capture, not the whole study.`;
+
+export interface ExtractedTemplateDraft {
+  title: string;
+  category: string | null;
+  description: string;
+  defaultAssignmentScope: "animal" | "cohort" | "study";
+  schemaName: string;
+  schemaDescription: string;
+}
+
+export async function extractTemplateDraft(sourceText: string): Promise<ExtractedTemplateDraft> {
+  const text = await callAI(
+    TEMPLATE_DRAFT_SYSTEM_PROMPT,
+    `Template source text:\n\n${sourceText}`,
+    700,
+  );
+
+  const parsed = JSON.parse(extractJSON(text)) as Partial<ExtractedTemplateDraft>;
+  const assignmentScope =
+    parsed.defaultAssignmentScope === "cohort" || parsed.defaultAssignmentScope === "study"
+      ? parsed.defaultAssignmentScope
+      : "animal";
+
+  return {
+    title: typeof parsed.title === "string" ? parsed.title.trim() : "",
+    category:
+      typeof parsed.category === "string" && parsed.category.trim().length > 0 ? parsed.category.trim() : null,
+    description: typeof parsed.description === "string" ? parsed.description.trim() : "",
+    defaultAssignmentScope: assignmentScope,
+    schemaName: typeof parsed.schemaName === "string" && parsed.schemaName.trim() ? parsed.schemaName.trim() : "Default schema",
+    schemaDescription: typeof parsed.schemaDescription === "string" ? parsed.schemaDescription.trim() : "",
+  };
+}
+
 // ─── Extract Action Items from Meeting Notes ────────────────────────────────
 
 export async function extractActionItems(

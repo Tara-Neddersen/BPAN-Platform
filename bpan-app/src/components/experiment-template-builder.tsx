@@ -1,16 +1,18 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDown, ArrowUp, FlaskConical, Plus, Save, Trash2 } from "lucide-react";
+import * as XLSX from "xlsx";
+import { ArrowDown, ArrowUp, FlaskConical, Loader2, Plus, Save, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
-import type { Protocol } from "@/types";
+import type { DatasetColumn, Protocol } from "@/types";
 import { saveExperimentTemplate, deleteExperimentTemplate } from "@/app/(protected)/experiments/template-actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { parseTextDatasetPreview, detectDatasetColumnType } from "@/lib/dataset-preview";
 
 const COLUMN_TYPE_OPTIONS = [
   "text",
@@ -135,6 +137,45 @@ function slugifyKey(value: string) {
     .slice(0, 60);
 }
 
+function mapDatasetColumnType(column: DatasetColumn, values: unknown[]): ColumnType {
+  if (column.type === "numeric") return "number";
+  if (column.type === "date") return "date";
+
+  const nonEmpty = values.filter((value) => value !== null && value !== undefined && String(value).trim() !== "");
+  if (column.type === "categorical" && nonEmpty.length > 0) {
+    const uniqueCount = new Set(nonEmpty.map((value) => String(value).trim())).size;
+    return uniqueCount <= 12 ? "select" : "text";
+  }
+
+  return "text";
+}
+
+function columnsFromDatasetPreview(columns: DatasetColumn[], rows: Record<string, unknown>[]): ExperimentTemplateColumn[] {
+  return columns.map((column, index) => {
+    const values = rows.map((row) => row[column.name]);
+    const nonEmpty = values
+      .map((value) => (value == null ? "" : String(value).trim()))
+      .filter(Boolean);
+    const uniqueValues = Array.from(new Set(nonEmpty));
+    const inferredType = mapDatasetColumnType(column, values);
+
+    return {
+      key: slugifyKey(column.name) || `field_${index + 1}`,
+      label: column.name,
+      columnType: inferredType,
+      required: false,
+      defaultValue: "",
+      options: inferredType === "select" ? uniqueValues.slice(0, 12) : [],
+      unit: "",
+      helpText: "",
+      groupKey: "",
+      sortOrder: index,
+      isSystemDefault: false,
+      isEnabled: true,
+    };
+  });
+}
+
 function buildEmptyDraft(): TemplateDraft {
   return {
     id: null,
@@ -210,7 +251,11 @@ export function ExperimentTemplateBuilder({
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("new");
   const [draft, setDraft] = useState<TemplateDraft>(buildEmptyDraft);
   const [protocolPickerValue, setProtocolPickerValue] = useState<string>("");
+  const [templateSourceText, setTemplateSourceText] = useState<string>("");
+  const [isAiFilling, setIsAiFilling] = useState(false);
+  const [isExampleFileParsing, setIsExampleFileParsing] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const exampleFileInputRef = useRef<HTMLInputElement | null>(null);
 
   function updateDraft(patch: Partial<TemplateDraft>) {
     setDraft((current) => ({
@@ -380,6 +425,140 @@ export function ExperimentTemplateBuilder({
         toast.error(error instanceof Error ? error.message : "Failed to save template.");
       }
     });
+  }
+
+  async function handleAiFill() {
+    if (templateSourceText.trim().length < 20) {
+      toast.error("Paste some experiment or protocol text first so AI has enough context.");
+      return;
+    }
+
+    setIsAiFilling(true);
+    try {
+      const response = await fetch("/api/template-assist", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sourceText: templateSourceText }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "AI fill failed.");
+      }
+
+      updateDraft({
+        title: typeof data.title === "string" ? data.title : "",
+        category: typeof data.category === "string" ? data.category : "",
+        description: typeof data.description === "string" ? data.description : "",
+        defaultAssignmentScope:
+          data.defaultAssignmentScope === "cohort" || data.defaultAssignmentScope === "study"
+            ? data.defaultAssignmentScope
+            : "animal",
+        schemaName: typeof data.schemaName === "string" ? data.schemaName : "Default schema",
+        schemaDescription: typeof data.schemaDescription === "string" ? data.schemaDescription : "",
+      });
+      toast.success("Template draft filled. You can edit everything before saving.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "AI fill failed.");
+    } finally {
+      setIsAiFilling(false);
+    }
+  }
+
+  function applyDetectedColumns(columns: ExperimentTemplateColumn[]) {
+    if (columns.length === 0) {
+      toast.error("No columns were detected in that example file.");
+      return;
+    }
+
+    updateDraft({
+      columns: columns.map((column, index) => ({
+        ...column,
+        sortOrder: index,
+      })),
+    });
+    toast.success(`Detected ${columns.length} columns. You can edit, delete, or reorder them below.`);
+  }
+
+  function handleExampleFile(file: File) {
+    setIsExampleFileParsing(true);
+    const ext = file.name.split(".").pop()?.toLowerCase();
+
+    if (ext === "txt" || ext === "rtf" || ext === "csv" || ext === "tsv") {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const raw = String(event.target?.result || "");
+          const preview =
+            ext === "csv" || ext === "tsv"
+              ? parseTextDatasetPreview(raw)
+              : parseTextDatasetPreview(raw);
+
+          if (!preview.columns.length) {
+            throw new Error(
+              preview.parseError ||
+                "Could not detect columns from that file. Use CSV, TSV, TXT, RTF, XLSX, or XLS with a header row.",
+            );
+          }
+
+          if (preview.parseError) {
+            toast.warning(preview.parseError);
+          }
+
+          applyDetectedColumns(columnsFromDatasetPreview(preview.columns, preview.data));
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Failed to parse example file.");
+        } finally {
+          setIsExampleFileParsing(false);
+        }
+      };
+      reader.onerror = () => {
+        toast.error("Failed to read selected file.");
+        setIsExampleFileParsing(false);
+      };
+      reader.readAsText(file, ext === "rtf" ? "windows-1252" : undefined);
+      return;
+    }
+
+    if (ext === "xlsx" || ext === "xls") {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const workbook = XLSX.read(event.target?.result, { type: "array" });
+          const firstSheetName = workbook.SheetNames[0];
+          if (!firstSheetName) {
+            throw new Error("No worksheet found in the selected workbook.");
+          }
+
+          const sheet = workbook.Sheets[firstSheetName];
+          const data = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
+          const headers = Object.keys(data[0] || {});
+          if (headers.length === 0) {
+            throw new Error("No header row detected in the first sheet.");
+          }
+
+          const columns: DatasetColumn[] = headers.map((header) => ({
+            name: header,
+            type: detectDatasetColumnType(data.map((row) => row[header])),
+          }));
+          applyDetectedColumns(columnsFromDatasetPreview(columns, data));
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Failed to parse workbook.");
+        } finally {
+          setIsExampleFileParsing(false);
+        }
+      };
+      reader.onerror = () => {
+        toast.error("Failed to read selected file.");
+        setIsExampleFileParsing(false);
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
+    toast.error("Unsupported file type. Use CSV, TSV, TXT, RTF, XLSX, or XLS.");
+    setIsExampleFileParsing(false);
   }
 
   function handleDelete() {
@@ -641,6 +820,60 @@ export function ExperimentTemplateBuilder({
                   placeholder="Describe what operators should capture by default."
                   rows={2}
                 />
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-4 space-y-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">AI Fill Template</p>
+                  <p className="text-xs text-slate-600">
+                    Paste a study plan, SOP, or protocol summary and BPAN will draft the template details for you.
+                  </p>
+                </div>
+                <Button type="button" variant="outline" onClick={handleAiFill} disabled={isAiFilling}>
+                  {isAiFilling ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                  AI Fill
+                </Button>
+              </div>
+              <Textarea
+                value={templateSourceText}
+                onChange={(event) => setTemplateSourceText(event.target.value)}
+                placeholder="Paste experiment description, behavior battery notes, or protocol text here..."
+                rows={5}
+              />
+            </div>
+
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-4 space-y-3">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Example Data Sheet to Columns</p>
+                  <p className="text-xs text-slate-600">
+                    Upload a sample `.txt`, `.rtf`, `.csv`, `.tsv`, `.xlsx`, or `.xls` data file and BPAN will detect result columns for this template.
+                  </p>
+                </div>
+                <input
+                  ref={exampleFileInputRef}
+                  type="file"
+                  accept=".csv,.tsv,.txt,.rtf,.xlsx,.xls"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      handleExampleFile(file);
+                    }
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isExampleFileParsing}
+                  onClick={() => exampleFileInputRef.current?.click()}
+                >
+                  {isExampleFileParsing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                  Detect Columns
+                </Button>
               </div>
             </div>
 
