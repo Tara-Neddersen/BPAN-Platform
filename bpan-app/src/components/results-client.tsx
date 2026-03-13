@@ -62,6 +62,7 @@ import {
   type SnapshotReconciliationGuardrails,
 } from "@/lib/results-run-adapters";
 import { maybeDecodeRtf, parseMetricReportPreview } from "@/lib/results-import";
+import { exportResultsWorkspaceWorkbook } from "@/lib/results-export";
 
 // Dynamically import Plotly (it's heavy and client-only)
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -291,6 +292,8 @@ export function ResultsClient({
   const [showImport, setShowImport] = useState(initialOpenImport);
   const [showPaste, setShowPaste] = useState(false);
   const [showSheets, setShowSheets] = useState(false);
+  const [exportingSheetsBackup, setExportingSheetsBackup] = useState(false);
+  const [creatingLiveSyncSheet, setCreatingLiveSyncSheet] = useState(false);
 
   const resolveDatasetRunLink = useCallback(
     (dataset: ResultsDatasetRecord | null): DatasetRunLinkResolution => {
@@ -387,6 +390,55 @@ export function ResultsClient({
     );
   }, [datasetAnalyses, datasetFigures, selectedDataset, selectedRunResolution.mode]);
 
+  const exportAllResultsBackup = useCallback(() => {
+    exportResultsWorkspaceWorkbook(datasets, analyses, figures);
+    toast.success("Downloaded results backup workbook.");
+  }, [analyses, datasets, figures]);
+
+  const exportResultsBackupToGoogleSheets = useCallback(async () => {
+    setExportingSheetsBackup(true);
+    try {
+      const res = await fetch("/api/sheets/google/backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "results_workspace" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Failed to create Google Sheets backup.");
+        return;
+      }
+      if (json.spreadsheetUrl) {
+        window.open(String(json.spreadsheetUrl), "_blank", "noopener,noreferrer");
+      }
+      toast.success("Google Sheets backup created.");
+    } finally {
+      setExportingSheetsBackup(false);
+    }
+  }, []);
+
+  const createResultsLiveSyncGoogleSheet = useCallback(async () => {
+    setCreatingLiveSyncSheet(true);
+    try {
+      const res = await fetch("/api/sheets/google/mirror", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "results_workspace" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Failed to create live sync Google Sheet.");
+        return;
+      }
+      if (json.spreadsheetUrl) {
+        window.open(String(json.spreadsheetUrl), "_blank", "noopener,noreferrer");
+      }
+      toast.success("Live sync Google Sheet created.");
+    } finally {
+      setCreatingLiveSyncSheet(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!selectedDatasetId) return;
     const next = new URLSearchParams(searchParams?.toString() || "");
@@ -450,11 +502,64 @@ export function ResultsClient({
             </Button>
             {datasets.length > 0 && (
               <>
+                <Button variant="outline" onClick={exportAllResultsBackup} className="touch-target gap-2 hidden sm:inline-flex">
+                  <Download className="h-4 w-4" /> Export all backup
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={exportResultsBackupToGoogleSheets}
+                  className="touch-target gap-2 hidden sm:inline-flex"
+                  disabled={exportingSheetsBackup}
+                >
+                  {exportingSheetsBackup ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+                  Backup to Google Sheets
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={createResultsLiveSyncGoogleSheet}
+                  className="touch-target gap-2 hidden sm:inline-flex"
+                  disabled={creatingLiveSyncSheet}
+                >
+                  {creatingLiveSyncSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                  Create live sync sheet
+                </Button>
                 <Button variant="outline" onClick={() => setShowPaste(true)} className="touch-target gap-2 hidden sm:inline-flex">
                   <ClipboardPaste className="h-4 w-4" /> Paste data
                 </Button>
                 <Button variant="outline" onClick={() => setShowSheets(true)} className="touch-target gap-2 hidden sm:inline-flex">
                   <Link2 className="h-4 w-4" /> Link Google Sheet
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={exportAllResultsBackup}
+                  className="touch-target sm:hidden"
+                  aria-label="Export all backup"
+                  title="Export all backup"
+                >
+                  <Download className="h-4 w-4" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={exportResultsBackupToGoogleSheets}
+                  className="touch-target sm:hidden"
+                  aria-label="Backup to Google Sheets"
+                  title="Backup to Google Sheets"
+                  disabled={exportingSheetsBackup}
+                >
+                  {exportingSheetsBackup ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={createResultsLiveSyncGoogleSheet}
+                  className="touch-target sm:hidden"
+                  aria-label="Create live sync sheet"
+                  title="Create live sync sheet"
+                  disabled={creatingLiveSyncSheet}
+                >
+                  {creatingLiveSyncSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
                 </Button>
                 <Button
                   size="icon"
@@ -2685,6 +2790,7 @@ type GoogleSheetLink = {
   id: string;
   name: string;
   sheet_url: string;
+  sheet_title?: string | null;
   target: "auto" | "dataset" | "colony_results";
   import_config?: {
     selectedColumns?: string[];
@@ -3152,6 +3258,14 @@ function GoogleSheetsDialog({
                             variant="outline"
                             size="sm"
                             className="h-7 px-2 text-[11px]"
+                            onClick={() => window.open(link.sheet_url, "_blank", "noopener,noreferrer")}
+                          >
+                            Open sheet
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-[11px]"
                             onClick={() => syncLinks(link.id)}
                             disabled={syncing}
                           >
@@ -3177,7 +3291,12 @@ function GoogleSheetsDialog({
                           </Button>
                         </div>
                       </div>
-                      <p className="text-muted-foreground truncate">{link.sheet_url}</p>
+                      <p className="text-muted-foreground truncate">
+                        {link.sheet_title?.trim() || link.sheet_url}
+                      </p>
+                      {link.sheet_title?.trim() ? (
+                        <p className="text-[11px] text-muted-foreground truncate">{link.sheet_url}</p>
+                      ) : null}
                       <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
                         <Badge variant="secondary">{link.target}</Badge>
                         {link.last_synced_at ? <span>Last sync: {new Date(link.last_synced_at).toLocaleString()}</span> : <span>Never synced</span>}

@@ -1,4 +1,4 @@
-const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
+const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 
@@ -158,4 +158,179 @@ export async function fetchGoogleSheetRows(
     sheetTitle: resolvedTitle,
     rows,
   };
+}
+
+export type GoogleSheetWriteTab = {
+  title: string;
+  values: Array<Array<string | number | boolean>>;
+};
+
+export async function createGoogleSpreadsheet(
+  accessToken: string,
+  title: string,
+  sheetTitles: string[]
+) {
+  const uniqueTitles = Array.from(new Set(sheetTitles.filter(Boolean))).slice(0, 200);
+  const res = await fetch("https://sheets.googleapis.com/v4/spreadsheets", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      properties: { title },
+      sheets: uniqueTitles.map((sheetTitle) => ({
+        properties: { title: sheetTitle },
+      })),
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to create spreadsheet: ${await res.text()}`);
+  }
+
+  const payload = (await res.json()) as { spreadsheetId: string; spreadsheetUrl?: string | null };
+  return {
+    spreadsheetId: payload.spreadsheetId,
+    spreadsheetUrl: payload.spreadsheetUrl || `https://docs.google.com/spreadsheets/d/${payload.spreadsheetId}/edit`,
+  };
+}
+
+function quoteSheetTitleForRange(title: string) {
+  return `'${title.replace(/'/g, "''")}'`;
+}
+
+export async function writeGoogleSpreadsheetTabs(
+  accessToken: string,
+  spreadsheetId: string,
+  tabs: GoogleSheetWriteTab[]
+) {
+  const data = tabs.map((tab) => ({
+    range: `${quoteSheetTitleForRange(tab.title)}!A1`,
+    majorDimension: "ROWS",
+    values: tab.values.length > 0 ? tab.values : [[""]],
+  }));
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        valueInputOption: "USER_ENTERED",
+        data,
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Failed to write spreadsheet tabs: ${await res.text()}`);
+  }
+
+  return res.json();
+}
+
+export async function ensureGoogleSpreadsheetTabs(
+  accessToken: string,
+  spreadsheetId: string,
+  sheetTitles: string[]
+) {
+  const metadata = await getGoogleSpreadsheetMetadata(accessToken, spreadsheetId);
+  const existingTitles = new Set((metadata.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean));
+  const missingTitles = sheetTitles.filter((title) => !existingTitles.has(title));
+  if (missingTitles.length === 0) return;
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        requests: missingTitles.map((title) => ({
+          addSheet: {
+            properties: { title },
+          },
+        })),
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Failed to ensure spreadsheet tabs: ${await res.text()}`);
+  }
+}
+
+export async function clearGoogleSpreadsheetTabs(
+  accessToken: string,
+  spreadsheetId: string,
+  sheetTitles: string[]
+) {
+  if (sheetTitles.length === 0) return;
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchClear`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ranges: sheetTitles.map((title) => quoteSheetTitleForRange(title)),
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Failed to clear spreadsheet tabs: ${await res.text()}`);
+  }
+}
+
+export async function deleteGoogleSpreadsheetTabs(
+  accessToken: string,
+  spreadsheetId: string,
+  sheetTitles: string[]
+) {
+  if (sheetTitles.length === 0) return;
+  const metadata = await getGoogleSpreadsheetMetadata(accessToken, spreadsheetId);
+  const titleToSheetId = new Map(
+    (metadata.sheets || [])
+      .map((sheet) => [sheet.properties?.title, sheet.properties?.sheetId] as const)
+      .filter((entry): entry is [string, number] => Boolean(entry[0]) && typeof entry[1] === "number")
+  );
+  const existingIds = sheetTitles
+    .map((title) => titleToSheetId.get(title))
+    .filter((sheetId): sheetId is number => typeof sheetId === "number");
+  if (existingIds.length === 0) return;
+
+  const remainingSheetCount = (metadata.sheets || []).length - existingIds.length;
+  if (remainingSheetCount < 1) {
+    existingIds.pop();
+  }
+  if (existingIds.length === 0) return;
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        requests: existingIds.map((sheetId) => ({
+          deleteSheet: { sheetId },
+        })),
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Failed to delete spreadsheet tabs: ${await res.text()}`);
+  }
 }

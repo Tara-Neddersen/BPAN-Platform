@@ -5,6 +5,9 @@ export type GoogleSheetImportConfig = {
   selectedColumns?: string[];
   rowStart?: number;
   rowEnd?: number;
+  syncMode?: "import" | "mirror";
+  mirrorTarget?: "results_workspace" | "colony_results";
+  managedTabTitles?: string[];
   colonyMapping?: {
     animalKey?: string;
     timepointKey?: string;
@@ -36,11 +39,22 @@ export function sanitizeImportConfig(raw: unknown): GoogleSheetImportConfig {
     experimentKey: colonyMappingRaw.experimentKey ? String(colonyMappingRaw.experimentKey) : undefined,
     notesKey: colonyMappingRaw.notesKey ? String(colonyMappingRaw.notesKey) : undefined,
   };
+  const syncMode = input.syncMode === "mirror" ? "mirror" : undefined;
+  const mirrorTarget =
+    input.mirrorTarget === "results_workspace" || input.mirrorTarget === "colony_results"
+      ? input.mirrorTarget
+      : undefined;
+  const managedTabTitles = Array.isArray(input.managedTabTitles)
+    ? input.managedTabTitles.map((v) => String(v)).filter(Boolean)
+    : undefined;
 
   return {
     selectedColumns: selectedColumns && selectedColumns.length > 0 ? selectedColumns : undefined,
     rowStart: rowStart ?? undefined,
     rowEnd: rowEnd ?? undefined,
+    syncMode,
+    mirrorTarget,
+    managedTabTitles: managedTabTitles && managedTabTitles.length > 0 ? managedTabTitles : undefined,
     colonyMapping:
       colonyMapping.animalKey ||
       colonyMapping.timepointKey ||

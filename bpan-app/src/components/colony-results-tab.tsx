@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Loader2, Save, ChevronDown, ChevronRight, Plus, Check, Upload, Eye, EyeOff, Camera, ExternalLink, Image as ImageIcon, Download, MoreHorizontal, Trash2, RotateCcw, FolderOpen } from "lucide-react";
+import { Loader2, Save, ChevronDown, ChevronRight, Plus, Check, Upload, Eye, EyeOff, Camera, ExternalLink, Image as ImageIcon, Download, MoreHorizontal, Trash2, RotateCcw, FolderOpen, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 import { MiniEarTag } from "@/components/ear-tag-selector";
 import { BehaviorImportDialog } from "@/components/behavior-import-dialog";
+import { exportColonyResultsWorkbook } from "@/lib/results-export";
 
 // ─── Default experiment measures per type ─────────────────────────────
 
@@ -329,6 +330,8 @@ export function ColonyResultsTab({
   const [showHiddenFields, setShowHiddenFields] = useState(false);
   const [showAddField, setShowAddField] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [exportingGoogleBackup, setExportingGoogleBackup] = useState(false);
+  const [creatingLiveSyncSheet, setCreatingLiveSyncSheet] = useState(false);
   const [pendingDeleteField, setPendingDeleteField] = useState<MeasureField | null>(null);
   const [deletingField, setDeletingField] = useState(false);
   const [newFieldKey, setNewFieldKey] = useState("");
@@ -724,6 +727,55 @@ export function ColonyResultsTab({
     toast.success("Exported to CSV");
   }, [activeTimepoint, activeExperiment, activeAnimals, getFields, getRowData, cohorts]);
 
+  const handleExportAll = useCallback(() => {
+    exportColonyResultsWorkbook(colonyResults, animals, cohorts);
+    toast.success("Exported full colony backup workbook.");
+  }, [animals, cohorts, colonyResults]);
+
+  const handleExportAllToGoogleSheets = useCallback(async () => {
+    setExportingGoogleBackup(true);
+    try {
+      const res = await fetch("/api/sheets/google/backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "colony_results" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Failed to create Google Sheets backup.");
+        return;
+      }
+      if (json.spreadsheetUrl) {
+        window.open(String(json.spreadsheetUrl), "_blank", "noopener,noreferrer");
+      }
+      toast.success("Google Sheets backup created.");
+    } finally {
+      setExportingGoogleBackup(false);
+    }
+  }, []);
+
+  const handleCreateLiveSyncSheet = useCallback(async () => {
+    setCreatingLiveSyncSheet(true);
+    try {
+      const res = await fetch("/api/sheets/google/mirror", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "colony_results" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Failed to create live sync Google Sheet.");
+        return;
+      }
+      if (json.spreadsheetUrl) {
+        window.open(String(json.spreadsheetUrl), "_blank", "noopener,noreferrer");
+      }
+      toast.success("Live sync Google Sheet created.");
+    } finally {
+      setCreatingLiveSyncSheet(false);
+    }
+  }, []);
+
   // Add custom field
   const handleAddField = useCallback(() => {
     if (!newFieldLabel.trim()) return;
@@ -1096,6 +1148,35 @@ export function ColonyResultsTab({
                             aria-label="Reconcile Tracker"
                           >
                             {reconciling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleExportAll}
+                            className="h-8 text-xs"
+                          >
+                            <Download className="mr-1 h-3.5 w-3.5" />
+                            Export All Backup
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleExportAllToGoogleSheets}
+                            className="h-8 text-xs"
+                            disabled={exportingGoogleBackup}
+                          >
+                            {exportingGoogleBackup ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="mr-1 h-3.5 w-3.5" />}
+                            Backup to Google Sheets
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleCreateLiveSyncSheet}
+                            className="h-8 text-xs"
+                            disabled={creatingLiveSyncSheet}
+                          >
+                            {creatingLiveSyncSheet ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Link2 className="mr-1 h-3.5 w-3.5" />}
+                            Create Live Sync Sheet
                           </Button>
                           <Button
                             size="sm"

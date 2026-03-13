@@ -33,6 +33,7 @@ export default async function DashboardPage({
   searchParams?: Promise<{ activityKind?: string; activityWindow?: string; panel?: string }>;
 }) {
   const params = searchParams ? await searchParams : undefined;
+  const activePanel = resolveDashboardPanel(params?.panel);
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -74,43 +75,38 @@ export default async function DashboardPage({
       .eq("user_id", user!.id),
   ]);
 
-  const [
-    { data: recentTasks },
-    { data: recentMeetings },
-    { data: recentNotes },
-    { data: recentExperiments },
-    { data: recentDatasets },
-    { data: recentAnalyses },
-    { data: recentFigures },
-    { data: recentPapers },
-    { data: allExperimentsForChecks },
-    { data: experimentTimepointsForChecks },
-    { data: datasetsForChecks },
-    { data: analysesForChecks },
-    { data: figuresForChecks },
-    { data: meetingNotesForChecks },
-    { data: meetingActionTasksForChecks },
-  ] = await Promise.all([
-    supabase.from("tasks").select("id,title,status,updated_at,source_type").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-    supabase.from("meeting_notes").select("id,title,updated_at,meeting_date").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-    supabase.from("notes").select("id,content,updated_at,note_type,paper_id").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-    supabase.from("experiments").select("id,title,status,updated_at").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-    supabase.from("datasets").select("id,name,experiment_id,updated_at,row_count").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-    supabase.from("analyses").select("id,name,dataset_id,created_at,test_type").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(6),
-    supabase.from("figures").select("id,name,dataset_id,analysis_id,updated_at,chart_type").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-    supabase.from("saved_papers").select("id,title,created_at,journal").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(6),
-    supabase.from("experiments").select("id,title,status,start_date,end_date").eq("user_id", user!.id),
-    supabase.from("experiment_timepoints").select("id,experiment_id,scheduled_at,completed_at").eq("user_id", user!.id),
-    supabase.from("datasets").select("id,name,experiment_id,row_count,updated_at").eq("user_id", user!.id),
-    supabase.from("analyses").select("id,name,dataset_id,created_at").eq("user_id", user!.id),
-    supabase.from("figures").select("id,name,dataset_id,analysis_id,updated_at").eq("user_id", user!.id),
-    supabase.from("meeting_notes").select("id,title,action_items,updated_at").eq("user_id", user!.id),
-    supabase.from("tasks").select("id,source_id,source_type").eq("user_id", user!.id).eq("source_type", "meeting_action"),
-  ]);
+  const shouldLoadOverviewChecks = activePanel === "overview";
+  const shouldLoadActivityFeed = activePanel === "activity";
 
-  const [indexedActivityFeed, backstageIndexStats] = await Promise.all([
-    getIndexedWorkspaceActivityFeed(supabase, user!.id, 50),
-    getWorkspaceBackstageIndexStats(supabase, user!.id),
+  const [
+    activityData,
+    overviewCheckData,
+  ] = await Promise.all([
+    shouldLoadActivityFeed
+      ? Promise.all([
+          supabase.from("tasks").select("id,title,status,updated_at,source_type").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("meeting_notes").select("id,title,updated_at,meeting_date").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("notes").select("id,content,updated_at,note_type,paper_id").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("experiments").select("id,title,status,updated_at").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("datasets").select("id,name,experiment_id,updated_at,row_count").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("analyses").select("id,name,dataset_id,created_at,test_type").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(6),
+          supabase.from("figures").select("id,name,dataset_id,analysis_id,updated_at,chart_type").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("saved_papers").select("id,title,created_at,journal").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(6),
+          getIndexedWorkspaceActivityFeed(supabase, user!.id, 50),
+          getWorkspaceBackstageIndexStats(supabase, user!.id),
+        ])
+      : Promise.resolve(null),
+    shouldLoadOverviewChecks
+      ? Promise.all([
+          supabase.from("experiments").select("id,title,status,start_date,end_date").eq("user_id", user!.id),
+          supabase.from("experiment_timepoints").select("id,experiment_id,scheduled_at,completed_at").eq("user_id", user!.id),
+          supabase.from("datasets").select("id,name,experiment_id,row_count,updated_at").eq("user_id", user!.id),
+          supabase.from("analyses").select("id,name,dataset_id,created_at").eq("user_id", user!.id),
+          supabase.from("figures").select("id,name,dataset_id,analysis_id,updated_at").eq("user_id", user!.id),
+          supabase.from("meeting_notes").select("id,title,action_items,updated_at").eq("user_id", user!.id),
+          supabase.from("tasks").select("id,source_id,source_type").eq("user_id", user!.id).eq("source_type", "meeting_action"),
+        ])
+      : Promise.resolve(null),
   ]);
 
   const typedWatchlists = (watchlists ?? []) as Watchlist[];
@@ -124,29 +120,35 @@ export default async function DashboardPage({
   const hasWatchlists = typedWatchlists.length > 0;
   const digestEnabled = profile?.digest_enabled ?? true;
 
-  const allActivityFeed = indexedActivityFeed ?? buildWorkspaceActivityFeed({
-    tasks: recentTasks ?? [],
-    meetings: recentMeetings ?? [],
-    notes: recentNotes ?? [],
-    experiments: recentExperiments ?? [],
-    datasets: recentDatasets ?? [],
-    analyses: recentAnalyses ?? [],
-    figures: recentFigures ?? [],
-    papers: recentPapers ?? [],
-  });
-
-  const missingDataAlerts = buildMissingDataAlerts({
-    experiments: allExperimentsForChecks ?? [],
-    timepoints: experimentTimepointsForChecks ?? [],
-    datasets: datasetsForChecks ?? [],
-    analyses: analysesForChecks ?? [],
-    figures: figuresForChecks ?? [],
-    meetings: meetingNotesForChecks ?? [],
-    meetingActionTasks: meetingActionTasksForChecks ?? [],
-  });
   const activityKindFilter = (params?.activityKind || "all") as ActivityKindFilter;
   const activityWindowFilter = (params?.activityWindow || "7d") as ActivityWindowFilter;
-  const activePanel = resolveDashboardPanel(params?.panel);
+
+  const allActivityFeed = activityData
+    ? activityData[8] ?? buildWorkspaceActivityFeed({
+        tasks: activityData[0].data ?? [],
+        meetings: activityData[1].data ?? [],
+        notes: activityData[2].data ?? [],
+        experiments: activityData[3].data ?? [],
+        datasets: activityData[4].data ?? [],
+        analyses: activityData[5].data ?? [],
+        figures: activityData[6].data ?? [],
+        papers: activityData[7].data ?? [],
+      })
+    : [];
+
+  const backstageIndexStats = activityData?.[9] ?? null;
+
+  const missingDataAlerts = overviewCheckData
+    ? buildMissingDataAlerts({
+        experiments: overviewCheckData[0].data ?? [],
+        timepoints: overviewCheckData[1].data ?? [],
+        datasets: overviewCheckData[2].data ?? [],
+        analyses: overviewCheckData[3].data ?? [],
+        figures: overviewCheckData[4].data ?? [],
+        meetings: overviewCheckData[5].data ?? [],
+        meetingActionTasks: overviewCheckData[6].data ?? [],
+      })
+    : [];
   const activityFeed = filterWorkspaceActivityFeed(allActivityFeed, activityKindFilter, activityWindowFilter);
 
   const focusItems = [

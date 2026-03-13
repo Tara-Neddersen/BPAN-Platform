@@ -255,6 +255,10 @@ async function syncOneLink(
   token: TokenRow,
   link: LinkRow
 ) {
+  const sanitizedConfig = sanitizeImportConfig(link.import_config);
+  if (sanitizedConfig.syncMode === "mirror") {
+    return { rowCount: 0, skipped: 0 };
+  }
   let accessToken = token.access_token;
   if (new Date(token.expires_at).getTime() < Date.now() + 60_000) {
     const refreshed = await refreshGoogleSheetsToken(token.refresh_token);
@@ -275,7 +279,7 @@ async function syncOneLink(
   });
 
   const preview = parseRowsToTabularPreview(fetched.rows);
-  const config = sanitizeImportConfig(link.import_config);
+  const config = sanitizedConfig;
   const filtered = applyImportConfig(preview.columns, preview.data, config);
   const target = detectImportTarget(filtered.columns, link.target);
 
