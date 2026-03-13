@@ -75,8 +75,9 @@ export function buildResultsWorkspaceSheets(
   sheets.push({
     title: "Datasets Index",
     rows: buildOrderedRows(
-      datasets.map((dataset) => ({
+      datasets.map((dataset, index) => ({
         dataset_id: dataset.id,
+        sheet_title: clampSheetName(`${index + 1}_${dataset.name}`, `Dataset_${index + 1}`),
         name: dataset.name,
         description: dataset.description || "",
         row_count: dataset.row_count,

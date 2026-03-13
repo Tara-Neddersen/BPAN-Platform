@@ -160,6 +160,46 @@ export async function fetchGoogleSheetRows(
   };
 }
 
+export async function fetchGoogleSheetTabs(
+  accessToken: string,
+  sheetId: string,
+  sheetTitles: string[],
+  maxRows = 5000
+) {
+  const cappedMaxRows = Math.max(2, Math.min(5000, maxRows));
+  const params = new URLSearchParams();
+  for (const title of sheetTitles) {
+    params.append("ranges", `${quoteSheetTitle(title)}!A1:ZZ${cappedMaxRows}`);
+  }
+  params.set("majorDimension", "ROWS");
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}/values:batchGet?${params.toString()}`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Failed to read sheet tabs: ${await res.text()}`);
+  }
+
+  const payload = (await res.json()) as {
+    valueRanges?: Array<{ range?: string; values?: string[][] }>;
+  };
+
+  const rowsByTitle = new Map<string, string[][]>();
+  for (const valueRange of payload.valueRanges || []) {
+    const range = valueRange.range || "";
+    const matchedTitle = sheetTitles.find((title) => range.startsWith(`${quoteSheetTitle(title)}!`));
+    if (matchedTitle) {
+      rowsByTitle.set(matchedTitle, valueRange.values || []);
+    }
+  }
+
+  return rowsByTitle;
+}
+
 export type GoogleSheetWriteTab = {
   title: string;
   values: Array<Array<string | number | boolean>>;

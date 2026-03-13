@@ -3,8 +3,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
-import Papa from "papaparse";
-import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import {
   Upload,
@@ -62,7 +60,6 @@ import {
   type SnapshotReconciliationGuardrails,
 } from "@/lib/results-run-adapters";
 import { maybeDecodeRtf, parseMetricReportPreview } from "@/lib/results-import";
-import { exportResultsWorkspaceWorkbook } from "@/lib/results-export";
 
 // Dynamically import Plotly (it's heavy and client-only)
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -123,6 +120,15 @@ function formatColumnList(columns: string[]) {
   return `${columns.slice(0, 3).join(", ")} +${columns.length - 3} more`;
 }
 
+async function loadPapaParse() {
+  const papaParseModule = await import("papaparse");
+  return papaParseModule.default;
+}
+
+async function loadXlsx() {
+  return import("xlsx");
+}
+
 function downloadTextFile(filename: string, content: string, contentType = "text/plain;charset=utf-8") {
   const blob = new Blob([content], { type: contentType });
   const url = URL.createObjectURL(blob);
@@ -166,7 +172,8 @@ function detectPasteDelimiter(text: string) {
   return ",";
 }
 
-function parseDelimitedTextPreview(text: string) {
+async function parseDelimitedTextPreview(text: string) {
+  const Papa = await loadPapaParse();
   const delimiter = detectPasteDelimiter(text);
   const result = Papa.parse(text.trim(), {
     header: true,
@@ -391,8 +398,11 @@ export function ResultsClient({
   }, [datasetAnalyses, datasetFigures, selectedDataset, selectedRunResolution.mode]);
 
   const exportAllResultsBackup = useCallback(() => {
-    exportResultsWorkspaceWorkbook(datasets, analyses, figures);
-    toast.success("Downloaded results backup workbook.");
+    void (async () => {
+      const { exportResultsWorkspaceWorkbook } = await import("@/lib/results-export");
+      exportResultsWorkspaceWorkbook(datasets, analyses, figures);
+      toast.success("Downloaded results backup workbook.");
+    })();
   }, [analyses, datasets, figures]);
 
   const exportResultsBackupToGoogleSheets = useCallback(async () => {
@@ -2409,50 +2419,56 @@ function ImportDialog({
     if (!name) setName(file.name.replace(/\.\w+$/, ""));
 
     if (ext === "csv" || ext === "tsv") {
-      Papa.parse(file, {
-        header: true,
-        dynamicTyping: true,
-        skipEmptyLines: true,
-        complete(result) {
-          const data = result.data as Record<string, unknown>[];
-          const rawHeaders = result.meta.fields || [];
-          const { normalized: colNames, blankHeaders, duplicateHeaders } = normalizeHeaders(rawHeaders);
-          if (result.errors?.length) {
-            setParseError(`CSV parse warning: ${result.errors[0]?.message || "Unknown parsing issue"}`);
-          }
-          if (blankHeaders.length > 0) {
-            setParseError("Column header is blank. Add a name to every header cell in the first row.");
+      void (async () => {
+        const Papa = await loadPapaParse();
+        Papa.parse(file, {
+          header: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete(result) {
+            const data = result.data as Record<string, unknown>[];
+            const rawHeaders = result.meta.fields || [];
+            const { normalized: colNames, blankHeaders, duplicateHeaders } = normalizeHeaders(rawHeaders);
+            if (result.errors?.length) {
+              setParseError(`CSV parse warning: ${result.errors[0]?.message || "Unknown parsing issue"}`);
+            }
+            if (blankHeaders.length > 0) {
+              setParseError("Column header is blank. Add a name to every header cell in the first row.");
+              setIsParsingFile(false);
+              return;
+            }
+            if (duplicateHeaders.length > 0) {
+              setParseError(`Duplicate header names found: ${formatColumnList(duplicateHeaders)}. Rename duplicates before import.`);
+              setIsParsingFile(false);
+              return;
+            }
+            if (colNames.length === 0) {
+              setParseError("No header row detected. Add a first row with column names and try again.");
+              setIsParsingFile(false);
+              return;
+            }
+            const columns: DatasetColumn[] = colNames.map((n) => ({
+              name: n,
+              type: detectColumnType(data.map((r) => r[n])),
+            }));
+            if (data.length === 0) {
+              setParseError("No data rows detected. Keep the header row and add at least one data row.");
+            }
+            setPreview({ columns, data });
             setIsParsingFile(false);
-            return;
-          }
-          if (duplicateHeaders.length > 0) {
-            setParseError(`Duplicate header names found: ${formatColumnList(duplicateHeaders)}. Rename duplicates before import.`);
+          },
+          error(error) {
+            setParseError(error.message || "Failed to parse file.");
             setIsParsingFile(false);
-            return;
-          }
-          if (colNames.length === 0) {
-            setParseError("No header row detected. Add a first row with column names and try again.");
-            setIsParsingFile(false);
-            return;
-          }
-          const columns: DatasetColumn[] = colNames.map((n) => ({
-            name: n,
-            type: detectColumnType(data.map((r) => r[n])),
-          }));
-          if (data.length === 0) {
-            setParseError("No data rows detected. Keep the header row and add at least one data row.");
-          }
-          setPreview({ columns, data });
-          setIsParsingFile(false);
-        },
-        error(error) {
-          setParseError(error.message || "Failed to parse file.");
-          setIsParsingFile(false);
-        },
+          },
+        });
+      })().catch((error) => {
+        setParseError(error instanceof Error ? error.message : "Failed to parse file.");
+        setIsParsingFile(false);
       });
     } else if (ext === "txt" || ext === "rtf") {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
           const rawText = String(e.target?.result || "");
           const reportPreview = parseMetricReportPreview(rawText);
@@ -2469,7 +2485,7 @@ function ImportDialog({
           }
 
           const text = maybeDecodeRtf(rawText);
-          const delimitedPreview = parseDelimitedTextPreview(text);
+          const delimitedPreview = await parseDelimitedTextPreview(text);
           if (delimitedPreview.columns.length === 0) {
             setParseError(
               delimitedPreview.parseError ||
@@ -2496,8 +2512,9 @@ function ImportDialog({
       reader.readAsText(file, ext === "rtf" ? "windows-1252" : undefined);
     } else if (ext === "xlsx" || ext === "xls") {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
+          const XLSX = await loadXlsx();
           const wb = XLSX.read(e.target?.result, { type: "array" });
           const firstSheetName = wb.SheetNames[0];
           if (!firstSheetName) {
@@ -2796,6 +2813,9 @@ type GoogleSheetLink = {
     selectedColumns?: string[];
     rowStart?: number;
     rowEnd?: number;
+    syncMode?: "import" | "mirror";
+    mirrorTarget?: "results_workspace" | "colony_results";
+    managedTabTitles?: string[];
     colonyMapping?: {
       animalKey?: string;
       timepointKey?: string;
@@ -3041,6 +3061,26 @@ function GoogleSheetsDialog({
     }
   }
 
+  async function pullMirrorLink(linkId: string) {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/sheets/google/mirror/pull", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ linkId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Failed to pull Google Sheet changes into BPAN.");
+        return;
+      }
+      toast.success("Pulled Google Sheet changes into BPAN.");
+      await refreshState();
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-3xl">
@@ -3262,6 +3302,17 @@ function GoogleSheetsDialog({
                           >
                             Open sheet
                           </Button>
+                          {link.import_config?.syncMode === "mirror" ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => pullMirrorLink(link.id)}
+                              disabled={syncing}
+                            >
+                              Pull into BPAN
+                            </Button>
+                          ) : null}
                           <Button
                             variant="outline"
                             size="sm"
@@ -3299,6 +3350,9 @@ function GoogleSheetsDialog({
                       ) : null}
                       <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
                         <Badge variant="secondary">{link.target}</Badge>
+                        {link.import_config?.syncMode === "mirror" ? (
+                          <Badge variant="outline">live mirror</Badge>
+                        ) : null}
                         {link.last_synced_at ? <span>Last sync: {new Date(link.last_synced_at).toLocaleString()}</span> : <span>Never synced</span>}
                         <span>Rows: {link.last_row_count || 0}</span>
                         {link.last_sync_status === "error" && link.last_sync_error ? (
@@ -3348,23 +3402,49 @@ function PasteDialog({
   const [runId, setRunId] = useState(prefillRunId || "");
   const [rawText, setRawText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState<{
+    columns: DatasetColumn[];
+    data: Record<string, unknown>[];
+    parseError: string | null;
+  } | null>(null);
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === runId) || null,
     [runs, runId]
   );
   const missingPrefillRun = Boolean(prefillRunId) && !selectedRun && runId === prefillRunId;
 
-  const preview = useMemo(() => {
-    if (!rawText.trim()) return null;
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!rawText.trim()) {
+      setPreview(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const reportPreview = parseMetricReportPreview(rawText);
     if (reportPreview) {
-      return {
+      setPreview({
         columns: reportPreview.columns,
         data: reportPreview.data,
         parseError: reportPreview.errors[0] || null,
+      });
+      return () => {
+        cancelled = true;
       };
     }
-    return parseDelimitedTextPreview(rawText);
+
+    void (async () => {
+      const nextPreview = await parseDelimitedTextPreview(rawText);
+      if (!cancelled) {
+        setPreview(nextPreview);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [rawText]);
   const reconciliation = useMemo(
     () =>

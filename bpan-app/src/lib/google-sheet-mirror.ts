@@ -9,11 +9,13 @@ import {
 import {
   clearGoogleSpreadsheetTabs,
   createGoogleSpreadsheet,
+  fetchGoogleSheetTabs,
   deleteGoogleSpreadsheetTabs,
   ensureGoogleSpreadsheetTabs,
   refreshGoogleSheetsToken,
   writeGoogleSpreadsheetTabs,
 } from "@/lib/google-sheets";
+import { parseRowsToTabularPreview } from "@/lib/google-sheet-sync";
 
 type ResultsDatasetRecord = Dataset & {
   experiment_run_id?: string | null;
@@ -22,6 +24,7 @@ type ResultsDatasetRecord = Dataset & {
 };
 
 export type MirrorTarget = "results_workspace" | "colony_results";
+type SupabaseLike = Awaited<ReturnType<typeof createClient>>;
 
 type MirrorLink = {
   id: string;
@@ -51,7 +54,7 @@ function sheetRowsToValues(sheet: ExportSheet) {
 }
 
 async function getFreshAccessToken(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: SupabaseLike,
   userId: string
 ) {
   const { data: tokenRow, error } = await supabase
@@ -79,7 +82,7 @@ async function getFreshAccessToken(
 }
 
 async function loadMirrorSheets(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: SupabaseLike,
   userId: string,
   target: MirrorTarget
 ) {
@@ -123,7 +126,7 @@ async function loadMirrorSheets(
 }
 
 async function writeMirrorToLink(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: SupabaseLike,
   accessToken: string,
   link: MirrorLink,
   target: MirrorTarget
@@ -216,6 +219,252 @@ export async function syncManagedGoogleSheetMirrorLinkForUser(userId: string, li
   }
 
   await writeMirrorToLink(supabase, accessToken, typedLink, target);
+}
+
+function toStringArray(value: unknown) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+async function pullResultsWorkspaceFromMirror(
+  supabase: SupabaseLike,
+  userId: string,
+  link: MirrorLink,
+  accessToken: string
+) {
+  const tabTitles = link.import_config?.managedTabTitles || [];
+  const rowsByTitle = await fetchGoogleSheetTabs(
+    accessToken,
+    link.sheet_id,
+    tabTitles,
+    5000
+  );
+
+  const datasetsIndexRows = parseRowsToTabularPreview(rowsByTitle.get("Datasets Index") || []).data;
+  const analysesRows = parseRowsToTabularPreview(rowsByTitle.get("Analyses") || []).data;
+  const figuresRows = parseRowsToTabularPreview(rowsByTitle.get("Figures") || []).data;
+
+  const existingDatasetsRes = await supabase.from("datasets").select("id").eq("user_id", userId);
+  const existingAnalysesRes = await supabase.from("analyses").select("id").eq("user_id", userId);
+  const existingFiguresRes = await supabase.from("figures").select("id").eq("user_id", userId);
+
+  const desiredDatasetIds = new Set<string>();
+  for (const row of datasetsIndexRows) {
+    const datasetId = String(row.dataset_id || "").trim() || crypto.randomUUID();
+    const sheetTitle = String(row.sheet_title || "").trim();
+    if (!sheetTitle) continue;
+    const datasetTabRows = parseRowsToTabularPreview(rowsByTitle.get(sheetTitle) || []);
+    const data = datasetTabRows.data.map((dataRow) => {
+      const next = { ...dataRow };
+      delete next.row_number;
+      return next;
+    });
+    const payload = {
+      id: datasetId,
+      user_id: userId,
+      name: String(row.name || "Imported dataset"),
+      description: String(row.description || "") || null,
+      experiment_id: String(row.experiment_id || "") || null,
+      columns: datasetTabRows.columns.filter((column) => column.name !== "row_number"),
+      data,
+      row_count: data.length,
+      source: String(row.source || "google_sheets"),
+      tags: toStringArray(row.tags),
+    };
+    desiredDatasetIds.add(datasetId);
+    await supabase.from("datasets").upsert(payload);
+  }
+
+  for (const datasetId of (existingDatasetsRes.data || []).map((row) => row.id as string)) {
+    if (!desiredDatasetIds.has(datasetId)) {
+      await supabase.from("datasets").delete().eq("id", datasetId).eq("user_id", userId);
+    }
+  }
+
+  const desiredAnalysisIds = new Set<string>();
+  for (const row of analysesRows) {
+    const analysisId = String(row.analysis_id || "").trim() || crypto.randomUUID();
+    const datasetId = String(row.dataset_id || "").trim();
+    if (!datasetId) continue;
+    desiredAnalysisIds.add(analysisId);
+    await supabase.from("analyses").upsert({
+      id: analysisId,
+      user_id: userId,
+      dataset_id: datasetId,
+      name: String(row.name || "Analysis"),
+      test_type: String(row.test_type || "descriptive"),
+      ai_interpretation: String(row.ai_interpretation || "") || null,
+      config: typeof row.config_json === "string" && row.config_json ? JSON.parse(String(row.config_json)) : {},
+      results: typeof row.results_json === "string" && row.results_json ? JSON.parse(String(row.results_json)) : {},
+    });
+  }
+
+  for (const analysisId of (existingAnalysesRes.data || []).map((row) => row.id as string)) {
+    if (!desiredAnalysisIds.has(analysisId)) {
+      await supabase.from("analyses").delete().eq("id", analysisId).eq("user_id", userId);
+    }
+  }
+
+  const desiredFigureIds = new Set<string>();
+  for (const row of figuresRows) {
+    const figureId = String(row.figure_id || "").trim() || crypto.randomUUID();
+    const datasetId = String(row.dataset_id || "").trim();
+    if (!datasetId) continue;
+    desiredFigureIds.add(figureId);
+    await supabase.from("figures").upsert({
+      id: figureId,
+      user_id: userId,
+      dataset_id: datasetId,
+      analysis_id: String(row.analysis_id || "") || null,
+      name: String(row.name || "Figure"),
+      chart_type: String(row.chart_type || "bar"),
+      config: typeof row.config_json === "string" && row.config_json ? JSON.parse(String(row.config_json)) : {},
+    });
+  }
+
+  for (const figureId of (existingFiguresRes.data || []).map((row) => row.id as string)) {
+    if (!desiredFigureIds.has(figureId)) {
+      await supabase.from("figures").delete().eq("id", figureId).eq("user_id", userId);
+    }
+  }
+}
+
+async function pullColonyResultsFromMirror(
+  supabase: SupabaseLike,
+  userId: string,
+  link: MirrorLink,
+  accessToken: string
+) {
+  const canonicalTitle = "All Colony Results";
+  const rowsByTitle = await fetchGoogleSheetTabs(
+    accessToken,
+    link.sheet_id,
+    [canonicalTitle],
+    5000
+  );
+  const parsed = parseRowsToTabularPreview(rowsByTitle.get(canonicalTitle) || []);
+
+  const animalLookup = new Map<string, string>();
+  const { data: animals } = await supabase.from("animals").select("id,identifier").eq("user_id", userId);
+  for (const animal of animals || []) {
+    animalLookup.set(String(animal.id), String(animal.id));
+    animalLookup.set(String(animal.identifier), String(animal.id));
+  }
+
+  const desiredKeys = new Set<string>();
+  for (const row of parsed.data) {
+    const rawAnimalId = String(row.animal_id || "").trim();
+    const rawIdentifier = String(row.animal_identifier || "").trim();
+    const animalId = animalLookup.get(rawAnimalId) || animalLookup.get(rawIdentifier);
+    const timepoint = Number(row.timepoint_age_days);
+    const experimentType = String(row.experiment_type || "").trim();
+    if (!animalId || !Number.isFinite(timepoint) || !experimentType) continue;
+
+    const reserved = new Set([
+      "result_id",
+      "animal_id",
+      "animal_identifier",
+      "ear_tag",
+      "cohort",
+      "genotype",
+      "sex",
+      "timepoint_age_days",
+      "experiment_type",
+      "notes",
+      "recorded_at",
+      "created_at",
+      "updated_at",
+    ]);
+    const measures = Object.fromEntries(
+      Object.entries(row)
+        .filter(([key]) => !reserved.has(key))
+        .map(([key, value]) => [key, value === "" ? null : value])
+    );
+    desiredKeys.add(`${animalId}::${Math.round(timepoint)}::${experimentType}`);
+    await supabase.from("colony_results").upsert(
+      {
+        user_id: userId,
+        animal_id: animalId,
+        timepoint_age_days: Math.round(timepoint),
+        experiment_type: experimentType,
+        measures,
+        notes: String(row.notes || "") || null,
+        recorded_at: new Date().toISOString(),
+      },
+      { onConflict: "animal_id,timepoint_age_days,experiment_type" }
+    );
+  }
+
+  const { data: existing } = await supabase
+    .from("colony_results")
+    .select("id,animal_id,timepoint_age_days,experiment_type")
+    .eq("user_id", userId);
+
+  for (const row of existing || []) {
+    const key = `${row.animal_id}::${row.timepoint_age_days}::${row.experiment_type}`;
+    if (!desiredKeys.has(key)) {
+      await supabase.from("colony_results").delete().eq("id", row.id).eq("user_id", userId);
+    }
+  }
+}
+
+export async function pullManagedGoogleSheetMirrorLinkForUser(userId: string, linkId: string) {
+  const supabase = await createClient();
+  const accessToken = await getFreshAccessToken(supabase, userId);
+  const { data: link, error } = await supabase
+    .from("google_sheet_links")
+    .select("id,user_id,name,sheet_id,sheet_url,target,auto_sync_enabled,import_config")
+    .eq("user_id", userId)
+    .eq("id", linkId)
+    .single();
+
+  if (error || !link) throw new Error(error?.message || "Mirror link not found");
+  const typedLink = link as MirrorLink;
+  const target = typedLink.import_config?.mirrorTarget;
+  if (typedLink.import_config?.syncMode !== "mirror" || (target !== "results_workspace" && target !== "colony_results")) {
+    throw new Error("Link is not a managed mirror");
+  }
+
+  if (target === "results_workspace") {
+    await pullResultsWorkspaceFromMirror(supabase, userId, typedLink, accessToken);
+  } else {
+    await pullColonyResultsFromMirror(supabase, userId, typedLink, accessToken);
+  }
+
+  await supabase
+    .from("google_sheet_links")
+    .update({
+      last_synced_at: new Date().toISOString(),
+      last_sync_status: "ok",
+      last_sync_error: null,
+    })
+    .eq("id", typedLink.id)
+    .eq("user_id", userId);
+}
+
+export async function pullManagedGoogleSheetMirrorLinkWithClient(
+  supabase: SupabaseLike,
+  userId: string,
+  link: MirrorLink,
+  accessToken: string
+) {
+  const target = link.import_config?.mirrorTarget;
+  if (link.import_config?.syncMode !== "mirror" || (target !== "results_workspace" && target !== "colony_results")) {
+    throw new Error("Link is not a managed mirror");
+  }
+
+  if (target === "results_workspace") {
+    await pullResultsWorkspaceFromMirror(supabase, userId, link, accessToken);
+  } else {
+    await pullColonyResultsFromMirror(supabase, userId, link, accessToken);
+  }
 }
 
 export async function createManagedGoogleSheetMirrorForUser(userId: string, target: MirrorTarget) {
