@@ -16,6 +16,7 @@ import {
   sanitizeImportConfig,
   type GoogleSheetImportConfig,
 } from "@/lib/google-sheet-import-config";
+import { pullManagedGoogleSheetMirrorLinkWithClient } from "@/lib/google-sheet-mirror";
 
 type TokenRow = {
   user_id: string;
@@ -255,6 +256,7 @@ async function syncOneLink(
   token: TokenRow,
   link: LinkRow
 ) {
+  const sanitizedConfig = sanitizeImportConfig(link.import_config);
   let accessToken = token.access_token;
   if (new Date(token.expires_at).getTime() < Date.now() + 60_000) {
     const refreshed = await refreshGoogleSheetsToken(token.refresh_token);
@@ -268,6 +270,12 @@ async function syncOneLink(
       .eq("user_id", token.user_id);
   }
 
+  if (sanitizedConfig.syncMode === "mirror") {
+    await pullManagedGoogleSheetMirrorLinkWithClient(admin as never, token.user_id, link as never, accessToken);
+    await updateLinkStatus(admin, token.user_id, link.id, { ok: true, rowCount: 0 });
+    return { rowCount: 0, skipped: 0 };
+  }
+
   const fetched = await fetchGoogleSheetRows(accessToken, link.sheet_id, {
     gid: link.gid,
     sheetTitle: link.sheet_title,
@@ -275,7 +283,7 @@ async function syncOneLink(
   });
 
   const preview = parseRowsToTabularPreview(fetched.rows);
-  const config = sanitizeImportConfig(link.import_config);
+  const config = sanitizedConfig;
   const filtered = applyImportConfig(preview.columns, preview.data, config);
   const target = detectImportTarget(filtered.columns, link.target);
 

@@ -16,6 +16,7 @@ import {
   sanitizeImportConfig,
   type GoogleSheetImportConfig,
 } from "@/lib/google-sheet-import-config";
+import { syncManagedGoogleSheetMirrorLinkForUser } from "@/lib/google-sheet-mirror";
 
 type LinkRow = {
   id: string;
@@ -287,13 +288,25 @@ async function syncOneLink(
   accessToken: string,
   link: LinkRow
 ) {
+  const sanitizedConfig = sanitizeImportConfig(link.import_config);
+  if (sanitizedConfig.syncMode === "mirror") {
+    await syncManagedGoogleSheetMirrorLinkForUser(userId, link.id);
+    return {
+      linkId: link.id,
+      linkName: link.name,
+      target: link.target,
+      rowCount: 0,
+      skipped: 0,
+      syncedMode: "mirror",
+    };
+  }
   const fetched = await fetchGoogleSheetRows(accessToken, link.sheet_id, {
     gid: link.gid,
     sheetTitle: link.sheet_title,
     maxRows: 5000,
   });
   const preview = parseRowsToTabularPreview(fetched.rows);
-  const config = sanitizeImportConfig(link.import_config);
+  const config = sanitizedConfig;
   const filtered = applyImportConfig(preview.columns, preview.data, config);
   const target = detectImportTarget(filtered.columns, link.target);
 

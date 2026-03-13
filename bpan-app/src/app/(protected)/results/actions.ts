@@ -4,7 +4,16 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 import { reconcileDataWithSchemaSnapshot } from "@/lib/results-run-adapters";
+import { syncManagedGoogleSheetMirrorsForUser } from "@/lib/google-sheet-mirror";
 import type { DatasetColumn } from "@/types";
+
+async function syncResultsMirrorsBestEffort(userId: string) {
+  try {
+    await syncManagedGoogleSheetMirrorsForUser(userId, "results_workspace");
+  } catch (error) {
+    console.error("results mirror sync failed", error);
+  }
+}
 
 // ─── Datasets ────────────────────────────────────────────────────────────────
 
@@ -102,6 +111,7 @@ export async function createDataset(payload: {
 
   revalidatePath("/results");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncResultsMirrorsBestEffort(user.id);
   return data.id;
 }
 
@@ -121,6 +131,7 @@ export async function deleteDataset(id: string) {
   if (error) throw new Error(error.message);
   revalidatePath("/results");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncResultsMirrorsBestEffort(user.id);
 }
 
 // ─── Analyses ────────────────────────────────────────────────────────────────
@@ -156,6 +167,7 @@ export async function saveAnalysis(payload: {
   if (error) throw new Error(error.message);
   revalidatePath("/results");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncResultsMirrorsBestEffort(user.id);
   return data.id;
 }
 
@@ -175,6 +187,7 @@ export async function deleteAnalysis(id: string) {
   if (error) throw new Error(error.message);
   revalidatePath("/results");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncResultsMirrorsBestEffort(user.id);
 }
 
 // ─── Figures ─────────────────────────────────────────────────────────────────
@@ -208,6 +221,7 @@ export async function saveFigure(payload: {
   if (error) throw new Error(error.message);
   revalidatePath("/results");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncResultsMirrorsBestEffort(user.id);
   return data.id;
 }
 
@@ -227,4 +241,5 @@ export async function deleteFigure(id: string) {
   if (error) throw new Error(error.message);
   revalidatePath("/results");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncResultsMirrorsBestEffort(user.id);
 }

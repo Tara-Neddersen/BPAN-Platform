@@ -3,8 +3,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
-import Papa from "papaparse";
-import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import {
   Upload,
@@ -61,6 +59,7 @@ import {
   reconcileDataWithSchemaSnapshot,
   type SnapshotReconciliationGuardrails,
 } from "@/lib/results-run-adapters";
+import { maybeDecodeRtf, parseMetricReportPreview } from "@/lib/results-import";
 
 // Dynamically import Plotly (it's heavy and client-only)
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -121,6 +120,15 @@ function formatColumnList(columns: string[]) {
   return `${columns.slice(0, 3).join(", ")} +${columns.length - 3} more`;
 }
 
+async function loadPapaParse() {
+  const papaParseModule = await import("papaparse");
+  return papaParseModule.default;
+}
+
+async function loadXlsx() {
+  return import("xlsx");
+}
+
 function downloadTextFile(filename: string, content: string, contentType = "text/plain;charset=utf-8") {
   const blob = new Blob([content], { type: contentType });
   const url = URL.createObjectURL(blob);
@@ -162,6 +170,48 @@ function detectPasteDelimiter(text: string) {
   if (tabCount >= commaCount && tabCount >= semicolonCount && tabCount > 0) return "\t";
   if (semicolonCount > commaCount && semicolonCount > 0) return ";";
   return ",";
+}
+
+async function parseDelimitedTextPreview(text: string) {
+  const Papa = await loadPapaParse();
+  const delimiter = detectPasteDelimiter(text);
+  const result = Papa.parse(text.trim(), {
+    header: true,
+    dynamicTyping: true,
+    skipEmptyLines: true,
+    delimiter,
+  });
+  const parseError = result.errors?.length
+    ? `Parse warning: ${result.errors[0]?.message || "Unknown parsing issue"}`
+    : null;
+  const data = result.data as Record<string, unknown>[];
+  const { normalized: colNames, blankHeaders, duplicateHeaders } = normalizeHeaders(result.meta.fields || []);
+  if (blankHeaders.length > 0) {
+    return {
+      columns: [] as DatasetColumn[],
+      data: [] as Record<string, unknown>[],
+      parseError: "Column header is blank. Add a name to every header cell in the first row.",
+    };
+  }
+  if (duplicateHeaders.length > 0) {
+    return {
+      columns: [] as DatasetColumn[],
+      data: [] as Record<string, unknown>[],
+      parseError: `Duplicate header names found: ${formatColumnList(duplicateHeaders)}. Rename duplicates before import.`,
+    };
+  }
+  if (colNames.length === 0) {
+    return {
+      columns: [] as DatasetColumn[],
+      data: [] as Record<string, unknown>[],
+      parseError: "No header row detected. Include a first row with column names.",
+    };
+  }
+  const columns: DatasetColumn[] = colNames.map((name) => ({
+    name,
+    type: detectColumnType(data.map((row) => row[name])),
+  }));
+  return { columns, data, parseError };
 }
 
 // ─── Chart Colors ────────────────────────────────────────────────────────────
@@ -249,6 +299,8 @@ export function ResultsClient({
   const [showImport, setShowImport] = useState(initialOpenImport);
   const [showPaste, setShowPaste] = useState(false);
   const [showSheets, setShowSheets] = useState(false);
+  const [exportingSheetsBackup, setExportingSheetsBackup] = useState(false);
+  const [creatingLiveSyncSheet, setCreatingLiveSyncSheet] = useState(false);
 
   const resolveDatasetRunLink = useCallback(
     (dataset: ResultsDatasetRecord | null): DatasetRunLinkResolution => {
@@ -345,6 +397,58 @@ export function ResultsClient({
     );
   }, [datasetAnalyses, datasetFigures, selectedDataset, selectedRunResolution.mode]);
 
+  const exportAllResultsBackup = useCallback(() => {
+    void (async () => {
+      const { exportResultsWorkspaceWorkbook } = await import("@/lib/results-export");
+      exportResultsWorkspaceWorkbook(datasets, analyses, figures);
+      toast.success("Downloaded results backup workbook.");
+    })();
+  }, [analyses, datasets, figures]);
+
+  const exportResultsBackupToGoogleSheets = useCallback(async () => {
+    setExportingSheetsBackup(true);
+    try {
+      const res = await fetch("/api/sheets/google/backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "results_workspace" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Failed to create Google Sheets backup.");
+        return;
+      }
+      if (json.spreadsheetUrl) {
+        window.open(String(json.spreadsheetUrl), "_blank", "noopener,noreferrer");
+      }
+      toast.success("Google Sheets backup created.");
+    } finally {
+      setExportingSheetsBackup(false);
+    }
+  }, []);
+
+  const createResultsLiveSyncGoogleSheet = useCallback(async () => {
+    setCreatingLiveSyncSheet(true);
+    try {
+      const res = await fetch("/api/sheets/google/mirror", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "results_workspace" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Failed to create live sync Google Sheet.");
+        return;
+      }
+      if (json.spreadsheetUrl) {
+        window.open(String(json.spreadsheetUrl), "_blank", "noopener,noreferrer");
+      }
+      toast.success("Live sync Google Sheet created.");
+    } finally {
+      setCreatingLiveSyncSheet(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!selectedDatasetId) return;
     const next = new URLSearchParams(searchParams?.toString() || "");
@@ -408,11 +512,64 @@ export function ResultsClient({
             </Button>
             {datasets.length > 0 && (
               <>
+                <Button variant="outline" onClick={exportAllResultsBackup} className="touch-target gap-2 hidden sm:inline-flex">
+                  <Download className="h-4 w-4" /> Export all backup
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={exportResultsBackupToGoogleSheets}
+                  className="touch-target gap-2 hidden sm:inline-flex"
+                  disabled={exportingSheetsBackup}
+                >
+                  {exportingSheetsBackup ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+                  Backup to Google Sheets
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={createResultsLiveSyncGoogleSheet}
+                  className="touch-target gap-2 hidden sm:inline-flex"
+                  disabled={creatingLiveSyncSheet}
+                >
+                  {creatingLiveSyncSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                  Create live sync sheet
+                </Button>
                 <Button variant="outline" onClick={() => setShowPaste(true)} className="touch-target gap-2 hidden sm:inline-flex">
                   <ClipboardPaste className="h-4 w-4" /> Paste data
                 </Button>
                 <Button variant="outline" onClick={() => setShowSheets(true)} className="touch-target gap-2 hidden sm:inline-flex">
                   <Link2 className="h-4 w-4" /> Link Google Sheet
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={exportAllResultsBackup}
+                  className="touch-target sm:hidden"
+                  aria-label="Export all backup"
+                  title="Export all backup"
+                >
+                  <Download className="h-4 w-4" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={exportResultsBackupToGoogleSheets}
+                  className="touch-target sm:hidden"
+                  aria-label="Backup to Google Sheets"
+                  title="Backup to Google Sheets"
+                  disabled={exportingSheetsBackup}
+                >
+                  {exportingSheetsBackup ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={createResultsLiveSyncGoogleSheet}
+                  className="touch-target sm:hidden"
+                  aria-label="Create live sync sheet"
+                  title="Create live sync sheet"
+                  disabled={creatingLiveSyncSheet}
+                >
+                  {creatingLiveSyncSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
                 </Button>
                 <Button
                   size="icon"
@@ -2262,51 +2419,102 @@ function ImportDialog({
     if (!name) setName(file.name.replace(/\.\w+$/, ""));
 
     if (ext === "csv" || ext === "tsv") {
-      Papa.parse(file, {
-        header: true,
-        dynamicTyping: true,
-        skipEmptyLines: true,
-        complete(result) {
-          const data = result.data as Record<string, unknown>[];
-          const rawHeaders = result.meta.fields || [];
-          const { normalized: colNames, blankHeaders, duplicateHeaders } = normalizeHeaders(rawHeaders);
-          if (result.errors?.length) {
-            setParseError(`CSV parse warning: ${result.errors[0]?.message || "Unknown parsing issue"}`);
-          }
-          if (blankHeaders.length > 0) {
-            setParseError("Column header is blank. Add a name to every header cell in the first row.");
+      void (async () => {
+        const Papa = await loadPapaParse();
+        Papa.parse(file, {
+          header: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete(result) {
+            const data = result.data as Record<string, unknown>[];
+            const rawHeaders = result.meta.fields || [];
+            const { normalized: colNames, blankHeaders, duplicateHeaders } = normalizeHeaders(rawHeaders);
+            if (result.errors?.length) {
+              setParseError(`CSV parse warning: ${result.errors[0]?.message || "Unknown parsing issue"}`);
+            }
+            if (blankHeaders.length > 0) {
+              setParseError("Column header is blank. Add a name to every header cell in the first row.");
+              setIsParsingFile(false);
+              return;
+            }
+            if (duplicateHeaders.length > 0) {
+              setParseError(`Duplicate header names found: ${formatColumnList(duplicateHeaders)}. Rename duplicates before import.`);
+              setIsParsingFile(false);
+              return;
+            }
+            if (colNames.length === 0) {
+              setParseError("No header row detected. Add a first row with column names and try again.");
+              setIsParsingFile(false);
+              return;
+            }
+            const columns: DatasetColumn[] = colNames.map((n) => ({
+              name: n,
+              type: detectColumnType(data.map((r) => r[n])),
+            }));
+            if (data.length === 0) {
+              setParseError("No data rows detected. Keep the header row and add at least one data row.");
+            }
+            setPreview({ columns, data });
             setIsParsingFile(false);
+          },
+          error(error) {
+            setParseError(error.message || "Failed to parse file.");
+            setIsParsingFile(false);
+          },
+        });
+      })().catch((error) => {
+        setParseError(error instanceof Error ? error.message : "Failed to parse file.");
+        setIsParsingFile(false);
+      });
+    } else if (ext === "txt" || ext === "rtf") {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const rawText = String(e.target?.result || "");
+          const reportPreview = parseMetricReportPreview(rawText);
+          if (reportPreview) {
+            if (reportPreview.errors.length > 0) {
+              setParseError(reportPreview.errors[0]);
+              return;
+            }
+            setPreview({ columns: reportPreview.columns, data: reportPreview.data });
+            if (reportPreview.data.length === 0) {
+              setParseError("No data rows detected in the report file.");
+            }
             return;
           }
-          if (duplicateHeaders.length > 0) {
-            setParseError(`Duplicate header names found: ${formatColumnList(duplicateHeaders)}. Rename duplicates before import.`);
-            setIsParsingFile(false);
+
+          const text = maybeDecodeRtf(rawText);
+          const delimitedPreview = await parseDelimitedTextPreview(text);
+          if (delimitedPreview.columns.length === 0) {
+            setParseError(
+              delimitedPreview.parseError ||
+                "Could not detect a supported table in the text file. Use CSV, TSV, Excel, or the behavioral report export format."
+            );
             return;
           }
-          if (colNames.length === 0) {
-            setParseError("No header row detected. Add a first row with column names and try again.");
-            setIsParsingFile(false);
-            return;
-          }
-          const columns: DatasetColumn[] = colNames.map((n) => ({
-            name: n,
-            type: detectColumnType(data.map((r) => r[n])),
-          }));
-          if (data.length === 0) {
+          setPreview({ columns: delimitedPreview.columns, data: delimitedPreview.data });
+          if (delimitedPreview.parseError) {
+            setParseError(delimitedPreview.parseError);
+          } else if (delimitedPreview.data.length === 0) {
             setParseError("No data rows detected. Keep the header row and add at least one data row.");
           }
-          setPreview({ columns, data });
+        } catch (error) {
+          setParseError(error instanceof Error ? error.message : "Failed to read text file.");
+        } finally {
           setIsParsingFile(false);
-        },
-        error(error) {
-          setParseError(error.message || "Failed to parse file.");
-          setIsParsingFile(false);
-        },
-      });
+        }
+      };
+      reader.onerror = () => {
+        setParseError("Failed to read selected file.");
+        setIsParsingFile(false);
+      };
+      reader.readAsText(file, ext === "rtf" ? "windows-1252" : undefined);
     } else if (ext === "xlsx" || ext === "xls") {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
+          const XLSX = await loadXlsx();
           const wb = XLSX.read(e.target?.result, { type: "array" });
           const firstSheetName = wb.SheetNames[0];
           if (!firstSheetName) {
@@ -2348,7 +2556,7 @@ function ImportDialog({
       };
       reader.readAsArrayBuffer(file);
     } else {
-      setParseError("Unsupported file type. Use CSV, TSV, XLSX, or XLS.");
+      setParseError("Unsupported file type. Use CSV, TSV, TXT, RTF, XLSX, or XLS.");
       setIsParsingFile(false);
     }
   }
@@ -2505,13 +2713,13 @@ function ImportDialog({
             onClick={() => fileRef.current?.click()}
           >
             <Upload className="h-8 w-8 mx-auto text-muted-foreground/50 mb-2" />
-            <p className="text-sm font-medium">Click to upload CSV or Excel file</p>
-            <p className="text-xs text-muted-foreground mt-1">Supports .csv, .tsv, .xlsx, .xls</p>
+            <p className="text-sm font-medium">Click to upload CSV, text report, or Excel file</p>
+            <p className="text-xs text-muted-foreground mt-1">Supports .csv, .tsv, .txt, .rtf, .xlsx, .xls</p>
             <input
               ref={fileRef}
               type="file"
               className="hidden"
-              accept=".csv,.tsv,.xlsx,.xls"
+              accept=".csv,.tsv,.txt,.rtf,.xlsx,.xls"
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) handleFile(file);
@@ -2599,11 +2807,15 @@ type GoogleSheetLink = {
   id: string;
   name: string;
   sheet_url: string;
+  sheet_title?: string | null;
   target: "auto" | "dataset" | "colony_results";
   import_config?: {
     selectedColumns?: string[];
     rowStart?: number;
     rowEnd?: number;
+    syncMode?: "import" | "mirror";
+    mirrorTarget?: "results_workspace" | "colony_results";
+    managedTabTitles?: string[];
     colonyMapping?: {
       animalKey?: string;
       timepointKey?: string;
@@ -2849,6 +3061,26 @@ function GoogleSheetsDialog({
     }
   }
 
+  async function pullMirrorLink(linkId: string) {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/sheets/google/mirror/pull", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ linkId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Failed to pull Google Sheet changes into BPAN.");
+        return;
+      }
+      toast.success("Pulled Google Sheet changes into BPAN.");
+      await refreshState();
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-3xl">
@@ -3066,6 +3298,25 @@ function GoogleSheetsDialog({
                             variant="outline"
                             size="sm"
                             className="h-7 px-2 text-[11px]"
+                            onClick={() => window.open(link.sheet_url, "_blank", "noopener,noreferrer")}
+                          >
+                            Open sheet
+                          </Button>
+                          {link.import_config?.syncMode === "mirror" ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => pullMirrorLink(link.id)}
+                              disabled={syncing}
+                            >
+                              Pull into BPAN
+                            </Button>
+                          ) : null}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-[11px]"
                             onClick={() => syncLinks(link.id)}
                             disabled={syncing}
                           >
@@ -3091,9 +3342,17 @@ function GoogleSheetsDialog({
                           </Button>
                         </div>
                       </div>
-                      <p className="text-muted-foreground truncate">{link.sheet_url}</p>
+                      <p className="text-muted-foreground truncate">
+                        {link.sheet_title?.trim() || link.sheet_url}
+                      </p>
+                      {link.sheet_title?.trim() ? (
+                        <p className="text-[11px] text-muted-foreground truncate">{link.sheet_url}</p>
+                      ) : null}
                       <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
                         <Badge variant="secondary">{link.target}</Badge>
+                        {link.import_config?.syncMode === "mirror" ? (
+                          <Badge variant="outline">live mirror</Badge>
+                        ) : null}
                         {link.last_synced_at ? <span>Last sync: {new Date(link.last_synced_at).toLocaleString()}</span> : <span>Never synced</span>}
                         <span>Rows: {link.last_row_count || 0}</span>
                         {link.last_sync_status === "error" && link.last_sync_error ? (
@@ -3143,52 +3402,49 @@ function PasteDialog({
   const [runId, setRunId] = useState(prefillRunId || "");
   const [rawText, setRawText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState<{
+    columns: DatasetColumn[];
+    data: Record<string, unknown>[];
+    parseError: string | null;
+  } | null>(null);
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === runId) || null,
     [runs, runId]
   );
   const missingPrefillRun = Boolean(prefillRunId) && !selectedRun && runId === prefillRunId;
 
-  const preview = useMemo(() => {
-    if (!rawText.trim()) return null;
-    const delimiter = detectPasteDelimiter(rawText);
-    const result = Papa.parse(rawText.trim(), {
-      header: true,
-      dynamicTyping: true,
-      skipEmptyLines: true,
-      delimiter,
-    });
-    const parseError = result.errors?.length
-      ? `Paste parse warning: ${result.errors[0]?.message || "Unknown parsing issue"}`
-      : null;
-    const data = result.data as Record<string, unknown>[];
-    const { normalized: colNames, blankHeaders, duplicateHeaders } = normalizeHeaders(result.meta.fields || []);
-    if (blankHeaders.length > 0) {
-      return {
-        columns: [],
-        data: [],
-        parseError: "Column header is blank. Add a name to every header cell in the first row.",
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!rawText.trim()) {
+      setPreview(null);
+      return () => {
+        cancelled = true;
       };
     }
-    if (duplicateHeaders.length > 0) {
-      return {
-        columns: [],
-        data: [],
-        parseError: `Duplicate header names found: ${formatColumnList(duplicateHeaders)}. Rename duplicates before import.`,
+
+    const reportPreview = parseMetricReportPreview(rawText);
+    if (reportPreview) {
+      setPreview({
+        columns: reportPreview.columns,
+        data: reportPreview.data,
+        parseError: reportPreview.errors[0] || null,
+      });
+      return () => {
+        cancelled = true;
       };
     }
-    if (colNames.length === 0) {
-      return {
-        columns: [],
-        data: [],
-        parseError: "No header row detected. Include a first row with column names.",
-      };
-    }
-    const columns: DatasetColumn[] = colNames.map((n) => ({
-      name: n,
-      type: detectColumnType(data.map((r) => r[n])),
-    }));
-    return { columns, data, parseError };
+
+    void (async () => {
+      const nextPreview = await parseDelimitedTextPreview(rawText);
+      if (!cancelled) {
+        setPreview(nextPreview);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [rawText]);
   const reconciliation = useMemo(
     () =>

@@ -3,7 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
+import { syncManagedGoogleSheetMirrorsForUser } from "@/lib/google-sheet-mirror";
 import { redirect } from "next/navigation";
+
+async function syncColonyMirrorsBestEffort(userId: string) {
+  try {
+    await syncManagedGoogleSheetMirrorsForUser(userId, "colony_results");
+  } catch (error) {
+    console.error("colony mirror sync failed", error);
+  }
+}
 
 /**
  * Helper: when results are saved for an animal+timepoint+experiment,
@@ -180,6 +189,7 @@ export async function upsertColonyResult(
 
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncColonyMirrorsBestEffort(user.id);
   return { success: true };
 }
 
@@ -266,6 +276,7 @@ export async function batchUpsertColonyResults(
 
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncColonyMirrorsBestEffort(user.id);
   if (errors.length > 0)
     return { success: true, saved: successCount, errors };
   return { success: true, saved: successCount };
@@ -319,6 +330,7 @@ export async function deleteColonyResult(id: string) {
 
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncColonyMirrorsBestEffort(user.id);
   return { success: true };
 }
 
@@ -368,6 +380,7 @@ export async function reconcileTrackerFromExistingColonyResults() {
 
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncColonyMirrorsBestEffort(user.id);
   return { success: true, completed, ignored };
 }
 
@@ -419,5 +432,6 @@ export async function deleteColonyResultMeasureColumn(
 
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncColonyMirrorsBestEffort(user.id);
   return { success: true, updated };
 }
