@@ -304,6 +304,42 @@ function formatDateTime(value: string | null) {
 }
 
 async function callLabsModel(prompt: string) {
+  const xaiKeys = [
+    process.env.XAI_API_KEY,
+    process.env.XAI_API_KEY_FALLBACK,
+    process.env.XAI_API_KEY_FALLBACK_2,
+    process.env.XAI_API_KEY_FALLBACK_3,
+  ]
+    .filter((value): value is string => Boolean(value && value.trim()));
+  if (xaiKeys.length > 0) {
+    const xaiModel = process.env.XAI_MODEL || "grok-3-mini";
+    const OpenAI = (await import("openai")).default;
+    for (const apiKey of xaiKeys) {
+      try {
+        const xai = new OpenAI({
+          apiKey,
+          baseURL: "https://api.x.ai/v1",
+        });
+        const completion = await xai.chat.completions.create({
+          model: xaiModel,
+          messages: [
+            {
+              role: "system",
+              content: "You are a reliable lab assistant model. Follow instructions exactly. If asked to return JSON only, return valid JSON only.",
+            },
+            { role: "user", content: prompt },
+          ],
+          max_tokens: 900,
+          temperature: 0.2,
+        });
+        const text = completion.choices[0]?.message?.content?.trim();
+        if (text) return text;
+      } catch {
+        // try next xAI key, then fall through to existing provider chain
+      }
+    }
+  }
+
   try {
     const text = await callAI(
       "You are a reliable lab assistant model. Follow instructions exactly. If asked to return JSON only, return valid JSON only.",
