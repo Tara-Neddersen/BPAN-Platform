@@ -333,6 +333,10 @@ export async function saveExperimentTemplate(formData: FormData) {
     })),
   });
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return {
+    templateId: persistedTemplateId,
+    schemaId: schemaId || null,
+  };
 }
 
 export async function deleteExperimentTemplate(templateId: string) {

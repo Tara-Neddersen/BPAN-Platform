@@ -51,23 +51,28 @@ export async function createExperiment(formData: FormData) {
     .map((d) => d.trim())
     .filter(Boolean);
 
-  const { error } = await supabase.from("experiments").insert({
-    user_id: user.id,
-    title,
-    description,
-    status,
-    priority,
-    start_date: startDate || null,
-    end_date: endDate || null,
-    aim,
-    protocol_id: protocolId || null,
-    tags,
-    depends_on: dependsOn,
-  });
+  const { data, error } = await supabase
+    .from("experiments")
+    .insert({
+      user_id: user.id,
+      title,
+      description,
+      status,
+      priority,
+      start_date: startDate || null,
+      end_date: endDate || null,
+      aim,
+      protocol_id: protocolId || null,
+      tags,
+      depends_on: dependsOn,
+    })
+    .select("id")
+    .single();
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { id: data?.id as string | undefined };
 }
 
 export async function updateExperiment(formData: FormData) {
@@ -171,17 +176,22 @@ export async function createTimepoint(formData: FormData) {
   const scheduledAt = formData.get("scheduled_at") as string;
   const notes = (formData.get("notes") as string) || null;
 
-  const { error } = await supabase.from("experiment_timepoints").insert({
-    experiment_id: experimentId,
-    user_id: user.id,
-    label,
-    scheduled_at: scheduledAt,
-    notes,
-  });
+  const { data, error } = await supabase
+    .from("experiment_timepoints")
+    .insert({
+      experiment_id: experimentId,
+      user_id: user.id,
+      label,
+      scheduled_at: scheduledAt,
+      notes,
+    })
+    .select("id")
+    .single();
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { id: data?.id as string | undefined };
 }
 
 export async function completeTimepoint(id: string) {
@@ -243,19 +253,24 @@ export async function createProtocol(formData: FormData) {
     steps = [];
   }
 
-  const { error } = await supabase.from("protocols").insert({
-    user_id: user.id,
-    title,
-    description,
-    category,
-    steps,
-    figure_links: figureLinks,
-    file_links: fileLinks,
-  });
+  const { data, error } = await supabase
+    .from("protocols")
+    .insert({
+      user_id: user.id,
+      title,
+      description,
+      category,
+      steps,
+      figure_links: figureLinks,
+      file_links: fileLinks,
+    })
+    .select("id,user_id,title,description,category,steps,file_links,version,parent_id,created_at,updated_at")
+    .single();
 
   if (error) throw new Error(error.message);
   revalidatePath("/experiments");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return data;
 }
 
 export async function updateProtocol(formData: FormData) {

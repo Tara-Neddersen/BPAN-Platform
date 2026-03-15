@@ -10,6 +10,7 @@ import { HelpHint } from "@/components/ui/help-hint";
 import { ExperimentTemplateBuilder, type ExperimentTemplateRecord } from "@/components/experiment-template-builder";
 import { ScheduleBuilder } from "@/components/schedule-builder";
 import { RunExecutionBuilder } from "@/components/run-execution-builder";
+import { BatteryCreationWizard } from "@/components/battery-creation-wizard";
 import {
   Calendar,
   BarChart3,
@@ -31,6 +32,7 @@ import {
   Layers3,
   Play,
   Sparkles,
+  FlaskConical,
 } from "lucide-react";
 import {
   createExperiment,
@@ -83,15 +85,16 @@ import { UI_SURFACE_TITLES } from "@/lib/ui-copy";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-type TabKey = "calendar" | "gantt" | "schedule" | "runs" | "templates" | "protocols" | "reagents";
+type TabKey = "battery_wizard" | "calendar" | "gantt" | "schedule" | "runs" | "templates" | "protocols" | "reagents";
 
 const PRIMARY_TABS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
+  { key: "battery_wizard", label: "Create Battery", icon: <FlaskConical className="h-4 w-4" /> },
   { key: "calendar", label: "Calendar", icon: <Calendar className="h-4 w-4" /> },
   { key: "gantt", label: "Timeline", icon: <BarChart3 className="h-4 w-4" /> },
-  { key: "templates", label: "Templates", icon: <Layers3 className="h-4 w-4" /> },
+  { key: "templates", label: "Battery Records", icon: <Layers3 className="h-4 w-4" /> },
   { key: "runs", label: "Runs", icon: <Play className="h-4 w-4" /> },
-  { key: "schedule", label: "Schedule", icon: <GripVertical className="h-4 w-4" /> },
-  { key: "protocols", label: "Protocols", icon: <FileText className="h-4 w-4" /> },
+  { key: "schedule", label: "Battery Layout", icon: <GripVertical className="h-4 w-4" /> },
+  { key: "protocols", label: "Single Experiments", icon: <FileText className="h-4 w-4" /> },
   { key: "reagents", label: "Reagents", icon: <Beaker className="h-4 w-4" /> },
 ];
 
@@ -214,7 +217,7 @@ export function ExperimentsClient({
   runExecutionPersistenceEnabled = false,
   runExecutionWarning = null,
 }: Props) {
-  const [tab, setTab] = useState<TabKey>("calendar");
+  const [tab, setTab] = useState<TabKey>("battery_wizard");
   const [showNewExperiment, setShowNewExperiment] = useState(false);
   const [editingExperiment, setEditingExperiment] = useState<Experiment | null>(null);
 
@@ -289,6 +292,20 @@ export function ExperimentsClient({
       )}
 
       {/* Tab content */}
+      {tab === "battery_wizard" && (
+        <BatteryCreationWizard
+          experiments={experiments}
+          timepoints={timepoints}
+          protocols={protocols}
+          templates={experimentTemplates.map((template) => ({ id: template.id, title: template.title }))}
+          scheduleTemplates={scheduleTemplates}
+          scheduleDays={scheduleDays}
+          scheduleSlots={scheduleSlots}
+          scheduledBlocks={scheduledBlocks}
+          persistenceEnabled={templateBuilderPersistenceEnabled && scheduleBuilderPersistenceEnabled}
+          onOpenDirectEditors={() => setTab("schedule")}
+        />
+      )}
       {tab === "calendar" && (
         <CalendarView
           experiments={experiments}
