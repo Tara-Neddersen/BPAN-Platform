@@ -458,6 +458,9 @@ export function ScheduleBuilder({
   const [dragging, setDragging] = useState<DragPayload | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [windowSettingsByName, setWindowSettingsByName] = useState<Record<string, WindowScheduleSettings>>({});
+  const [selectedCalendarDayId, setSelectedCalendarDayId] = useState<string>(
+    draft.days[0]?.id || "",
+  );
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>(() => {
     const initialDraft = buildDraftForTemplate(
       initialTemplateId,
@@ -571,6 +574,7 @@ export function ScheduleBuilder({
     setSlotDrafts({});
     setDragging(null);
     setSelectedWindowName("");
+    setSelectedCalendarDayId(nextDraft.days[0]?.id || "");
     setWindowSettingsByName({});
     setExpandedDays(nextDraft.days[0]?.id ? { [nextDraft.days[0].id]: true } : {});
   };
@@ -1222,6 +1226,10 @@ export function ScheduleBuilder({
 
     return weeks.length > 0 ? weeks : [Array.from({ length: 7 }, () => null)];
   }, [activeWindowSettings.preferredStartWeekday, draft.days]);
+  const resolvedCalendarDayId =
+    draft.days.some((day) => day.id === selectedCalendarDayId) ? selectedCalendarDayId : (draft.days[0]?.id || "");
+  const selectedCalendarDay =
+    draft.days.find((day) => day.id === resolvedCalendarDayId) || draft.days[0] || null;
 
   const renderDayCard = (day: BuilderDay) => (
     <Card
@@ -1766,7 +1774,7 @@ export function ScheduleBuilder({
       ) : null}
 
       {viewMode === "calendar" ? (
-        <div className="space-y-4">
+        <div className="space-y-6">
           <div className="grid gap-3 md:grid-cols-7">
             {WEEKDAY_LABELS.map((label) => (
               <div key={label} className="rounded-xl border bg-slate-50 px-3 py-2 text-center text-sm font-medium text-slate-700">
@@ -1780,14 +1788,78 @@ export function ScheduleBuilder({
                 {week.map((day, weekdayIndex) => (
                   <div
                     key={`week-${weekIndex}-weekday-${weekdayIndex}`}
-                    className="min-h-[180px] rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-2"
+                    className="min-h-[140px] rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-2"
                   >
-                    {day ? renderDayCard(day) : <div className="h-full rounded-xl border border-transparent" />}
+                    {day ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCalendarDayId(day.id);
+                          setDayExpanded(day.id, true);
+                        }}
+                        className={cn(
+                          "flex h-full w-full flex-col rounded-xl border bg-white p-3 text-left shadow-sm transition-colors",
+                          resolvedCalendarDayId === day.id
+                            ? "border-slate-900 ring-2 ring-slate-200"
+                            : "border-slate-200 hover:border-slate-300",
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">Day {day.day_index}</p>
+                            <p className="text-xs text-slate-500">
+                              {day.slots.length === 0 ? "No work day" : `${day.slots.length} slot${day.slots.length === 1 ? "" : "s"}`}
+                            </p>
+                          </div>
+                          <span className="text-xs text-slate-400">
+                            {resolvedCalendarDayId === day.id ? "Editing" : "Open"}
+                          </span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {getVisibleDayBlocks(day, activeWindowName).length === 0 ? (
+                            <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-500">
+                              No experiments
+                            </span>
+                          ) : (
+                            getVisibleDayBlocks(day, activeWindowName)
+                              .slice(0, 3)
+                              .map((block) => (
+                                <span
+                                  key={block.id}
+                                  className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700"
+                                >
+                                  {block.title_override.trim() || templateTitleById.get(block.experiment_template_id) || "Untitled"}
+                                </span>
+                              ))
+                          )}
+                          {getVisibleDayBlocks(day, activeWindowName).length > 3 ? (
+                            <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-500">
+                              +{getVisibleDayBlocks(day, activeWindowName).length - 3} more
+                            </span>
+                          ) : null}
+                        </div>
+                      </button>
+                    ) : (
+                      <div className="h-full rounded-xl border border-transparent" />
+                    )}
                   </div>
                 ))}
               </div>
             ))}
           </div>
+          {selectedCalendarDay ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">Editing Day {selectedCalendarDay.day_index}</h3>
+                  <p className="text-sm text-slate-600">
+                    Use the calendar above to switch days without losing the bigger editor.
+                  </p>
+                </div>
+              </div>
+              {renderDayCard(selectedCalendarDay)}
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="grid gap-4 xl:grid-cols-2">{draft.days.map((day) => renderDayCard(day))}</div>
