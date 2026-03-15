@@ -737,6 +737,17 @@ export function ColonyResultsTab({
     toast.success("Exported migration-ready colony workbook.");
   }, [animals, cohorts, colonyResults, timepoints]);
 
+  const startGoogleSheetsConnect = useCallback(async () => {
+    const authRes = await fetch("/api/sheets/google/auth");
+    const authJson = await authRes.json().catch(() => ({}));
+    if (!authRes.ok || !authJson.url) {
+      toast.error(authJson.error || "Could not start Google Sheets authorization.");
+      return false;
+    }
+    window.location.href = String(authJson.url);
+    return true;
+  }, []);
+
   const handleExportAllToGoogleSheets = useCallback(async () => {
     setExportingGoogleBackup(true);
     try {
@@ -747,6 +758,11 @@ export function ColonyResultsTab({
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (typeof json.error === "string" && /Google Sheets not connected|needs to be reconnected/i.test(json.error)) {
+          toast.error("Google Sheets needs to be connected first. Opening authorization.");
+          await startGoogleSheetsConnect();
+          return;
+        }
         toast.error(json.error || "Failed to create Google Sheets backup.");
         return;
       }
@@ -757,7 +773,7 @@ export function ColonyResultsTab({
     } finally {
       setExportingGoogleBackup(false);
     }
-  }, []);
+  }, [startGoogleSheetsConnect]);
 
   const handleCreateLiveSyncSheet = useCallback(async () => {
     setCreatingLiveSyncSheet(true);
@@ -774,6 +790,11 @@ export function ColonyResultsTab({
           window.location.href = String(json.authUrl);
           return;
         }
+        if (typeof json.error === "string" && /Google Sheets not connected|needs to be reconnected/i.test(json.error)) {
+          toast.error("Google Sheets needs to be connected first. Opening authorization.");
+          await startGoogleSheetsConnect();
+          return;
+        }
         toast.error(json.error || "Failed to create live sync Google Sheet.");
         return;
       }
@@ -784,7 +805,7 @@ export function ColonyResultsTab({
     } finally {
       setCreatingLiveSyncSheet(false);
     }
-  }, []);
+  }, [startGoogleSheetsConnect]);
 
   // Add custom field
   const handleAddField = useCallback(() => {
