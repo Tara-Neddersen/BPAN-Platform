@@ -114,6 +114,7 @@ type QAItem = {
   question: string;
   answer: string;
   source: "model" | "rules";
+  provider: "xai" | "fallback_model" | "rules";
   citations: Citation[];
   actionPlan: ActionPlan | null;
 };
@@ -249,6 +250,12 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
           question: q,
           answer: String(data.answer || ""),
           source: data.source === "rules" ? "rules" : "model",
+          provider:
+            data.provider === "xai"
+              ? "xai"
+              : data.provider === "fallback_model"
+                ? "fallback_model"
+                : "rules",
           citations: Array.isArray(data.citations) ? (data.citations as Citation[]) : [],
           actionPlan: data.actionPlan ? (data.actionPlan as ActionPlan) : null,
         },
@@ -403,7 +410,20 @@ export function LabsAssistantClient({ activeLabId }: LabsAssistantClientProps) {
           ) : (
             history.map((item) => (
               <div key={item.id} className="min-w-0 rounded-xl border border-slate-200 bg-white p-3.5">
-              <p className="text-sm font-medium text-slate-700">Q: {item.question}</p>
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-sm font-medium text-slate-700">Q: {item.question}</p>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                    item.provider === "xai"
+                      ? "bg-emerald-100 text-emerald-700"
+                      : item.provider === "fallback_model"
+                        ? "bg-amber-100 text-amber-700"
+                        : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  {item.provider === "xai" ? "xAI" : item.provider === "fallback_model" ? "Fallback AI" : "Rules"}
+                </span>
+              </div>
               <p className="mt-1.5 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-slate-900 sm:text-sm">
                 {expandedAnswerIds[item.id]
                   ? item.answer

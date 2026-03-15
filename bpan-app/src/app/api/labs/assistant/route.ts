@@ -303,7 +303,12 @@ function formatDateTime(value: string | null) {
   });
 }
 
-async function callLabsModel(prompt: string) {
+type LabsModelResult = {
+  text: string;
+  provider: "xai" | "fallback_model";
+};
+
+async function callLabsModel(prompt: string): Promise<LabsModelResult | null> {
   const xaiKeys = [
     process.env.XAI_API_KEY,
     process.env.XAI_API_KEY_FALLBACK,
@@ -333,7 +338,7 @@ async function callLabsModel(prompt: string) {
           temperature: 0.2,
         });
         const text = completion.choices[0]?.message?.content?.trim();
-        if (text) return text;
+        if (text) return { text, provider: "xai" };
       } catch {
         // try next xAI key, then fall through to existing provider chain
       }
@@ -346,7 +351,7 @@ async function callLabsModel(prompt: string) {
       prompt,
       900,
     );
-    if (text) return text;
+    if (text) return { text, provider: "fallback_model" };
   } catch {
     // fall through to Hugging Face fallback
   }
@@ -377,7 +382,9 @@ async function callLabsModel(prompt: string) {
     if (!response.ok) return null;
     const json = await response.json();
     const content = json?.choices?.[0]?.message?.content;
-    return typeof content === "string" ? content.trim() : null;
+    return typeof content === "string" && content.trim().length > 0
+      ? { text: content.trim(), provider: "fallback_model" }
+      : null;
   } catch {
     return null;
   }
@@ -451,8 +458,12 @@ async function composeFrontLayerReply(input: {
     "Return only the user-facing reply.",
   ].join("\n");
   const raw = await callLabsModel(prompt);
-  if (!raw) return { answer: input.fallback, source: "rules" as const };
-  return { answer: enforceConciseAnswer(raw), source: "model" as const };
+  if (!raw) return { answer: input.fallback, source: "rules" as const, provider: "rules" as const };
+  return {
+    answer: enforceConciseAnswer(raw.text),
+    source: "model" as const,
+    provider: raw.provider,
+  };
 }
 
 function extractJsonObject(text: string) {
@@ -481,7 +492,7 @@ async function runConversationLayer(question: string, chatHistory: ChatHistoryTu
     ...chatHistory.slice(-4).map((turn, i) => `Turn ${i + 1} Q: ${turn.question}\nTurn ${i + 1} A: ${turn.answer.slice(0, 180)}`),
   ].join("\n");
   const raw = await callLabsModel(prompt);
-  const parsedRaw = raw ? extractJsonObject(raw) : null;
+  const parsedRaw = raw ? extractJsonObject(raw.text) : null;
   const parsed = conversationLayerSchema.safeParse(parsedRaw);
   if (!parsed.success) {
     return {
@@ -536,7 +547,7 @@ async function runActionPlannerLayer(
     ...chatHistory.slice(-4).map((turn, i) => `Turn ${i + 1} Q: ${turn.question}\nTurn ${i + 1} A: ${turn.answer.slice(0, 180)}`),
   ].join("\n");
   const raw = await callLabsModel(prompt);
-  const parsedRaw = raw ? extractJsonObject(raw) : null;
+  const parsedRaw = raw ? extractJsonObject(raw.text) : null;
   const parsed = actionPlannerLayerSchema.safeParse(parsedRaw);
   if (!parsed.success) return null;
   if (parsed.data.intent !== intent) return null;
@@ -605,7 +616,7 @@ async function proposeActionPlanFromModel(
   ].join("\n");
 
   const raw = await callLabsModel(prompt);
-  const parsedRaw = raw ? extractJsonObject(raw) : null;
+  const parsedRaw = raw ? extractJsonObject(raw.text) : null;
   if (!parsedRaw || typeof parsedRaw !== "object") return null;
   if ((parsedRaw as Record<string, unknown>).kind === "none") return null;
   const parsed = parseActionPlan(parsedRaw);
@@ -2106,12 +2117,13 @@ export async function POST(req: NextRequest) {
         ].join("\n"),
         fallback: actionPlan.body,
       });
-      return NextResponse.json({
-        answer: clarificationReply.answer,
-        source: clarificationReply.source,
-        citations: [...(noteGrounded?.citations || []), ...(opsGrounded?.citations || [])],
-        actionPlan,
-      });
+        return NextResponse.json({
+          answer: clarificationReply.answer,
+          source: clarificationReply.source,
+          provider: clarificationReply.provider,
+          citations: [...(noteGrounded?.citations || []), ...(opsGrounded?.citations || [])],
+          actionPlan,
+        });
     }
     if (actionPlan) {
       await logAssistantAction(supabase, {
@@ -2135,6 +2147,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         answer: actionReply.answer,
         source: actionReply.source,
+        provider: actionReply.provider,
         citations: [...grounded.citations, ...(noteGrounded?.citations || []), ...(opsGrounded?.citations || [])],
         actionPlan,
       });
@@ -2200,6 +2213,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       answer: answer.answer,
       source: answer.source,
+      provider: answer.provider,
       citations,
       actionPlan,
     });
