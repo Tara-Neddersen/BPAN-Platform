@@ -18,7 +18,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { CalendarDays, Copy, GripVertical, Layers3, Plus, Save, Trash2 } from "lucide-react";
+import {
+  CalendarDays,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  GripVertical,
+  Layers3,
+  Plus,
+  Save,
+  Trash2,
+} from "lucide-react";
 
 type BuilderBlock = {
   id: string;
@@ -284,6 +294,27 @@ function nextDayIndex(days: BuilderDay[]) {
   return Math.max(...days.map((day) => day.day_index), 0) + 1;
 }
 
+function getDaySummary(day: BuilderDay, templateTitleById: Map<string, string>) {
+  if (day.label.trim()) {
+    return day.label.trim();
+  }
+
+  const blockTitles = day.slots
+    .flatMap((slot) => slot.blocks)
+    .map((block) => block.title_override.trim() || templateTitleById.get(block.experiment_template_id) || "")
+    .filter(Boolean);
+
+  if (blockTitles.length === 0) {
+    return day.slots.length === 0 ? "No work scheduled" : "Work day";
+  }
+
+  if (blockTitles.length === 1) {
+    return blockTitles[0];
+  }
+
+  return `${blockTitles[0]} +${blockTitles.length - 1} more`;
+}
+
 export function ScheduleBuilder({
   experimentTemplates,
   scheduleTemplates,
@@ -307,17 +338,48 @@ export function ScheduleBuilder({
   const [dayDrafts, setDayDrafts] = useState<Record<string, DayDraft>>({});
   const [slotDrafts, setSlotDrafts] = useState<Record<string, SlotDraft>>({});
   const [dragging, setDragging] = useState<DragPayload | null>(null);
+  const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>(() => {
+    const initialDraft = buildDraftForTemplate(
+      experimentTemplates[0]?.id ?? "",
+      scheduleTemplates,
+      scheduleDays,
+      scheduleSlots,
+      scheduledBlocks,
+    );
+    const firstDayId = initialDraft.days[0]?.id;
+    return firstDayId ? { [firstDayId]: true } : {};
+  });
 
   const templateTitleById = new Map(experimentTemplates.map((template) => [template.id, template.title]));
 
   const loadTemplate = (templateId: string) => {
-    setSelectedTemplateId(templateId);
-    setDraft(
-      buildDraftForTemplate(templateId, scheduleTemplates, scheduleDays, scheduleSlots, scheduledBlocks),
+    const nextDraft = buildDraftForTemplate(
+      templateId,
+      scheduleTemplates,
+      scheduleDays,
+      scheduleSlots,
+      scheduledBlocks,
     );
+    setSelectedTemplateId(templateId);
+    setDraft(nextDraft);
     setDayDrafts({});
     setSlotDrafts({});
     setDragging(null);
+    setExpandedDays(nextDraft.days[0]?.id ? { [nextDraft.days[0].id]: true } : {});
+  };
+
+  const setDayExpanded = (dayId: string, isExpanded: boolean) => {
+    setExpandedDays((current) => ({
+      ...current,
+      [dayId]: isExpanded,
+    }));
+  };
+
+  const toggleDayExpanded = (dayId: string) => {
+    setExpandedDays((current) => ({
+      ...current,
+      [dayId]: !current[dayId],
+    }));
   };
 
   const updateDayDraft = (dayId: string, patch: Partial<DayDraft>) => {
@@ -399,11 +461,15 @@ export function ScheduleBuilder({
   };
 
   const addDay = () => {
-    updateDays((current) => [...current, createDefaultDay({ day_index: nextDayIndex(current) })]);
+    const nextDay = createDefaultDay({ day_index: nextDayIndex(draft.days) });
+    updateDays((current) => [...current, nextDay]);
+    setDayExpanded(nextDay.id, true);
   };
 
   const addEmptyDay = () => {
-    updateDays((current) => [...current, createEmptyDay(nextDayIndex(current))]);
+    const nextDay = createEmptyDay(nextDayIndex(draft.days));
+    updateDays((current) => [...current, nextDay]);
+    setDayExpanded(nextDay.id, true);
   };
 
   const insertGapDaysAfter = (dayId: string, count: number) => {
@@ -411,6 +477,7 @@ export function ScheduleBuilder({
       return;
     }
 
+    const insertedDayIds: string[] = [];
     updateDays((current) => {
       const dayIndex = current.findIndex((day) => day.id === dayId);
       if (dayIndex === -1) {
@@ -426,9 +493,16 @@ export function ScheduleBuilder({
       const gapDays = Array.from({ length: count }, (_, offset) =>
         createEmptyDay(baseDayIndex + offset + 1),
       );
+      insertedDayIds.push(...gapDays.map((day) => day.id));
       shifted.splice(dayIndex + 1, 0, ...gapDays);
       return shifted;
     });
+    if (insertedDayIds.length > 0) {
+      setExpandedDays((current) => ({
+        ...current,
+        ...Object.fromEntries(insertedDayIds.map((id) => [id, true])),
+      }));
+    }
   };
 
   const deleteDay = (dayId: string) => {
@@ -437,6 +511,11 @@ export function ScheduleBuilder({
         return current;
       }
       return current.filter((day) => day.id !== dayId);
+    });
+    setExpandedDays((current) => {
+      const next = { ...current };
+      delete next[dayId];
+      return next;
     });
   };
 
@@ -853,11 +932,12 @@ export function ScheduleBuilder({
         <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">
           <div className="space-y-1">
             <p className="text-sm font-medium">
-              {persistenceEnabled ? "Phase 2 scheduling persistence is active." : "Draft-only mode."}
+              {persistenceEnabled ? "This battery layout is editable and saveable." : "Draft-only mode."}
             </p>
             <p className="text-sm text-muted-foreground">
-              This editor now writes `schedule_templates`, `schedule_days`, `schedule_slots`, and
-              `scheduled_blocks` when the new tables are available.
+              {persistenceEnabled
+                ? "Arrange work days, no-work days, and experiment timing here."
+                : "Saving is not available in this environment yet."}
             </p>
           </div>
           <Button type="button" onClick={handleSave} disabled={!persistenceEnabled || isPending || !draft.template_id} className="gap-2">
@@ -909,7 +989,7 @@ export function ScheduleBuilder({
         <div>
           <h2 className="text-lg font-semibold">Relative Schedule Builder</h2>
           <p className="text-sm text-muted-foreground">
-            Build the battery day by day. If you do not work on certain days, add empty days so the later experiments stay on the right relative day.
+            Build the battery day by day. Use empty days to keep the timing right when no experiment happens.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -919,7 +999,7 @@ export function ScheduleBuilder({
           </Button>
           <Button type="button" variant="outline" onClick={addEmptyDay} className="gap-2">
             <Plus className="h-4 w-4" />
-            Add Empty Day
+            Add No-Work Day
           </Button>
         </div>
       </div>
@@ -942,17 +1022,26 @@ export function ScheduleBuilder({
           >
             <CardHeader className="gap-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => toggleDayExpanded(day.id)}
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                >
                   <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
                     <CalendarDays className="h-5 w-5" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <CardTitle className="text-base">Day {day.day_index}</CardTitle>
-                    <p className="text-xs text-muted-foreground">
-                      {day.slots.length === 0 ? "Empty day" : "Drag to reorder days"}
+                    <p className="truncate text-sm text-muted-foreground">
+                      {getDaySummary(day, templateTitleById)}
                     </p>
                   </div>
-                </div>
+                  {expandedDays[day.id] ? (
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  )}
+                </button>
                 <div className="flex items-center gap-2">
                   <GripVertical className="h-4 w-4 text-muted-foreground" />
                   <Button type="button" variant="ghost" size="icon" onClick={() => deleteDay(day.id)} disabled={draft.days.length === 1}>
@@ -960,24 +1049,25 @@ export function ScheduleBuilder({
                   </Button>
                 </div>
               </div>
-              <Input
-                value={day.label}
-                onChange={(event) => updateDayLabel(day.id, event.target.value)}
-                placeholder="Optional note for this day"
-              />
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 1)}>
-                  Add Empty Day After
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 2)}>
-                  Add Weekend After
-                </Button>
-              </div>
             </CardHeader>
-            <CardContent className="space-y-4">
+            {expandedDays[day.id] ? (
+              <CardContent className="space-y-4">
+                <Input
+                  value={day.label}
+                  onChange={(event) => updateDayLabel(day.id, event.target.value)}
+                  placeholder="Optional note for this day"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 1)}>
+                    Insert 1 No-Work Day
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 2)}>
+                    Insert 2 No-Work Days
+                  </Button>
+                </div>
               {day.slots.length === 0 ? (
                 <div className="rounded-lg border border-dashed bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
-                  This is an intentional empty day. Keep it to preserve calendar spacing, or add slots if work should happen here.
+                  This is an intentional no-work day. Keep it to preserve spacing, or add slots if work should happen here.
                 </div>
               ) : null}
 
@@ -1211,7 +1301,8 @@ export function ScheduleBuilder({
                   );
                 })}
               </div>
-            </CardContent>
+              </CardContent>
+            ) : null}
           </Card>
         ))}
       </div>
