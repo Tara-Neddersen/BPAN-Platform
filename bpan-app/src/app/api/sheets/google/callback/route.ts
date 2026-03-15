@@ -3,8 +3,27 @@ import { createClient } from "@/lib/supabase/server";
 import { exchangeGoogleSheetsCode, getGoogleSheetsEmail } from "@/lib/google-sheets";
 
 export async function GET(req: NextRequest) {
-  const redirectToResults = (params: Record<string, string>) => {
-    const url = new URL("/results", req.url);
+  const parseState = (rawState: string | null) => {
+    if (!rawState) return null;
+    try {
+      const decoded = JSON.parse(Buffer.from(rawState, "base64url").toString("utf8")) as {
+        userId?: string;
+        next?: string;
+      };
+      return {
+        userId: decoded.userId || null,
+        next: decoded.next?.startsWith("/") ? decoded.next : "/results",
+      };
+    } catch {
+      return {
+        userId: rawState,
+        next: "/results",
+      };
+    }
+  };
+
+  const redirectToTarget = (nextPath: string, params: Record<string, string>) => {
+    const url = new URL(nextPath || "/results", req.url);
     for (const [key, value] of Object.entries(params)) {
       url.searchParams.set(key, value);
     }
@@ -13,17 +32,18 @@ export async function GET(req: NextRequest) {
 
   try {
     const code = req.nextUrl.searchParams.get("code");
-    const state = req.nextUrl.searchParams.get("state");
+    const state = parseState(req.nextUrl.searchParams.get("state"));
     const error = req.nextUrl.searchParams.get("error");
+    const nextPath = state?.next || "/results";
 
     if (error) {
-      return redirectToResults({
+      return redirectToTarget(nextPath, {
         sheets: "error",
         msg: "Google Sheets connection was cancelled.",
       });
     }
-    if (!code || !state) {
-      return redirectToResults({
+    if (!code || !state?.userId) {
+      return redirectToTarget(nextPath, {
         sheets: "error",
         msg: "Google Sheets callback is missing required data.",
       });
@@ -37,14 +57,14 @@ export async function GET(req: NextRequest) {
     if (!user) {
       return NextResponse.redirect(
         new URL(
-          `/auth/login?next=${encodeURIComponent("/results")}&error=${encodeURIComponent("Sign in again to finish Google Sheets connection.")}`,
+          `/auth/login?next=${encodeURIComponent(nextPath)}&error=${encodeURIComponent("Sign in again to finish Google Sheets connection.")}`,
           req.url
         )
       );
     }
 
-    if (state !== user.id) {
-      return redirectToResults({
+    if (state.userId !== user.id) {
+      return redirectToTarget(nextPath, {
         sheets: "error",
         msg: "Google Sheets connection could not be verified for this account.",
       });
@@ -59,7 +79,7 @@ export async function GET(req: NextRequest) {
     const tokens = await exchangeGoogleSheetsCode(code);
     const refreshToken = tokens.refresh_token || existingTokenRow?.refresh_token || null;
     if (!refreshToken) {
-      return redirectToResults({
+      return redirectToTarget(nextPath, {
         sheets: "error",
         msg: "Google Sheets connection did not return a reusable refresh token. Please disconnect Sheets and try again.",
       });
@@ -82,19 +102,19 @@ export async function GET(req: NextRequest) {
 
     if (dbError) {
       console.error(dbError);
-      return redirectToResults({
+      return redirectToTarget(nextPath, {
         sheets: "error",
         msg: "Google Sheets connection could not be saved.",
       });
     }
 
-    return redirectToResults({
+    return redirectToTarget(nextPath, {
       sheets: "connected",
       msg: "Google Sheets connected.",
     });
   } catch (err) {
     console.error("Google Sheets callback error:", err);
-    return redirectToResults({
+    return redirectToTarget("/results", {
       sheets: "error",
       msg: "Google Sheets authorization failed.",
     });

@@ -332,6 +332,13 @@ export function ColonyResultsTab({
   const [showImport, setShowImport] = useState(false);
   const [exportingGoogleBackup, setExportingGoogleBackup] = useState(false);
   const [creatingLiveSyncSheet, setCreatingLiveSyncSheet] = useState(false);
+  const [googleSheetsStatus, setGoogleSheetsStatus] = useState<{
+    configured: boolean;
+    connected: boolean;
+    needsReconnect?: boolean;
+    email?: string | null;
+  }>({ configured: false, connected: false });
+  const [googleSheetsLoading, setGoogleSheetsLoading] = useState(false);
   const [pendingDeleteField, setPendingDeleteField] = useState<MeasureField | null>(null);
   const [deletingField, setDeletingField] = useState(false);
   const [newFieldKey, setNewFieldKey] = useState("");
@@ -367,6 +374,40 @@ export function ColonyResultsTab({
       return changed ? next : prev;
     });
   }, []);
+
+  const refreshGoogleSheetsStatus = useCallback(async () => {
+    const res = await fetch("/api/sheets/google/status", { cache: "no-store" });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json.error || "Failed to load Google Sheets status.");
+    }
+    setGoogleSheetsStatus({
+      configured: !!json.configured,
+      connected: !!json.connected,
+      needsReconnect: !!json.needsReconnect,
+      email: json.email || null,
+    });
+  }, []);
+
+  useEffect(() => {
+    refreshGoogleSheetsStatus().catch(() => {});
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("sheets") === "connected") {
+      toast.success(params.get("msg") || "Google Sheets connected.");
+      refreshGoogleSheetsStatus().catch(() => {});
+      params.delete("sheets");
+      params.delete("msg");
+      const next = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
+    } else if (params.get("sheets") === "error") {
+      toast.error(params.get("msg") || "Google Sheets authorization failed.");
+      refreshGoogleSheetsStatus().catch(() => {});
+      params.delete("sheets");
+      params.delete("msg");
+      const next = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
+    }
+  }, [refreshGoogleSheetsStatus]);
 
   useEffect(() => {
     setHiddenFields((prev) => {
@@ -738,7 +779,8 @@ export function ColonyResultsTab({
   }, [animals, cohorts, colonyResults, timepoints]);
 
   const startGoogleSheetsConnect = useCallback(async () => {
-    const authRes = await fetch("/api/sheets/google/auth");
+    const next = `${window.location.pathname}${window.location.search}`;
+    const authRes = await fetch(`/api/sheets/google/auth?next=${encodeURIComponent(next)}`);
     const authJson = await authRes.json().catch(() => ({}));
     if (!authRes.ok || !authJson.url) {
       toast.error(authJson.error || "Could not start Google Sheets authorization.");
@@ -747,6 +789,22 @@ export function ColonyResultsTab({
     window.location.href = String(authJson.url);
     return true;
   }, []);
+
+  const disconnectGoogleSheets = useCallback(async () => {
+    setGoogleSheetsLoading(true);
+    try {
+      const res = await fetch("/api/sheets/google/disconnect", { method: "POST" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Failed to disconnect Google Sheets.");
+        return;
+      }
+      await refreshGoogleSheetsStatus();
+      toast.success("Google Sheets disconnected.");
+    } finally {
+      setGoogleSheetsLoading(false);
+    }
+  }, [refreshGoogleSheetsStatus]);
 
   const handleExportAllToGoogleSheets = useCallback(async () => {
     setExportingGoogleBackup(true);
@@ -1167,6 +1225,41 @@ export function ColonyResultsTab({
                           <p className="mt-1 text-sm text-muted-foreground">
                             Enter measured values for each animal. Changes are saved when you click Save.
                           </p>
+                          <div className="mt-3 inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 shadow-sm">
+                            <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium">
+                              <span className={`inline-block h-2 w-2 rounded-full ${googleSheetsStatus.connected ? "bg-emerald-500" : "bg-slate-300"}`} />
+                              <span className="truncate">
+                                {googleSheetsStatus.connected
+                                  ? `Google Sheets connected${googleSheetsStatus.email ? ` (${googleSheetsStatus.email})` : ""}`
+                                  : googleSheetsStatus.needsReconnect
+                                    ? "Google Sheets needs reconnect"
+                                    : "Google Sheets not connected"}
+                              </span>
+                            </div>
+                            {googleSheetsStatus.configured ? (
+                              googleSheetsStatus.connected ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 shrink-0 text-xs"
+                                  onClick={disconnectGoogleSheets}
+                                  disabled={googleSheetsLoading}
+                                >
+                                  {googleSheetsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Disconnect"}
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  className="h-7 shrink-0 text-xs"
+                                  onClick={startGoogleSheetsConnect}
+                                  disabled={googleSheetsLoading}
+                                >
+                                  {googleSheetsLoading ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Link2 className="mr-1 h-3.5 w-3.5" />}
+                                  Connect Sheets
+                                </Button>
+                              )
+                            ) : null}
+                          </div>
                         </div>
                         <div className="flex flex-wrap items-center justify-end gap-1.5 rounded-xl border border-slate-200/80 bg-slate-50/70 p-1">
                           <Button
