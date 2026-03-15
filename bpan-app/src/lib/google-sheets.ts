@@ -29,6 +29,7 @@ export function getGoogleSheetsAuthUrl(state: string) {
     redirect_uri: getGoogleSheetsRedirectUri(),
     response_type: "code",
     scope: SHEETS_SCOPES.join(" "),
+    include_granted_scopes: "true",
     access_type: "offline",
     prompt: "consent",
     state,
@@ -112,6 +113,29 @@ export async function validateGoogleSheetsAccess(accessToken: string) {
   }
 }
 
+async function validateGoogleSheetsScopes(accessToken: string) {
+  const res = await fetch(
+    `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
+  );
+
+  if (!res.ok) {
+    return;
+  }
+
+  const payload = (await res.json()) as { scope?: string };
+  const grantedScopes = new Set(
+    String(payload.scope || "")
+      .split(/\s+/)
+      .map((scope) => scope.trim())
+      .filter(Boolean),
+  );
+
+  const missingScope = SHEETS_SCOPES.find((scope) => !grantedScopes.has(scope));
+  if (missingScope) {
+    throw new Error(GOOGLE_SHEETS_RECONNECT_MESSAGE);
+  }
+}
+
 export async function getUsableGoogleSheetsAccessToken(
   supabase: GoogleSheetsSupabaseLike,
   userId: string
@@ -149,6 +173,7 @@ export async function getUsableGoogleSheetsAccessToken(
   }
 
   try {
+    await validateGoogleSheetsScopes(accessToken);
     await validateGoogleSheetsAccess(accessToken);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to validate Google Sheets access";

@@ -29,6 +29,9 @@ export async function POST(req: Request) {
       const {
         data: { user },
       } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from("google_sheets_tokens").delete().eq("user_id", user.id);
+      }
       return NextResponse.json(
         {
           error: reconnectMessage,
