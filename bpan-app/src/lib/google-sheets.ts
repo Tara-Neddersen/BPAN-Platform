@@ -2,6 +2,7 @@ import type { createClient as createSupabaseClient } from "@/lib/supabase/server
 
 const SHEETS_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/drive.file",
 ];
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -52,7 +53,7 @@ export async function exchangeGoogleSheetsCode(code: string) {
   const data = await res.json();
   return {
     access_token: data.access_token as string,
-    refresh_token: data.refresh_token as string,
+    refresh_token: data.refresh_token as string | undefined,
     expires_in: data.expires_in as number,
   };
 }

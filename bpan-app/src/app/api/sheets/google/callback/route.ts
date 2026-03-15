@@ -51,6 +51,12 @@ export async function GET(req: NextRequest) {
     }
 
     const tokens = await exchangeGoogleSheetsCode(code);
+    if (!tokens.refresh_token) {
+      return redirectToResults({
+        sheets: "error",
+        msg: "Google Sheets reconnect did not return a refresh token. Please try again.",
+      });
+    }
     const googleEmail = await getGoogleSheetsEmail(tokens.access_token);
     const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
 
