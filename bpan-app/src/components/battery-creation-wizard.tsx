@@ -54,6 +54,13 @@ type ResultColumnDraft = {
   isEnabled: boolean;
 };
 
+type ProtocolLinkDraft = {
+  protocolId: string;
+  sortOrder: number;
+  isDefault: boolean;
+  notes: string;
+};
+
 type SelectableColumnDraft = {
   id: string;
   selected: boolean;
@@ -65,6 +72,7 @@ type ExperimentDraft = {
   name: string;
   description: string;
   category: string;
+  protocolLinks: ProtocolLinkDraft[];
   sourceMode: "extract" | "manual";
   extractedColumns: SelectableColumnDraft[];
   manualColumns: ResultColumnDraft[];
@@ -173,6 +181,7 @@ function createEmptyExperiment(name = ""): ExperimentDraft {
     name,
     description: "",
     category: "",
+    protocolLinks: [],
     sourceMode: "extract",
     extractedColumns: [],
     manualColumns: DEFAULT_COLUMNS.map((column, index) => ({
@@ -220,6 +229,64 @@ function createManualColumn(label = ""): ResultColumnDraft {
     isSystemDefault: false,
     isEnabled: true,
   };
+}
+
+function createDoneColumn(): ResultColumnDraft {
+  return {
+    key: "completed",
+    label: "Done",
+    columnType: "boolean",
+    required: false,
+    defaultValue: "",
+    options: ["Done", "Not done"],
+    unit: "",
+    helpText: "Simple completion flag for checklist-style experiments.",
+    groupKey: "status",
+    sortOrder: 0,
+    isSystemDefault: false,
+    isEnabled: true,
+  };
+}
+
+function createFileColumn(): ResultColumnDraft {
+  return {
+    key: "attachment_link",
+    label: "Attachment",
+    columnType: "file",
+    required: false,
+    defaultValue: "",
+    options: [],
+    unit: "",
+    helpText: "Uploads the file to Google Drive and stores only the share link in BPAN.",
+    groupKey: "files",
+    sortOrder: 0,
+    isSystemDefault: false,
+    isEnabled: true,
+  };
+}
+
+function isChoiceColumnType(columnType: ColumnType) {
+  return columnType === "select" || columnType === "multi_select";
+}
+
+function mergeColumns(baseColumns: ResultColumnDraft[], extraColumns: ResultColumnDraft[]) {
+  const merged = [...baseColumns.map((column) => ({ ...column })), ...extraColumns.map((column) => ({ ...column }))];
+  const byKey = new Map<string, ResultColumnDraft>();
+
+  for (const column of merged) {
+    byKey.set(column.key, column);
+  }
+
+  return normalizeColumns(Array.from(byKey.values()));
+}
+
+function reorderList<T>(items: T[], index: number, direction: -1 | 1) {
+  const target = index + direction;
+  if (target < 0 || target >= items.length) return items;
+  const next = [...items];
+  const [moved] = next.splice(index, 1);
+  next.splice(target, 0, moved);
+  return next;
 }
 
 function mapDatasetColumnType(values: unknown[]): ColumnType {
@@ -518,6 +585,90 @@ export function BatteryCreationWizard({
     );
   };
 
+  const addProtocolLink = (experimentId: string, protocolId: string) => {
+    if (!protocolId) return;
+    setExperimentDrafts((current) =>
+      current.map((experiment) => {
+        if (experiment.id !== experimentId) return experiment;
+        if (experiment.protocolLinks.some((link) => link.protocolId === protocolId)) return experiment;
+        return {
+          ...experiment,
+          protocolLinks: [
+            ...experiment.protocolLinks,
+            {
+              protocolId,
+              sortOrder: experiment.protocolLinks.length,
+              isDefault: experiment.protocolLinks.length === 0,
+              notes: "",
+            },
+          ],
+        };
+      }),
+    );
+  };
+
+  const updateProtocolLink = (experimentId: string, index: number, patch: Partial<ProtocolLinkDraft>) => {
+    setExperimentDrafts((current) =>
+      current.map((experiment) => {
+        if (experiment.id !== experimentId) return experiment;
+        return {
+          ...experiment,
+          protocolLinks: experiment.protocolLinks.map((link, linkIndex) =>
+            linkIndex === index ? { ...link, ...patch } : link,
+          ),
+        };
+      }),
+    );
+  };
+
+  const setDefaultProtocolLink = (experimentId: string, index: number) => {
+    setExperimentDrafts((current) =>
+      current.map((experiment) => {
+        if (experiment.id !== experimentId) return experiment;
+        return {
+          ...experiment,
+          protocolLinks: experiment.protocolLinks.map((link, linkIndex) => ({
+            ...link,
+            isDefault: linkIndex === index,
+          })),
+        };
+      }),
+    );
+  };
+
+  const removeProtocolLink = (experimentId: string, index: number) => {
+    setExperimentDrafts((current) =>
+      current.map((experiment) => {
+        if (experiment.id !== experimentId) return experiment;
+        const next = experiment.protocolLinks
+          .filter((_, linkIndex) => linkIndex !== index)
+          .map((link, linkIndex) => ({
+            ...link,
+            sortOrder: linkIndex,
+          }));
+        if (next.length > 0 && !next.some((link) => link.isDefault)) {
+          next[0] = { ...next[0], isDefault: true };
+        }
+        return { ...experiment, protocolLinks: next };
+      }),
+    );
+  };
+
+  const moveProtocolLink = (experimentId: string, index: number, direction: -1 | 1) => {
+    setExperimentDrafts((current) =>
+      current.map((experiment) => {
+        if (experiment.id !== experimentId) return experiment;
+        return {
+          ...experiment,
+          protocolLinks: reorderList(experiment.protocolLinks, index, direction).map((link, linkIndex) => ({
+            ...link,
+            sortOrder: linkIndex,
+          })),
+        };
+      }),
+    );
+  };
+
   const updateManualColumn = (experimentId: string, columnIndex: number, patch: Partial<ResultColumnDraft>) => {
     setExperimentDrafts((current) =>
       current.map((experiment) => {
@@ -543,6 +694,16 @@ export function BatteryCreationWizard({
       current.map((experiment) =>
         experiment.id === experimentId
           ? { ...experiment, manualColumns: normalizeColumns([...experiment.manualColumns, createManualColumn()]) }
+          : experiment,
+      ),
+    );
+  };
+
+  const addPresetColumn = (experimentId: string, columnFactory: () => ResultColumnDraft) => {
+    setExperimentDrafts((current) =>
+      current.map((experiment) =>
+        experiment.id === experimentId
+          ? { ...experiment, manualColumns: normalizeColumns([...experiment.manualColumns, columnFactory()]) }
           : experiment,
       ),
     );
@@ -627,21 +788,51 @@ export function BatteryCreationWizard({
         const experimentMap = new Map<string, { protocolId: string; templateId: string; name: string }>();
 
         for (const experiment of experimentDrafts) {
-          const protocolForm = new FormData();
-          protocolForm.set("title", experiment.name.trim());
-          protocolForm.set("description", experiment.description.trim());
-          protocolForm.set("category", experiment.category.trim());
-          protocolForm.set("steps", "[]");
+          let protocolLinks = experiment.protocolLinks.map((link, index) => ({
+            protocolId: link.protocolId,
+            sortOrder: index,
+            isDefault: link.isDefault,
+            notes: link.notes,
+          }));
 
-          const createdProtocol = await createProtocol(protocolForm);
-          if (!createdProtocol?.id) {
-            throw new Error(`Could not create the "${experiment.name}" single experiment.`);
+          if (protocolLinks.length === 0) {
+            const protocolForm = new FormData();
+            protocolForm.set("title", experiment.name.trim());
+            protocolForm.set("description", experiment.description.trim());
+            protocolForm.set("category", experiment.category.trim());
+            protocolForm.set("steps", "[]");
+
+            const createdProtocol = await createProtocol(protocolForm);
+            if (!createdProtocol?.id) {
+              throw new Error(`Could not create the "${experiment.name}" single experiment.`);
+            }
+
+            protocolLinks = [
+              {
+                protocolId: createdProtocol.id,
+                sortOrder: 0,
+                isDefault: true,
+                notes: "",
+              },
+            ];
+          }
+
+          const defaultProtocolId =
+            protocolLinks.find((link) => link.isDefault)?.protocolId || protocolLinks[0]?.protocolId || "";
+          if (!defaultProtocolId) {
+            throw new Error(`Could not resolve the default protocol for "${experiment.name}".`);
           }
 
           const chosenColumns =
             experiment.sourceMode === "extract"
-              ? experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column)
-              : experiment.manualColumns;
+              ? mergeColumns(
+                  DEFAULT_COLUMNS,
+                  [
+                    ...experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column),
+                    ...experiment.manualColumns,
+                  ],
+                )
+              : mergeColumns(DEFAULT_COLUMNS, experiment.manualColumns);
 
           const templateForm = new FormData();
           templateForm.set("title", experiment.name.trim());
@@ -650,13 +841,10 @@ export function BatteryCreationWizard({
           templateForm.set("default_assignment_scope", "animal");
           templateForm.set("schema_name", `${experiment.name.trim()} results`);
           templateForm.set("schema_description", `Result fields for ${experiment.name.trim()}.`);
-          templateForm.set(
-            "protocol_links",
-            JSON.stringify([{ protocolId: createdProtocol.id, sortOrder: 0, isDefault: true, notes: "" }]),
-          );
+          templateForm.set("protocol_links", JSON.stringify(protocolLinks));
           templateForm.set(
             "result_columns",
-            JSON.stringify(normalizeColumns([...DEFAULT_COLUMNS, ...chosenColumns])),
+            JSON.stringify(chosenColumns),
           );
 
           const savedTemplate = await saveExperimentTemplate(templateForm);
@@ -665,7 +853,7 @@ export function BatteryCreationWizard({
           }
 
           experimentMap.set(experiment.id, {
-            protocolId: createdProtocol.id,
+            protocolId: defaultProtocolId,
             templateId: savedTemplate.templateId,
             name: experiment.name.trim(),
           });
@@ -937,12 +1125,100 @@ export function BatteryCreationWizard({
                   </div>
 
                   <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 space-y-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">Linked Protocols</p>
+                        <p className="text-sm text-slate-500">
+                          Attach existing protocols to this single experiment. The default protocol will be used when the battery saves.
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <select
+                          defaultValue=""
+                          onChange={(event) => {
+                            if (event.target.value) {
+                              addProtocolLink(selectedExperiment.id, event.target.value);
+                              event.currentTarget.value = "";
+                            }
+                          }}
+                          className="flex h-10 min-w-[220px] rounded-md border border-input bg-white px-3 py-2 text-sm shadow-xs outline-none"
+                        >
+                          <option value="">Add protocol…</option>
+                          {protocols
+                            .filter((protocol) => !selectedExperiment.protocolLinks.some((link) => link.protocolId === protocol.id))
+                            .map((protocol) => (
+                              <option key={protocol.id} value={protocol.id}>
+                                {protocol.title}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {selectedExperiment.protocolLinks.length === 0 ? (
+                      <p className="text-sm text-slate-500">
+                        No protocol linked yet. If you leave this empty, BPAN will create a simple protocol automatically from the experiment name.
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        {selectedExperiment.protocolLinks.map((link, index) => {
+                          const protocol = protocols.find((item) => item.id === link.protocolId);
+                          return (
+                            <div key={`${link.protocolId}-${index}`} className="rounded-2xl border border-slate-200 bg-white p-3">
+                              <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-900">{protocol?.title || "Linked protocol"}</p>
+                                  <p className="text-xs text-slate-500">
+                                    Position {index + 1}
+                                    {link.isDefault ? " • Default protocol" : ""}
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button type="button" variant="outline" size="sm" onClick={() => moveProtocolLink(selectedExperiment.id, index, -1)} disabled={index === 0}>
+                                    <ArrowLeft className="h-4 w-4" />
+                                  </Button>
+                                  <Button type="button" variant="outline" size="sm" onClick={() => moveProtocolLink(selectedExperiment.id, index, 1)} disabled={index === selectedExperiment.protocolLinks.length - 1}>
+                                    <ArrowRight className="h-4 w-4" />
+                                  </Button>
+                                  <Button type="button" variant={link.isDefault ? "default" : "outline"} size="sm" onClick={() => setDefaultProtocolLink(selectedExperiment.id, index)}>
+                                    Default
+                                  </Button>
+                                  <Button type="button" variant="outline" size="sm" onClick={() => removeProtocolLink(selectedExperiment.id, index)}>
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="mt-3 space-y-2">
+                                <Label>Protocol Notes</Label>
+                                <Textarea
+                                  value={link.notes}
+                                  onChange={(event) => updateProtocolLink(selectedExperiment.id, index, { notes: event.target.value })}
+                                  placeholder="Prep details, operator notes, or when to use this protocol."
+                                  rows={2}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 space-y-4">
                     <div className="flex flex-wrap gap-2">
                       <Button type="button" variant={selectedExperiment.sourceMode === "extract" ? "default" : "outline"} onClick={() => updateExperiment(selectedExperiment.id, { sourceMode: "extract" })}>
                         Extract from file
                       </Button>
                       <Button type="button" variant={selectedExperiment.sourceMode === "manual" ? "default" : "outline"} onClick={() => updateExperiment(selectedExperiment.id, { sourceMode: "manual" })}>
                         Build manually
+                      </Button>
+                      <Button type="button" variant="outline" onClick={() => addPresetColumn(selectedExperiment.id, createDoneColumn)}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add done/not done
+                      </Button>
+                      <Button type="button" variant="outline" onClick={() => addPresetColumn(selectedExperiment.id, createFileColumn)}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add file link field
                       </Button>
                     </div>
 
@@ -1035,11 +1311,189 @@ export function BatteryCreationWizard({
                                         ))}
                                       </select>
                                     </div>
+                                    <div className="space-y-2">
+                                      <Label>Default Value</Label>
+                                      <Input
+                                        value={entry.column.defaultValue}
+                                        onChange={(event) =>
+                                          updateExperiment(selectedExperiment.id, {
+                                            extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
+                                              columnIndex === index
+                                                ? {
+                                                    ...column,
+                                                    column: {
+                                                      ...column.column,
+                                                      defaultValue: event.target.value,
+                                                    },
+                                                  }
+                                                : column,
+                                            ),
+                                          })
+                                        }
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label>Options</Label>
+                                      <Input
+                                        value={entry.column.options.join(", ")}
+                                        onChange={(event) =>
+                                          updateExperiment(selectedExperiment.id, {
+                                            extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
+                                              columnIndex === index
+                                                ? {
+                                                    ...column,
+                                                    column: {
+                                                      ...column.column,
+                                                      options: event.target.value
+                                                        .split(",")
+                                                        .map((item) => item.trim())
+                                                        .filter(Boolean),
+                                                    },
+                                                  }
+                                                : column,
+                                            ),
+                                          })
+                                        }
+                                        placeholder={isChoiceColumnType(entry.column.columnType) ? "Comma-separated choices" : "Used for select / multi select"}
+                                        disabled={!isChoiceColumnType(entry.column.columnType)}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                  <div className="space-y-2">
+                                    <Label>Help Text</Label>
+                                    <Input
+                                      value={entry.column.helpText}
+                                      onChange={(event) =>
+                                        updateExperiment(selectedExperiment.id, {
+                                          extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
+                                            columnIndex === index
+                                              ? {
+                                                  ...column,
+                                                  column: {
+                                                    ...column.column,
+                                                    helpText: event.target.value,
+                                                  },
+                                                }
+                                              : column,
+                                          ),
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                  <div className="flex flex-wrap gap-4 text-sm text-slate-600">
+                                    <label className="flex items-center gap-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={entry.column.required}
+                                        onChange={(event) =>
+                                          updateExperiment(selectedExperiment.id, {
+                                            extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
+                                              columnIndex === index
+                                                ? {
+                                                    ...column,
+                                                    column: {
+                                                      ...column.column,
+                                                      required: event.target.checked,
+                                                    },
+                                                  }
+                                                : column,
+                                            ),
+                                          })
+                                        }
+                                      />
+                                      Required
+                                    </label>
                                   </div>
                                 </div>
                               </div>
                             ))
                           )}
+                        </div>
+
+                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 space-y-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">Extra fields to add on top</p>
+                            <p className="text-sm text-slate-500">
+                              Use this for BPAN-only fields like file uploads, completion checkboxes, or notes that are not in the sample file.
+                            </p>
+                          </div>
+                          {selectedExperiment.manualColumns.map((column, index) => (
+                            <div key={`${column.key}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
+                              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                                <div className="space-y-2">
+                                  <Label>Label</Label>
+                                  <Input value={column.label} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { label: event.target.value })} />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Key</Label>
+                                  <Input value={column.key} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { key: slugifyKey(event.target.value) })} />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Type</Label>
+                                  <select
+                                    value={column.columnType}
+                                    onChange={(event) => updateManualColumn(selectedExperiment.id, index, { columnType: event.target.value as ColumnType })}
+                                    className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm shadow-xs outline-none"
+                                  >
+                                    {COLUMN_TYPE_OPTIONS.map((option) => (
+                                      <option key={option} value={option}>{option}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div className="flex items-end">
+                                  <Button type="button" variant="outline" onClick={() => removeManualColumn(selectedExperiment.id, index)}>
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                                <div className="space-y-2">
+                                  <Label>Default Value</Label>
+                                  <Input value={column.defaultValue} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { defaultValue: event.target.value })} />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Options</Label>
+                                  <Input
+                                    value={column.options.join(", ")}
+                                    onChange={(event) =>
+                                      updateManualColumn(selectedExperiment.id, index, {
+                                        options: event.target.value
+                                          .split(",")
+                                          .map((item) => item.trim())
+                                          .filter(Boolean),
+                                      })
+                                    }
+                                    placeholder={isChoiceColumnType(column.columnType) ? "Comma-separated choices" : "Used for select / multi select"}
+                                    disabled={!isChoiceColumnType(column.columnType)}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Group Key</Label>
+                                  <Input value={column.groupKey} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { groupKey: event.target.value })} />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Help Text</Label>
+                                  <Input value={column.helpText} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { helpText: event.target.value })} />
+                                </div>
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-600">
+                                <label className="flex items-center gap-2">
+                                  <input type="checkbox" checked={column.required} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { required: event.target.checked })} />
+                                  Required
+                                </label>
+                                <label className="flex items-center gap-2">
+                                  <input type="checkbox" checked={column.isEnabled} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { isEnabled: event.target.checked })} />
+                                  Enabled
+                                </label>
+                              </div>
+                            </div>
+                          ))}
+                          <Button type="button" variant="outline" onClick={() => addManualColumn(selectedExperiment.id)}>
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add extra field
+                          </Button>
                         </div>
                       </div>
                     ) : (
@@ -1072,6 +1526,46 @@ export function BatteryCreationWizard({
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               </div>
+                            </div>
+                            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                              <div className="space-y-2">
+                                <Label>Default Value</Label>
+                                <Input value={column.defaultValue} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { defaultValue: event.target.value })} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Options</Label>
+                                <Input
+                                  value={column.options.join(", ")}
+                                  onChange={(event) =>
+                                    updateManualColumn(selectedExperiment.id, index, {
+                                      options: event.target.value
+                                        .split(",")
+                                        .map((item) => item.trim())
+                                        .filter(Boolean),
+                                    })
+                                  }
+                                  placeholder={isChoiceColumnType(column.columnType) ? "Comma-separated choices" : "Used for select / multi select"}
+                                  disabled={!isChoiceColumnType(column.columnType)}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Group Key</Label>
+                                <Input value={column.groupKey} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { groupKey: event.target.value })} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Help Text</Label>
+                                <Input value={column.helpText} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { helpText: event.target.value })} />
+                              </div>
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-600">
+                              <label className="flex items-center gap-2">
+                                <input type="checkbox" checked={column.required} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { required: event.target.checked })} />
+                                Required
+                              </label>
+                              <label className="flex items-center gap-2">
+                                <input type="checkbox" checked={column.isEnabled} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { isEnabled: event.target.checked })} />
+                                Enabled
+                              </label>
                             </div>
                           </div>
                         ))}
