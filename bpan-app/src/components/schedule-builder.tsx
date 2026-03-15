@@ -473,7 +473,18 @@ export function ScheduleBuilder({
     return firstDayId ? { [firstDayId]: true } : {};
   });
 
-  const templateTitleById = new Map(experimentTemplates.map((template) => [template.id, template.title]));
+  const uniqueExperimentTemplates = useMemo(() => {
+    const seen = new Set<string>();
+    return experimentTemplates.filter((template) => {
+      const key = template.id || template.title;
+      if (!key || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }, [experimentTemplates]);
+  const templateTitleById = new Map(uniqueExperimentTemplates.map((template) => [template.id, template.title]));
   const batteryOptions = useMemo(
     () =>
       experiments
@@ -1414,7 +1425,7 @@ export function ScheduleBuilder({
                       className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                     >
                       <option value="">Choose experiment</option>
-                      {experimentTemplates.map((template) => (
+                      {uniqueExperimentTemplates.map((template) => (
                         <option key={template.id} value={template.id}>
                           {template.title}
                         </option>
@@ -1646,7 +1657,7 @@ export function ScheduleBuilder({
                       {battery.label}
                     </option>
                   ))
-                : experimentTemplates.map((template) => (
+                : uniqueExperimentTemplates.map((template) => (
                     <option key={template.id} value={template.id}>
                       {template.title}
                     </option>
