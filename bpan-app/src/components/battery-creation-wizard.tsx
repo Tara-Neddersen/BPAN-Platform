@@ -46,6 +46,7 @@ type ResultColumnDraft = {
   required: boolean;
   defaultValue: string;
   options: string[];
+  averageSourceKeys: string[];
   unit: string;
   helpText: string;
   groupKey: string;
@@ -122,6 +123,7 @@ const DEFAULT_COLUMNS: ResultColumnDraft[] = [
     required: true,
     defaultValue: "",
     options: [],
+    averageSourceKeys: [],
     unit: "",
     helpText: "Link each result row to the source animal.",
     groupKey: "colony",
@@ -136,6 +138,7 @@ const DEFAULT_COLUMNS: ResultColumnDraft[] = [
     required: true,
     defaultValue: "",
     options: [],
+    averageSourceKeys: [],
     unit: "",
     helpText: "Named age window for this result set.",
     groupKey: "timepoint",
@@ -150,6 +153,7 @@ const DEFAULT_COLUMNS: ResultColumnDraft[] = [
     required: false,
     defaultValue: "",
     options: [],
+    averageSourceKeys: [],
     unit: "",
     helpText: "Free-form operator notes.",
     groupKey: "",
@@ -222,6 +226,7 @@ function createManualColumn(label = ""): ResultColumnDraft {
     required: false,
     defaultValue: "",
     options: [],
+    averageSourceKeys: [],
     unit: "",
     helpText: "",
     groupKey: "",
@@ -239,6 +244,7 @@ function createDoneColumn(): ResultColumnDraft {
     required: false,
     defaultValue: "",
     options: ["Done", "Not done"],
+    averageSourceKeys: [],
     unit: "",
     helpText: "Simple completion flag for checklist-style experiments.",
     groupKey: "status",
@@ -256,6 +262,7 @@ function createFileColumn(): ResultColumnDraft {
     required: false,
     defaultValue: "",
     options: [],
+    averageSourceKeys: [],
     unit: "",
     helpText: "Uploads the file to Google Drive and stores only the share link in BPAN.",
     groupKey: "files",
@@ -269,6 +276,28 @@ function isChoiceColumnType(columnType: ColumnType) {
   return columnType === "select" || columnType === "multi_select";
 }
 
+function isNumericColumnType(columnType: ColumnType) {
+  return columnType === "number" || columnType === "integer";
+}
+
+function createAverageColumn(): ResultColumnDraft {
+  return {
+    key: "average_score",
+    label: "Average",
+    columnType: "number",
+    required: false,
+    defaultValue: "",
+    options: [],
+    averageSourceKeys: [],
+    unit: "",
+    helpText: "Derived average of selected numeric fields.",
+    groupKey: "derived",
+    sortOrder: 0,
+    isSystemDefault: false,
+    isEnabled: true,
+  };
+}
+
 function mergeColumns(baseColumns: ResultColumnDraft[], extraColumns: ResultColumnDraft[]) {
   const merged = [...baseColumns.map((column) => ({ ...column })), ...extraColumns.map((column) => ({ ...column }))];
   const byKey = new Map<string, ResultColumnDraft>();
@@ -278,6 +307,18 @@ function mergeColumns(baseColumns: ResultColumnDraft[], extraColumns: ResultColu
   }
 
   return normalizeColumns(Array.from(byKey.values()));
+}
+
+function serializeColumn(column: ResultColumnDraft) {
+  const averageMetadata =
+    column.averageSourceKeys.length > 0
+      ? [`__average__`, ...column.averageSourceKeys.map((key) => `field:${key}`)]
+      : [];
+
+  return {
+    ...column,
+    options: [...column.options, ...averageMetadata],
+  };
 }
 
 function reorderList<T>(items: T[], index: number, direction: -1 | 1) {
@@ -323,6 +364,7 @@ function columnsFromRows(rows: Record<string, unknown>[]) {
         required: false,
         defaultValue: "",
         options: new Set(nonEmpty).size <= 12 ? Array.from(new Set(nonEmpty)).slice(0, 12) : [],
+        averageSourceKeys: [],
         unit: "",
         helpText: "",
         groupKey: "",
@@ -844,7 +886,7 @@ export function BatteryCreationWizard({
           templateForm.set("protocol_links", JSON.stringify(protocolLinks));
           templateForm.set(
             "result_columns",
-            JSON.stringify(chosenColumns),
+            JSON.stringify(chosenColumns.map(serializeColumn)),
           );
 
           const savedTemplate = await saveExperimentTemplate(templateForm);
@@ -880,7 +922,7 @@ export function BatteryCreationWizard({
             }),
           ),
         );
-        batteryTemplateForm.set("result_columns", JSON.stringify(normalizeColumns(DEFAULT_COLUMNS)));
+        batteryTemplateForm.set("result_columns", JSON.stringify(normalizeColumns(DEFAULT_COLUMNS).map(serializeColumn)));
 
         const batteryTemplate = await saveExperimentTemplate(batteryTemplateForm);
         if (!batteryTemplate?.templateId) {
@@ -1220,6 +1262,10 @@ export function BatteryCreationWizard({
                         <Plus className="mr-2 h-4 w-4" />
                         Add file link field
                       </Button>
+                      <Button type="button" variant="outline" onClick={() => addPresetColumn(selectedExperiment.id, createAverageColumn)}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add average field
+                      </Button>
                     </div>
 
                     {selectedExperiment.sourceMode === "extract" ? (
@@ -1360,6 +1406,49 @@ export function BatteryCreationWizard({
                                     </div>
                                   </div>
                                 </div>
+                                {entry.column.averageSourceKeys.length > 0 || entry.column.groupKey === "derived" ? (
+                                  <div className="mt-3 space-y-2">
+                                    <Label>Average these numeric fields</Label>
+                                    <div className="flex flex-wrap gap-2">
+                                      {selectedExperiment.extractedColumns
+                                        .filter((candidate) => candidate.selected)
+                                        .map((candidate) => candidate.column)
+                                        .filter((candidate) => candidate.key !== entry.column.key && isNumericColumnType(candidate.columnType))
+                                        .map((candidate) => {
+                                          const selected = entry.column.averageSourceKeys.includes(candidate.key);
+                                          return (
+                                            <button
+                                              key={`${entry.id}-${candidate.key}`}
+                                              type="button"
+                                              onClick={() =>
+                                                updateExperiment(selectedExperiment.id, {
+                                                  extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
+                                                    columnIndex === index
+                                                      ? {
+                                                          ...column,
+                                                          column: {
+                                                            ...column.column,
+                                                            averageSourceKeys: selected
+                                                              ? column.column.averageSourceKeys.filter((key) => key !== candidate.key)
+                                                              : [...column.column.averageSourceKeys, candidate.key],
+                                                            groupKey: "derived",
+                                                            helpText:
+                                                              column.column.helpText || "Derived average of selected numeric fields.",
+                                                          },
+                                                        }
+                                                      : column,
+                                                  ),
+                                                })
+                                              }
+                                              className={`rounded-full border px-3 py-1 text-sm ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`}
+                                            >
+                                              {candidate.label}
+                                            </button>
+                                          );
+                                        })}
+                                    </div>
+                                  </div>
+                                ) : null}
                                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                                   <div className="space-y-2">
                                     <Label>Help Text</Label>
@@ -1478,6 +1567,39 @@ export function BatteryCreationWizard({
                                   <Input value={column.helpText} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { helpText: event.target.value })} />
                                 </div>
                               </div>
+                              {column.averageSourceKeys.length > 0 || column.groupKey === "derived" ? (
+                                <div className="mt-3 space-y-2">
+                                  <Label>Average these numeric fields</Label>
+                                  <div className="flex flex-wrap gap-2">
+                                    {[
+                                      ...selectedExperiment.extractedColumns.filter((candidate) => candidate.selected).map((candidate) => candidate.column),
+                                      ...selectedExperiment.manualColumns,
+                                    ]
+                                      .filter((candidate) => candidate.key !== column.key && isNumericColumnType(candidate.columnType))
+                                      .map((candidate) => {
+                                        const selected = column.averageSourceKeys.includes(candidate.key);
+                                        return (
+                                          <button
+                                            key={`${column.key}-${candidate.key}`}
+                                            type="button"
+                                            onClick={() =>
+                                              updateManualColumn(selectedExperiment.id, index, {
+                                                averageSourceKeys: selected
+                                                  ? column.averageSourceKeys.filter((key) => key !== candidate.key)
+                                                  : [...column.averageSourceKeys, candidate.key],
+                                                groupKey: "derived",
+                                                helpText: column.helpText || "Derived average of selected numeric fields.",
+                                              })
+                                            }
+                                            className={`rounded-full border px-3 py-1 text-sm ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`}
+                                          >
+                                            {candidate.label}
+                                          </button>
+                                        );
+                                      })}
+                                  </div>
+                                </div>
+                              ) : null}
                               <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-600">
                                 <label className="flex items-center gap-2">
                                   <input type="checkbox" checked={column.required} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { required: event.target.checked })} />
@@ -1557,6 +1679,36 @@ export function BatteryCreationWizard({
                                 <Input value={column.helpText} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { helpText: event.target.value })} />
                               </div>
                             </div>
+                            {column.averageSourceKeys.length > 0 || column.groupKey === "derived" ? (
+                              <div className="mt-3 space-y-2">
+                                <Label>Average these numeric fields</Label>
+                                <div className="flex flex-wrap gap-2">
+                                  {selectedExperiment.manualColumns
+                                    .filter((candidate) => candidate.key !== column.key && isNumericColumnType(candidate.columnType))
+                                    .map((candidate) => {
+                                      const selected = column.averageSourceKeys.includes(candidate.key);
+                                      return (
+                                        <button
+                                          key={`${column.key}-${candidate.key}`}
+                                          type="button"
+                                          onClick={() =>
+                                            updateManualColumn(selectedExperiment.id, index, {
+                                              averageSourceKeys: selected
+                                                ? column.averageSourceKeys.filter((key) => key !== candidate.key)
+                                                : [...column.averageSourceKeys, candidate.key],
+                                              groupKey: "derived",
+                                              helpText: column.helpText || "Derived average of selected numeric fields.",
+                                            })
+                                          }
+                                          className={`rounded-full border px-3 py-1 text-sm ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`}
+                                        >
+                                          {candidate.label}
+                                        </button>
+                                      );
+                                    })}
+                                </div>
+                              </div>
+                            ) : null}
                             <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-600">
                               <label className="flex items-center gap-2">
                                 <input type="checkbox" checked={column.required} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { required: event.target.checked })} />
