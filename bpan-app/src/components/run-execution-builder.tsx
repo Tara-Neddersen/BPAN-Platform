@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -263,6 +263,49 @@ function snapToNearestWeekday(isoDate: string, alignment: StartAlignment) {
   return date.toISOString().slice(0, 10);
 }
 
+function getLayoutPreferredAlignment(
+  scheduleTemplateId: string,
+  scheduleDays: ScheduleDay[],
+  scheduleSlots: ScheduleSlot[],
+  scheduledBlocks: ScheduledBlock[],
+): StartAlignment {
+  if (!scheduleTemplateId) {
+    return "exact";
+  }
+
+  const dayIds = scheduleDays
+    .filter((day) => day.schedule_template_id === scheduleTemplateId)
+    .map((day) => day.id);
+  if (dayIds.length === 0) {
+    return "exact";
+  }
+
+  const slotIds = scheduleSlots.filter((slot) => dayIds.includes(slot.schedule_day_id)).map((slot) => slot.id);
+  if (slotIds.length === 0) {
+    return "exact";
+  }
+
+  const counts = new Map<StartAlignment, number>();
+  for (const block of scheduledBlocks.filter((entry) => slotIds.includes(entry.schedule_slot_id))) {
+    const metadata =
+      block.metadata && typeof block.metadata === "object" && !Array.isArray(block.metadata)
+        ? block.metadata
+        : {};
+    const weekday = typeof metadata.preferredStartWeekday === "string" ? metadata.preferredStartWeekday.trim().toLowerCase() : "";
+    const alignment = START_ALIGNMENT_OPTIONS.some((option) => option.value === weekday)
+      ? (weekday as StartAlignment)
+      : "exact";
+    counts.set(alignment, (counts.get(alignment) || 0) + 1);
+  }
+
+  const ranked = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([alignment]) => alignment)
+    .find((alignment) => alignment !== "exact");
+
+  return ranked || "exact";
+}
+
 export function RunExecutionBuilder({
   experimentTemplates,
   scheduleTemplates,
@@ -319,6 +362,7 @@ export function RunExecutionBuilder({
   const [notesDraftByRunId, setNotesDraftByRunId] = useState<Record<string, string>>({});
   const [dayShiftOffset, setDayShiftOffset] = useState<string>("1");
   const [optimisticRuns, setOptimisticRuns] = useState<ExperimentRun[]>([]);
+  const previousCreateScheduleIdRef = useRef<string>(initialCreateSelection.scheduleTemplateId);
 
   useEffect(() => {
     setOptimisticRuns((current) =>
@@ -423,6 +467,16 @@ export function RunExecutionBuilder({
   );
   const selectedCreateSchedule =
     filteredSchedules.find((schedule) => schedule.id === createDraft.schedule_template_id) || null;
+  const selectedCreateScheduleAlignment = useMemo(
+    () =>
+      getLayoutPreferredAlignment(
+        createDraft.schedule_template_id,
+        scheduleDays,
+        scheduleSlots,
+        scheduledBlocks,
+      ),
+    [createDraft.schedule_template_id, scheduleDays, scheduleSlots, scheduledBlocks],
+  );
   const selectedTemplate = templateById.get(createDraft.template_id);
   const selectedCreateScheduleBlockCount = useMemo(() => {
     if (!selectedCreateSchedule) return 0;
@@ -518,6 +572,18 @@ export function RunExecutionBuilder({
     return list;
   }, [selectedRunBlocks]);
   const criticalConflicts = conflicts.filter((conflict) => conflict.severity === "critical");
+
+  useEffect(() => {
+    if (previousCreateScheduleIdRef.current === createDraft.schedule_template_id) {
+      return;
+    }
+
+    previousCreateScheduleIdRef.current = createDraft.schedule_template_id;
+    setCreateDraft((current) => ({
+      ...current,
+      start_alignment: selectedCreateScheduleAlignment,
+    }));
+  }, [createDraft.schedule_template_id, selectedCreateScheduleAlignment]);
   const warningConflicts = conflicts.filter((conflict) => conflict.severity === "warning");
   const conflictCountByBlockId = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1156,7 +1222,11 @@ export function RunExecutionBuilder({
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Choose the nearest weekday you want day 1 to land on. This keeps the run close to the target age while matching the work-week preference from the battery layout.
+            The selected saved layout currently prefers{" "}
+            {selectedCreateScheduleAlignment === "exact"
+              ? "the exact chosen day"
+              : START_ALIGNMENT_OPTIONS.find((option) => option.value === selectedCreateScheduleAlignment)?.label.replace("Snap day 1 to nearest ", "") || "the chosen weekday"}
+            . You can keep that here or override it for this run.
           </p>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[180px_minmax(0,1fr)_auto]">
