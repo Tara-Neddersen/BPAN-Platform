@@ -1,13 +1,14 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import * as XLSX from "xlsx";
-import { ArrowLeft, ArrowRight, Loader2, Plus, Save, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, Pencil, Plus, Save, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { createExperiment, createProtocol, createTimepoint } from "@/app/(protected)/experiments/actions";
+import { createExperiment, createProtocol, createTimepoint, deleteTimepoint, updateExperiment } from "@/app/(protected)/experiments/actions";
 import { saveScheduleTemplate } from "@/app/(protected)/experiments/schedule-actions";
 import { saveExperimentTemplate } from "@/app/(protected)/experiments/template-actions";
+import type { ExperimentTemplateRecord } from "@/components/experiment-template-builder";
 import type { Experiment, ExperimentTimepoint, PlatformSlotKind, Protocol, ScheduleDay, ScheduleSlot, ScheduledBlock, ScheduleTemplate } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -70,6 +71,7 @@ type SelectableColumnDraft = {
 
 type ExperimentDraft = {
   id: string;
+  templateId: string | null;
   name: string;
   description: string;
   category: string;
@@ -101,21 +103,29 @@ type BatteryRecordSummary = {
   experiment: Experiment;
   timepoints: ExperimentTimepoint[];
   templateId: string | null;
+  template: ExperimentTemplateRecord | null;
   scheduleTemplate: ScheduleTemplate | null;
   scheduleDays: ScheduleDay[];
   scheduleSlots: ScheduleSlot[];
   scheduledBlocks: ScheduledBlock[];
 };
 
+type EditingBatteryState = {
+  experimentId: string;
+  batteryTemplateId: string | null;
+  scheduleTemplateId: string | null;
+  timepointIds: string[];
+};
+
 const WIZARD_STEPS: Array<{ key: WizardStep; label: string; description: string }> = [
-  { key: "experiments", label: "Experiments", description: "Name the single experiments in this battery." },
-  { key: "details", label: "Details", description: "Add protocol details and result columns for each experiment." },
-  { key: "timepoints", label: "Timepoints", description: "Create named windows with age ranges underneath." },
-  { key: "layout", label: "Battery Layout", description: "Place experiments across days, times, and windows." },
-  { key: "review", label: "Review", description: "Check everything once, then save the battery." },
+  { key: "experiments", label: "Setup", description: "Name the battery and its single experiments." },
+  { key: "details", label: "Results", description: "Define the researcher-facing result fields for each experiment." },
+  { key: "timepoints", label: "Windows", description: "Name the age windows this battery uses." },
+  { key: "layout", label: "Schedule", description: "Place each experiment on the right days and time windows." },
+  { key: "review", label: "Review", description: "Check the full battery and save it." },
 ];
 
-const DEFAULT_COLUMNS: ResultColumnDraft[] = [
+const SYSTEM_LEADING_COLUMNS: ResultColumnDraft[] = [
   {
     key: "animal_id",
     label: "Animal ID",
@@ -146,6 +156,9 @@ const DEFAULT_COLUMNS: ResultColumnDraft[] = [
     isSystemDefault: true,
     isEnabled: true,
   },
+];
+
+const SYSTEM_TRAILING_COLUMNS: ResultColumnDraft[] = [
   {
     key: "notes",
     label: "Notes",
@@ -157,11 +170,46 @@ const DEFAULT_COLUMNS: ResultColumnDraft[] = [
     unit: "",
     helpText: "Free-form operator notes.",
     groupKey: "",
-    sortOrder: 2,
+    sortOrder: 0,
+    isSystemDefault: false,
+    isEnabled: true,
+  },
+  {
+    key: "attachment_link",
+    label: "Files",
+    columnType: "file",
+    required: false,
+    defaultValue: "",
+    options: [],
+    averageSourceKeys: [],
+    unit: "",
+    helpText: "Uploads files to Google Drive and stores only their links in BPAN.",
+    groupKey: "files",
+    sortOrder: 0,
+    isSystemDefault: false,
+    isEnabled: true,
+  },
+  {
+    key: "reference_url",
+    label: "URL",
+    columnType: "url",
+    required: false,
+    defaultValue: "",
+    options: [],
+    averageSourceKeys: [],
+    unit: "",
+    helpText: "Reference link for videos, sheets, or external result pages.",
+    groupKey: "files",
+    sortOrder: 0,
     isSystemDefault: false,
     isEnabled: true,
   },
 ];
+
+const HIDDEN_SYSTEM_COLUMN_KEYS = new Set([
+  ...SYSTEM_LEADING_COLUMNS.map((column) => column.key),
+  ...SYSTEM_TRAILING_COLUMNS.map((column) => column.key),
+]);
 
 let localIdCounter = 0;
 
@@ -182,17 +230,14 @@ function slugifyKey(value: string) {
 function createEmptyExperiment(name = ""): ExperimentDraft {
   return {
     id: makeId("exp"),
+    templateId: null,
     name,
     description: "",
     category: "",
     protocolLinks: [],
-    sourceMode: "extract",
+    sourceMode: "manual",
     extractedColumns: [],
-    manualColumns: DEFAULT_COLUMNS.map((column, index) => ({
-      ...column,
-      options: [...column.options],
-      sortOrder: index,
-    })),
+    manualColumns: [],
   };
 }
 
@@ -254,24 +299,6 @@ function createDoneColumn(): ResultColumnDraft {
   };
 }
 
-function createFileColumn(): ResultColumnDraft {
-  return {
-    key: "attachment_link",
-    label: "Attachment",
-    columnType: "file",
-    required: false,
-    defaultValue: "",
-    options: [],
-    averageSourceKeys: [],
-    unit: "",
-    helpText: "Uploads the file to Google Drive and stores only the share link in BPAN.",
-    groupKey: "files",
-    sortOrder: 0,
-    isSystemDefault: false,
-    isEnabled: true,
-  };
-}
-
 function isChoiceColumnType(columnType: ColumnType) {
   return columnType === "select" || columnType === "multi_select";
 }
@@ -298,15 +325,37 @@ function createAverageColumn(): ResultColumnDraft {
   };
 }
 
-function mergeColumns(baseColumns: ResultColumnDraft[], extraColumns: ResultColumnDraft[]) {
-  const merged = [...baseColumns.map((column) => ({ ...column })), ...extraColumns.map((column) => ({ ...column }))];
-  const byKey = new Map<string, ResultColumnDraft>();
+function cloneColumn(column: ResultColumnDraft): ResultColumnDraft {
+  return {
+    ...column,
+    options: [...column.options],
+    averageSourceKeys: [...column.averageSourceKeys],
+  };
+}
 
-  for (const column of merged) {
-    byKey.set(column.key, column);
-  }
+function parseStoredColumn(column: ResultColumnDraft): ResultColumnDraft {
+  const averageSourceKeys = column.options
+    .filter((option) => option.startsWith("field:"))
+    .map((option) => option.slice("field:".length));
 
-  return normalizeColumns(Array.from(byKey.values()));
+  return {
+    ...column,
+    options: column.options.filter((option) => option !== "__average__" && !option.startsWith("field:")),
+    averageSourceKeys,
+  };
+}
+
+function buildPersistedColumns(columns: ResultColumnDraft[]) {
+  const researchColumns = normalizeColumns(
+    columns
+      .filter((column) => !HIDDEN_SYSTEM_COLUMN_KEYS.has(column.key))
+      .map((column) => cloneColumn(column)),
+  );
+
+  return [...SYSTEM_LEADING_COLUMNS, ...researchColumns, ...SYSTEM_TRAILING_COLUMNS].map((column, index) => ({
+    ...cloneColumn(column),
+    sortOrder: index,
+  }));
 }
 
 function serializeColumn(column: ResultColumnDraft) {
@@ -401,6 +450,7 @@ function slotLabel(item: LayoutItemDraft) {
 function buildBatteryRecords(
   experiments: Experiment[],
   timepoints: ExperimentTimepoint[],
+  templates: ExperimentTemplateRecord[],
   scheduleTemplates: ScheduleTemplate[],
   scheduleDays: ScheduleDay[],
   scheduleSlots: ScheduleSlot[],
@@ -420,6 +470,7 @@ function buildBatteryRecords(
         experiment,
         timepoints: timepoints.filter((timepoint) => timepoint.experiment_id === experiment.id),
         templateId,
+        template: templates.find((template) => template.id === templateId) || null,
         scheduleTemplate,
         scheduleDays: batteryDays,
         scheduleSlots: batterySlots,
@@ -431,128 +482,136 @@ function buildBatteryRecords(
   return batteries;
 }
 
-function BatteryOverview({
-  records,
-  protocols,
-  templates,
-}: {
-  records: BatteryRecordSummary[];
-  protocols: Protocol[];
-  templates: Array<{ id: string; title: string }>;
-}) {
-  const templateTitleById = new Map(templates.map((template) => [template.id, template.title]));
-  const protocolTitleById = new Map(protocols.map((protocol) => [protocol.id, protocol.title]));
+function parseWindowRange(notes: string | null) {
+  const match = String(notes || "").match(/(\d+)\s*-\s*(\d+)\s*days/i);
+  return {
+    minAgeDays: match?.[1] || "",
+    maxAgeDays: match?.[2] || "",
+  };
+}
 
-  if (records.length === 0) {
-    return (
-      <Card className="border-dashed">
-        <CardHeader>
-          <CardTitle>Batteries</CardTitle>
-          <CardDescription>Your saved batteries will show up here after you finish the guided flow.</CardDescription>
-        </CardHeader>
-      </Card>
+function buildDraftsFromBatteryRecord(
+  record: BatteryRecordSummary,
+  templates: ExperimentTemplateRecord[],
+) {
+  const windows = [...record.timepoints]
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map((timepoint) => {
+      const range = parseWindowRange(timepoint.notes);
+      return {
+        id: makeId("window"),
+        name: timepoint.label,
+        minAgeDays: range.minAgeDays,
+        maxAgeDays: range.maxAgeDays,
+      } satisfies TimepointWindowDraft;
+    });
+
+  const windowIdByName = new Map(windows.map((window) => [window.name, window.id]));
+  const slotById = new Map(record.scheduleSlots.map((slot) => [slot.id, slot]));
+  const dayById = new Map(record.scheduleDays.map((day) => [day.id, day]));
+  const experimentIdByTemplateId = new Map<string, string>();
+  const experimentDrafts: ExperimentDraft[] = [];
+
+  const orderedTemplateIds = Array.from(
+    new Set(
+      record.scheduledBlocks
+        .slice()
+        .sort((a, b) => {
+          const slotA = slotById.get(a.schedule_slot_id);
+          const slotB = slotById.get(b.schedule_slot_id);
+          const dayA = slotA ? dayById.get(slotA.schedule_day_id) : null;
+          const dayB = slotB ? dayById.get(slotB.schedule_day_id) : null;
+          if ((dayA?.day_index || 0) !== (dayB?.day_index || 0)) {
+            return (dayA?.day_index || 0) - (dayB?.day_index || 0);
+          }
+          if ((slotA?.sort_order || 0) !== (slotB?.sort_order || 0)) {
+            return (slotA?.sort_order || 0) - (slotB?.sort_order || 0);
+          }
+          return a.sort_order - b.sort_order;
+        })
+        .map((block) => block.experiment_template_id),
+    ),
+  );
+
+  for (const templateId of orderedTemplateIds) {
+    const template = templates.find((entry) => entry.id === templateId) || null;
+    const draft = createEmptyExperiment(template?.title || "Untitled experiment");
+    draft.templateId = templateId;
+    draft.description = template?.description || "";
+    draft.category = template?.category || "";
+    draft.protocolLinks = (template?.protocolLinks || []).map((link, index) => ({
+      ...link,
+      sortOrder: index,
+    }));
+    draft.manualColumns = normalizeColumns(
+      (template?.schema?.columns || [])
+        .map((column) => parseStoredColumn({
+          ...column,
+          options: [...column.options],
+          averageSourceKeys: [],
+          defaultValue: column.defaultValue || "",
+          unit: column.unit || "",
+          helpText: column.helpText || "",
+          groupKey: column.groupKey || "",
+        }))
+        .filter((column) => !HIDDEN_SYSTEM_COLUMN_KEYS.has(column.key)),
     );
+    draft.sourceMode = draft.manualColumns.length > 0 ? "manual" : "extract";
+    experimentIdByTemplateId.set(templateId, draft.id);
+    experimentDrafts.push(draft);
   }
 
-  return (
-    <div className="space-y-4">
-      {records.map((record) => {
-        const slotById = new Map(record.scheduleSlots.map((slot) => [slot.id, slot]));
-        const dayById = new Map(record.scheduleDays.map((day) => [day.id, day]));
-        const windows = [...record.timepoints].sort((a, b) => a.label.localeCompare(b.label));
+  const layoutItems = record.scheduledBlocks
+    .slice()
+    .sort((a, b) => {
+      const slotA = slotById.get(a.schedule_slot_id);
+      const slotB = slotById.get(b.schedule_slot_id);
+      const dayA = slotA ? dayById.get(slotA.schedule_day_id) : null;
+      const dayB = slotB ? dayById.get(slotB.schedule_day_id) : null;
+      if ((dayA?.day_index || 0) !== (dayB?.day_index || 0)) {
+        return (dayA?.day_index || 0) - (dayB?.day_index || 0);
+      }
+      if ((slotA?.sort_order || 0) !== (slotB?.sort_order || 0)) {
+        return (slotA?.sort_order || 0) - (slotB?.sort_order || 0);
+      }
+      return a.sort_order - b.sort_order;
+    })
+    .map((block) => {
+      const slot = slotById.get(block.schedule_slot_id);
+      const day = slot ? dayById.get(slot.schedule_day_id) : null;
+      const metadata =
+        block.metadata && typeof block.metadata === "object" && !Array.isArray(block.metadata)
+          ? (block.metadata as Record<string, unknown>)
+          : {};
+      const windowNames = Array.isArray(metadata.timepointWindowNames)
+        ? metadata.timepointWindowNames.filter((value): value is string => typeof value === "string")
+        : [];
 
-        return (
-          <Card key={record.experiment.id} className="border-slate-200/80 bg-white/90 shadow-sm">
-            <CardHeader>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <CardTitle className="text-lg">{record.experiment.title}</CardTitle>
-                  <CardDescription>{record.experiment.description || "No battery description yet."}</CardDescription>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="secondary">{windows.length} timepoint window{windows.length === 1 ? "" : "s"}</Badge>
-                  <Badge variant="secondary">{record.scheduledBlocks.length} battery item{record.scheduledBlocks.length === 1 ? "" : "s"}</Badge>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <section className="space-y-2">
-                <p className="text-sm font-semibold text-slate-900">Timepoint Windows</p>
-                <div className="flex flex-wrap gap-2">
-                  {windows.length === 0 ? (
-                    <span className="text-sm text-slate-500">No linked windows.</span>
-                  ) : (
-                    windows.map((window) => (
-                      <Badge key={window.id} className="bg-slate-100 text-slate-800 hover:bg-slate-100">
-                        {window.label}
-                        {window.notes ? ` • ${window.notes}` : ""}
-                      </Badge>
-                    ))
-                  )}
-                </div>
-              </section>
+      return {
+        id: makeId("layout"),
+        experimentId: experimentIdByTemplateId.get(block.experiment_template_id) || "",
+        dayIndex: String(day?.day_index || 1),
+        slotKind: slot?.slot_kind || "am",
+        customLabel: slot?.slot_kind === "custom" ? slot.label || "" : "",
+        exactTime: slot?.slot_kind === "exact_time" ? slot.start_time || "" : "",
+        timepointWindowIds: windowNames.map((name) => windowIdByName.get(name)).filter((value): value is string => Boolean(value)),
+        notes: block.notes || "",
+      } satisfies LayoutItemDraft;
+    });
 
-              <section className="space-y-3">
-                <p className="text-sm font-semibold text-slate-900">Battery Layout</p>
-                {record.scheduledBlocks.length === 0 ? (
-                  <p className="text-sm text-slate-500">No saved layout yet.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {record.scheduledBlocks
-                      .slice()
-                      .sort((a, b) => {
-                        const slotA = slotById.get(a.schedule_slot_id);
-                        const slotB = slotById.get(b.schedule_slot_id);
-                        const dayA = slotA ? dayById.get(slotA.schedule_day_id) : null;
-                        const dayB = slotB ? dayById.get(slotB.schedule_day_id) : null;
-                        if ((dayA?.day_index || 0) !== (dayB?.day_index || 0)) {
-                          return (dayA?.day_index || 0) - (dayB?.day_index || 0);
-                        }
-                        return a.sort_order - b.sort_order;
-                      })
-                      .map((block) => {
-                        const slot = slotById.get(block.schedule_slot_id);
-                        const day = slot ? dayById.get(slot.schedule_day_id) : null;
-                        const metadata =
-                          block.metadata && typeof block.metadata === "object" && !Array.isArray(block.metadata)
-                            ? block.metadata as Record<string, unknown>
-                            : {};
-                        const windowNames = Array.isArray(metadata.timepointWindowNames)
-                          ? metadata.timepointWindowNames.filter((value): value is string => typeof value === "string")
-                          : [];
-                        const protocolTitle = block.protocol_id ? protocolTitleById.get(block.protocol_id) : null;
-                        const templateTitle = templateTitleById.get(block.experiment_template_id);
-
-                        return (
-                          <div key={block.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-semibold text-slate-900">
-                                  Day {day?.day_index || "?"} • {slot?.slot_kind === "exact_time" ? slot.start_time : slot?.label || slot?.slot_kind?.toUpperCase() || "Slot"}
-                                </p>
-                                <p className="text-sm text-slate-700">
-                                  {block.title_override || protocolTitle || templateTitle || "Experiment block"}
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                {windowNames.map((name) => (
-                                  <Badge key={`${block.id}-${name}`} variant="outline">{name}</Badge>
-                                ))}
-                              </div>
-                            </div>
-                            {block.notes ? <p className="mt-2 text-xs text-slate-600">{block.notes}</p> : null}
-                          </div>
-                        );
-                      })}
-                  </div>
-                )}
-              </section>
-            </CardContent>
-          </Card>
-        );
-      })}
-    </div>
-  );
+  return {
+    batteryName: record.experiment.title,
+    batteryDescription: record.experiment.description || "",
+    experimentDrafts: experimentDrafts.length > 0 ? experimentDrafts : [createEmptyExperiment()],
+    timepointWindows: windows.length > 0 ? windows : [createEmptyWindow()],
+    layoutItems,
+    editingState: {
+      experimentId: record.experiment.id,
+      batteryTemplateId: record.templateId,
+      scheduleTemplateId: record.scheduleTemplate?.id || null,
+      timepointIds: record.timepoints.map((timepoint) => timepoint.id),
+    } satisfies EditingBatteryState,
+  };
 }
 
 export function BatteryCreationWizard({
@@ -565,18 +624,16 @@ export function BatteryCreationWizard({
   scheduleSlots,
   scheduledBlocks,
   persistenceEnabled,
-  onOpenDirectEditors,
 }: {
   experiments: Experiment[];
   timepoints: ExperimentTimepoint[];
   protocols: Protocol[];
-  templates: Array<{ id: string; title: string }>;
+  templates: ExperimentTemplateRecord[];
   scheduleTemplates: ScheduleTemplate[];
   scheduleDays: ScheduleDay[];
   scheduleSlots: ScheduleSlot[];
   scheduledBlocks: ScheduledBlock[];
   persistenceEnabled: boolean;
-  onOpenDirectEditors?: () => void;
 }) {
   const router = useRouter();
   const [stepIndex, setStepIndex] = useState(0);
@@ -586,6 +643,7 @@ export function BatteryCreationWizard({
   const [selectedExperimentId, setSelectedExperimentId] = useState<string>("");
   const [timepointWindows, setTimepointWindows] = useState<TimepointWindowDraft[]>([createEmptyWindow()]);
   const [layoutItems, setLayoutItems] = useState<LayoutItemDraft[]>([]);
+  const [editingBattery, setEditingBattery] = useState<EditingBatteryState | null>(null);
   const [isPending, startTransition] = useTransition();
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -593,22 +651,30 @@ export function BatteryCreationWizard({
   const selectedExperiment =
     experimentDrafts.find((experiment) => experiment.id === selectedExperimentId) || experimentDrafts[0] || null;
   const batteryRecords = useMemo(
-    () => buildBatteryRecords(experiments, timepoints, scheduleTemplates, scheduleDays, scheduleSlots, scheduledBlocks),
-    [experiments, scheduleDays, scheduleSlots, scheduleTemplates, scheduledBlocks, timepoints],
+    () => buildBatteryRecords(experiments, timepoints, templates, scheduleTemplates, scheduleDays, scheduleSlots, scheduledBlocks),
+    [experiments, scheduleDays, scheduleSlots, scheduleTemplates, scheduledBlocks, templates, timepoints],
   );
+
+  useEffect(() => {
+    if (!selectedExperimentId && experimentDrafts[0]?.id) {
+      setSelectedExperimentId(experimentDrafts[0].id);
+      return;
+    }
+
+    if (selectedExperimentId && !experimentDrafts.some((experiment) => experiment.id === selectedExperimentId)) {
+      setSelectedExperimentId(experimentDrafts[0]?.id || "");
+    }
+  }, [experimentDrafts, selectedExperimentId]);
 
   const canMoveNext =
     currentStep.key === "experiments"
       ? batteryName.trim().length > 0 && experimentDrafts.every((experiment) => experiment.name.trim().length > 0)
       : currentStep.key === "details"
         ? experimentDrafts.every((experiment) => {
-            const chosenColumns =
-              experiment.sourceMode === "extract"
-                ? [
-                    ...experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column),
-                    ...experiment.manualColumns,
-                  ]
-                : experiment.manualColumns;
+            const chosenColumns = [
+              ...experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column),
+              ...experiment.manualColumns,
+            ].filter((column) => !HIDDEN_SYSTEM_COLUMN_KEYS.has(column.key));
             return chosenColumns.length > 0;
           })
         : currentStep.key === "timepoints"
@@ -624,7 +690,7 @@ export function BatteryCreationWizard({
               )
             : true;
 
-  const updateExperiment = (experimentId: string, patch: Partial<ExperimentDraft>) => {
+  const updateExperimentDraft = (experimentId: string, patch: Partial<ExperimentDraft>) => {
     setExperimentDrafts((current) =>
       current.map((experiment) => (experiment.id === experimentId ? { ...experiment, ...patch } : experiment)),
     );
@@ -775,7 +841,7 @@ export function BatteryCreationWizard({
       if (columns.length === 0) {
         throw new Error("No columns were detected in that file.");
       }
-      updateExperiment(experimentId, { extractedColumns: columns, sourceMode: "extract" });
+      updateExperimentDraft(experimentId, { extractedColumns: columns, sourceMode: "extract" });
       toast.success(`Detected ${columns.length} columns. Keep only the ones you want.`);
     };
 
@@ -820,6 +886,29 @@ export function BatteryCreationWizard({
     }
 
     toast.error("Unsupported file type. Use CSV, TSV, TXT, RTF, XLSX, or XLS.");
+  };
+
+  const startNewBattery = () => {
+    setBatteryName("");
+    setBatteryDescription("");
+    setExperimentDrafts([createEmptyExperiment()]);
+    setSelectedExperimentId("");
+    setTimepointWindows([createEmptyWindow()]);
+    setLayoutItems([]);
+    setEditingBattery(null);
+    setStepIndex(0);
+  };
+
+  const startEditingBattery = (record: BatteryRecordSummary) => {
+    const draft = buildDraftsFromBatteryRecord(record, templates);
+    setBatteryName(draft.batteryName);
+    setBatteryDescription(draft.batteryDescription);
+    setExperimentDrafts(draft.experimentDrafts);
+    setSelectedExperimentId(draft.experimentDrafts[0]?.id || "");
+    setTimepointWindows(draft.timepointWindows);
+    setLayoutItems(draft.layoutItems);
+    setEditingBattery(draft.editingState);
+    setStepIndex(1);
   };
 
   const saveBattery = () => {
@@ -868,18 +957,15 @@ export function BatteryCreationWizard({
             throw new Error(`Could not resolve the default protocol for "${experiment.name}".`);
           }
 
-          const chosenColumns =
-            experiment.sourceMode === "extract"
-              ? mergeColumns(
-                  DEFAULT_COLUMNS,
-                  [
-                    ...experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column),
-                    ...experiment.manualColumns,
-                  ],
-                )
-              : mergeColumns(DEFAULT_COLUMNS, experiment.manualColumns);
+          const chosenColumns = buildPersistedColumns([
+            ...experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column),
+            ...experiment.manualColumns,
+          ]);
 
           const templateForm = new FormData();
+          if (experiment.templateId) {
+            templateForm.set("template_id", experiment.templateId);
+          }
           templateForm.set("title", experiment.name.trim());
           templateForm.set("description", experiment.description.trim());
           templateForm.set("category", experiment.category.trim());
@@ -905,6 +991,9 @@ export function BatteryCreationWizard({
         }
 
         const batteryTemplateForm = new FormData();
+        if (editingBattery?.batteryTemplateId) {
+          batteryTemplateForm.set("template_id", editingBattery.batteryTemplateId);
+        }
         batteryTemplateForm.set("title", batteryName.trim());
         batteryTemplateForm.set("description", batteryDescription.trim());
         batteryTemplateForm.set("category", "Battery");
@@ -925,7 +1014,7 @@ export function BatteryCreationWizard({
             }),
           ),
         );
-        batteryTemplateForm.set("result_columns", JSON.stringify(normalizeColumns(DEFAULT_COLUMNS).map(serializeColumn)));
+        batteryTemplateForm.set("result_columns", JSON.stringify(buildPersistedColumns([]).map(serializeColumn)));
 
         const batteryTemplate = await saveExperimentTemplate(batteryTemplateForm);
         if (!batteryTemplate?.templateId) {
@@ -1001,6 +1090,9 @@ export function BatteryCreationWizard({
           });
 
         const scheduleForm = new FormData();
+        if (editingBattery?.scheduleTemplateId) {
+          scheduleForm.set("schedule_template_id", editingBattery.scheduleTemplateId);
+        }
         scheduleForm.set("template_id", batteryTemplate.templateId);
         scheduleForm.set("name", `${batteryName.trim()} layout`);
         scheduleForm.set("description", "Guided battery layout generated from the setup wizard.");
@@ -1024,14 +1116,26 @@ export function BatteryCreationWizard({
             .join(","),
         );
 
-        const createdBatteryExperiment = await createExperiment(batteryExperimentForm);
-        if (!createdBatteryExperiment?.id) {
-          throw new Error("Could not create the battery summary record.");
+        let batteryExperimentId = editingBattery?.experimentId || "";
+
+        if (editingBattery?.experimentId) {
+          batteryExperimentForm.set("id", editingBattery.experimentId);
+          await updateExperiment(batteryExperimentForm);
+        } else {
+          const createdBatteryExperiment = await createExperiment(batteryExperimentForm);
+          if (!createdBatteryExperiment?.id) {
+            throw new Error("Could not create the battery summary record.");
+          }
+          batteryExperimentId = createdBatteryExperiment.id;
+        }
+
+        for (const timepointId of editingBattery?.timepointIds || []) {
+          await deleteTimepoint(timepointId);
         }
 
         for (const window of timepointWindows) {
           const timepointForm = new FormData();
-          timepointForm.set("experiment_id", createdBatteryExperiment.id);
+          timepointForm.set("experiment_id", batteryExperimentId);
           timepointForm.set("label", window.name.trim());
           timepointForm.set("scheduled_at", new Date().toISOString());
           timepointForm.set("notes", `${window.minAgeDays.trim()}-${window.maxAgeDays.trim()} days`);
@@ -1039,14 +1143,8 @@ export function BatteryCreationWizard({
         }
 
         router.refresh();
-        toast.success("Battery created. You can now edit it from the one-page summary or the direct editors.");
-        setBatteryName("");
-        setBatteryDescription("");
-        setExperimentDrafts([createEmptyExperiment()]);
-        setSelectedExperimentId("");
-        setTimepointWindows([createEmptyWindow()]);
-        setLayoutItems([]);
-        setStepIndex(0);
+        toast.success(editingBattery ? "Battery updated." : "Battery created.");
+        startNewBattery();
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to save battery.");
       }
@@ -1059,12 +1157,17 @@ export function BatteryCreationWizard({
         <CardHeader>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <CardTitle className="text-xl">Guided Battery Builder</CardTitle>
+              <CardTitle className="text-xl">{editingBattery ? "Edit Battery" : "Guided Battery Builder"}</CardTitle>
               <CardDescription>
-                Create a full battery step by step the first time, then use the saved summaries and direct editors later.
+                Build the full battery in one place. BPAN adds the system fields automatically so you only define the fields researchers actually use.
               </CardDescription>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {editingBattery ? (
+                <Button type="button" variant="outline" onClick={startNewBattery} disabled={isPending}>
+                  Start a new battery
+                </Button>
+              ) : null}
               {WIZARD_STEPS.map((step, index) => (
                 <Badge
                   key={step.key}
@@ -1078,6 +1181,31 @@ export function BatteryCreationWizard({
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
+          {batteryRecords.length > 0 ? (
+            <div className="rounded-3xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Continue a saved battery</p>
+                  <p className="mt-1 text-sm text-slate-600">Open any saved battery back into this same guided flow.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {batteryRecords.slice(0, 6).map((record) => (
+                    <Button
+                      key={record.experiment.id}
+                      type="button"
+                      variant={editingBattery?.experimentId === record.experiment.id ? "default" : "outline"}
+                      onClick={() => startEditingBattery(record)}
+                      disabled={isPending}
+                    >
+                      <Pencil className="mr-2 h-4 w-4" />
+                      {record.experiment.title}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           <div className="rounded-3xl border border-slate-200 bg-slate-50 px-4 py-4">
             <p className="text-sm font-semibold text-slate-900">{currentStep.label}</p>
             <p className="mt-1 text-sm text-slate-600">{currentStep.description}</p>
@@ -1104,7 +1232,7 @@ export function BatteryCreationWizard({
                       </div>
                       <Input
                         value={experiment.name}
-                        onChange={(event) => updateExperiment(experiment.id, { name: event.target.value })}
+                        onChange={(event) => updateExperimentDraft(experiment.id, { name: event.target.value })}
                         placeholder="Y-Maze"
                         className="flex-1"
                       />
@@ -1143,10 +1271,10 @@ export function BatteryCreationWizard({
                         ? "border-slate-900 bg-slate-900 text-white"
                         : "border-slate-200 bg-white"
                     }`}
-                  >
+                    >
                     <p className="font-semibold">{experiment.name || "Untitled experiment"}</p>
                     <p className={`text-xs ${((selectedExperiment?.id || experimentDrafts[0]?.id) === experiment.id) ? "text-slate-200" : "text-slate-500"}`}>
-                      {experiment.sourceMode === "extract" ? "Extract from example file" : "Manual columns"}
+                      {[...experiment.extractedColumns.filter((column) => column.selected), ...experiment.manualColumns].length} researcher field{[...experiment.extractedColumns.filter((column) => column.selected), ...experiment.manualColumns].length === 1 ? "" : "s"}
                     </p>
                   </button>
                 ))}
@@ -1157,15 +1285,15 @@ export function BatteryCreationWizard({
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
                       <Label>Name</Label>
-                      <Input value={selectedExperiment.name} onChange={(event) => updateExperiment(selectedExperiment.id, { name: event.target.value })} />
+                      <Input value={selectedExperiment.name} onChange={(event) => updateExperimentDraft(selectedExperiment.id, { name: event.target.value })} />
                     </div>
                     <div className="space-y-2">
                       <Label>Category</Label>
-                      <Input value={selectedExperiment.category} onChange={(event) => updateExperiment(selectedExperiment.id, { category: event.target.value })} placeholder="Behavior" />
+                      <Input value={selectedExperiment.category} onChange={(event) => updateExperimentDraft(selectedExperiment.id, { category: event.target.value })} placeholder="Behavior" />
                     </div>
                     <div className="space-y-2 md:col-span-2">
                       <Label>Experiment Details</Label>
-                      <Textarea value={selectedExperiment.description} onChange={(event) => updateExperiment(selectedExperiment.id, { description: event.target.value })} rows={4} placeholder="Add the details someone needs for this single experiment." />
+                      <Textarea value={selectedExperiment.description} onChange={(event) => updateExperimentDraft(selectedExperiment.id, { description: event.target.value })} rows={4} placeholder="Add the details someone needs for this single experiment." />
                     </div>
                   </div>
 
@@ -1250,29 +1378,26 @@ export function BatteryCreationWizard({
                   </div>
 
                   <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 space-y-4">
-                    <div className="flex flex-wrap gap-2">
-                      <Button type="button" variant={selectedExperiment.sourceMode === "extract" ? "default" : "outline"} onClick={() => updateExperiment(selectedExperiment.id, { sourceMode: "extract" })}>
-                        Extract from file
-                      </Button>
-                      <Button type="button" variant={selectedExperiment.sourceMode === "manual" ? "default" : "outline"} onClick={() => updateExperiment(selectedExperiment.id, { sourceMode: "manual" })}>
-                        Build manually
-                      </Button>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">Result fields</p>
+                        <p className="text-sm text-slate-500">
+                          Upload an example results file if you have one, then keep only the fields researchers should fill in.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
                       <Button type="button" variant="outline" onClick={() => addPresetColumn(selectedExperiment.id, createDoneColumn)}>
                         <Plus className="mr-2 h-4 w-4" />
                         Add done/not done
-                      </Button>
-                      <Button type="button" variant="outline" onClick={() => addPresetColumn(selectedExperiment.id, createFileColumn)}>
-                        <Plus className="mr-2 h-4 w-4" />
-                        Add file link field
                       </Button>
                       <Button type="button" variant="outline" onClick={() => addPresetColumn(selectedExperiment.id, createAverageColumn)}>
                         <Plus className="mr-2 h-4 w-4" />
                         Add average field
                       </Button>
+                      </div>
                     </div>
 
-                    {selectedExperiment.sourceMode === "extract" ? (
-                      <div className="space-y-4">
+                    <div className="space-y-4">
                         <input
                           ref={(node) => {
                             fileInputRefs.current[selectedExperiment.id] = node;
@@ -1303,7 +1428,7 @@ export function BatteryCreationWizard({
                                     type="checkbox"
                                     checked={entry.selected}
                                     onChange={(event) =>
-                                      updateExperiment(selectedExperiment.id, {
+                                      updateExperimentDraft(selectedExperiment.id, {
                                         extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
                                           columnIndex === index ? { ...column, selected: event.target.checked } : column,
                                         ),
@@ -1311,13 +1436,13 @@ export function BatteryCreationWizard({
                                     }
                                     className="mt-1 h-4 w-4"
                                   />
-                                  <div className="grid flex-1 gap-3 md:grid-cols-2">
+                                  <div className="grid flex-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                                     <div className="space-y-2">
                                       <Label>Label</Label>
                                       <Input
                                         value={entry.column.label}
                                         onChange={(event) =>
-                                          updateExperiment(selectedExperiment.id, {
+                                          updateExperimentDraft(selectedExperiment.id, {
                                             extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
                                               columnIndex === index
                                                 ? {
@@ -1339,7 +1464,7 @@ export function BatteryCreationWizard({
                                       <select
                                         value={entry.column.columnType}
                                         onChange={(event) =>
-                                          updateExperiment(selectedExperiment.id, {
+                                          updateExperimentDraft(selectedExperiment.id, {
                                             extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
                                               columnIndex === index
                                                 ? {
@@ -1361,32 +1486,11 @@ export function BatteryCreationWizard({
                                       </select>
                                     </div>
                                     <div className="space-y-2">
-                                      <Label>Default Value</Label>
-                                      <Input
-                                        value={entry.column.defaultValue}
-                                        onChange={(event) =>
-                                          updateExperiment(selectedExperiment.id, {
-                                            extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
-                                              columnIndex === index
-                                                ? {
-                                                    ...column,
-                                                    column: {
-                                                      ...column.column,
-                                                      defaultValue: event.target.value,
-                                                    },
-                                                  }
-                                                : column,
-                                            ),
-                                          })
-                                        }
-                                      />
-                                    </div>
-                                    <div className="space-y-2">
                                       <Label>Options</Label>
                                       <Input
                                         value={entry.column.options.join(", ")}
                                         onChange={(event) =>
-                                          updateExperiment(selectedExperiment.id, {
+                                          updateExperimentDraft(selectedExperiment.id, {
                                             extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
                                               columnIndex === index
                                                 ? {
@@ -1424,7 +1528,7 @@ export function BatteryCreationWizard({
                                               key={`${entry.id}-${candidate.key}`}
                                               type="button"
                                               onClick={() =>
-                                                updateExperiment(selectedExperiment.id, {
+                                                updateExperimentDraft(selectedExperiment.id, {
                                                   extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
                                                     columnIndex === index
                                                       ? {
@@ -1452,53 +1556,6 @@ export function BatteryCreationWizard({
                                     </div>
                                   </div>
                                 ) : null}
-                                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                  <div className="space-y-2">
-                                    <Label>Help Text</Label>
-                                    <Input
-                                      value={entry.column.helpText}
-                                      onChange={(event) =>
-                                        updateExperiment(selectedExperiment.id, {
-                                          extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
-                                            columnIndex === index
-                                              ? {
-                                                  ...column,
-                                                  column: {
-                                                    ...column.column,
-                                                    helpText: event.target.value,
-                                                  },
-                                                }
-                                              : column,
-                                          ),
-                                        })
-                                      }
-                                    />
-                                  </div>
-                                  <div className="flex flex-wrap gap-4 text-sm text-slate-600">
-                                    <label className="flex items-center gap-2">
-                                      <input
-                                        type="checkbox"
-                                        checked={entry.column.required}
-                                        onChange={(event) =>
-                                          updateExperiment(selectedExperiment.id, {
-                                            extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
-                                              columnIndex === index
-                                                ? {
-                                                    ...column,
-                                                    column: {
-                                                      ...column.column,
-                                                      required: event.target.checked,
-                                                    },
-                                                  }
-                                                : column,
-                                            ),
-                                          })
-                                        }
-                                      />
-                                      Required
-                                    </label>
-                                  </div>
-                                </div>
                               </div>
                             ))
                           )}
@@ -1506,9 +1563,9 @@ export function BatteryCreationWizard({
 
                         <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 space-y-3">
                           <div>
-                            <p className="text-sm font-semibold text-slate-900">Extra fields to add on top</p>
+                            <p className="text-sm font-semibold text-slate-900">Extra fields</p>
                             <p className="text-sm text-slate-500">
-                              Use this for BPAN-only fields like file uploads, completion checkboxes, or notes that are not in the sample file.
+                              Add any extra fields that were not present in the example file.
                             </p>
                           </div>
                           {selectedExperiment.manualColumns.map((column, index) => (
@@ -1517,10 +1574,6 @@ export function BatteryCreationWizard({
                                 <div className="space-y-2">
                                   <Label>Label</Label>
                                   <Input value={column.label} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { label: event.target.value })} />
-                                </div>
-                                <div className="space-y-2">
-                                  <Label>Key</Label>
-                                  <Input value={column.key} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { key: slugifyKey(event.target.value) })} />
                                 </div>
                                 <div className="space-y-2">
                                   <Label>Type</Label>
@@ -1540,11 +1593,7 @@ export function BatteryCreationWizard({
                                   </Button>
                                 </div>
                               </div>
-                              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                                <div className="space-y-2">
-                                  <Label>Default Value</Label>
-                                  <Input value={column.defaultValue} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { defaultValue: event.target.value })} />
-                                </div>
+                              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                                 <div className="space-y-2">
                                   <Label>Options</Label>
                                   <Input
@@ -1560,14 +1609,6 @@ export function BatteryCreationWizard({
                                     placeholder={isChoiceColumnType(column.columnType) ? "Comma-separated choices" : "Used for select / multi select"}
                                     disabled={!isChoiceColumnType(column.columnType)}
                                   />
-                                </div>
-                                <div className="space-y-2">
-                                  <Label>Group Key</Label>
-                                  <Input value={column.groupKey} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { groupKey: event.target.value })} />
-                                </div>
-                                <div className="space-y-2">
-                                  <Label>Help Text</Label>
-                                  <Input value={column.helpText} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { helpText: event.target.value })} />
                                 </div>
                               </div>
                               {column.averageSourceKeys.length > 0 || column.groupKey === "derived" ? (
@@ -1599,20 +1640,10 @@ export function BatteryCreationWizard({
                                             {candidate.label}
                                           </button>
                                         );
-                                      })}
+                                    })}
                                   </div>
                                 </div>
                               ) : null}
-                              <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-600">
-                                <label className="flex items-center gap-2">
-                                  <input type="checkbox" checked={column.required} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { required: event.target.checked })} />
-                                  Required
-                                </label>
-                                <label className="flex items-center gap-2">
-                                  <input type="checkbox" checked={column.isEnabled} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { isEnabled: event.target.checked })} />
-                                  Enabled
-                                </label>
-                              </div>
                             </div>
                           ))}
                           <Button type="button" variant="outline" onClick={() => addManualColumn(selectedExperiment.id)}>
@@ -1620,116 +1651,7 @@ export function BatteryCreationWizard({
                             Add extra field
                           </Button>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {selectedExperiment.manualColumns.map((column, index) => (
-                          <div key={`${column.key}-${index}`} className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
-                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                              <div className="space-y-2">
-                                <Label>Label</Label>
-                                <Input value={column.label} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { label: event.target.value })} />
-                              </div>
-                              <div className="space-y-2">
-                                <Label>Key</Label>
-                                <Input value={column.key} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { key: slugifyKey(event.target.value) })} />
-                              </div>
-                              <div className="space-y-2">
-                                <Label>Type</Label>
-                                <select
-                                  value={column.columnType}
-                                  onChange={(event) => updateManualColumn(selectedExperiment.id, index, { columnType: event.target.value as ColumnType })}
-                                  className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm shadow-xs outline-none"
-                                >
-                                  {COLUMN_TYPE_OPTIONS.map((option) => (
-                                    <option key={option} value={option}>{option}</option>
-                                  ))}
-                                </select>
-                              </div>
-                              <div className="flex items-end">
-                                <Button type="button" variant="outline" onClick={() => removeManualColumn(selectedExperiment.id, index)} disabled={selectedExperiment.manualColumns.length === 1}>
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </div>
-                            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                              <div className="space-y-2">
-                                <Label>Default Value</Label>
-                                <Input value={column.defaultValue} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { defaultValue: event.target.value })} />
-                              </div>
-                              <div className="space-y-2">
-                                <Label>Options</Label>
-                                <Input
-                                  value={column.options.join(", ")}
-                                  onChange={(event) =>
-                                    updateManualColumn(selectedExperiment.id, index, {
-                                      options: event.target.value
-                                        .split(",")
-                                        .map((item) => item.trim())
-                                        .filter(Boolean),
-                                    })
-                                  }
-                                  placeholder={isChoiceColumnType(column.columnType) ? "Comma-separated choices" : "Used for select / multi select"}
-                                  disabled={!isChoiceColumnType(column.columnType)}
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label>Group Key</Label>
-                                <Input value={column.groupKey} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { groupKey: event.target.value })} />
-                              </div>
-                              <div className="space-y-2">
-                                <Label>Help Text</Label>
-                                <Input value={column.helpText} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { helpText: event.target.value })} />
-                              </div>
-                            </div>
-                            {column.averageSourceKeys.length > 0 || column.groupKey === "derived" ? (
-                              <div className="mt-3 space-y-2">
-                                <Label>Average these numeric fields</Label>
-                                <div className="flex flex-wrap gap-2">
-                                  {selectedExperiment.manualColumns
-                                    .filter((candidate) => candidate.key !== column.key && isNumericColumnType(candidate.columnType))
-                                    .map((candidate) => {
-                                      const selected = column.averageSourceKeys.includes(candidate.key);
-                                      return (
-                                        <button
-                                          key={`${column.key}-${candidate.key}`}
-                                          type="button"
-                                          onClick={() =>
-                                            updateManualColumn(selectedExperiment.id, index, {
-                                              averageSourceKeys: selected
-                                                ? column.averageSourceKeys.filter((key) => key !== candidate.key)
-                                                : [...column.averageSourceKeys, candidate.key],
-                                              groupKey: "derived",
-                                              helpText: column.helpText || "Derived average of selected numeric fields.",
-                                            })
-                                          }
-                                          className={`rounded-full border px-3 py-1 text-sm ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`}
-                                        >
-                                          {candidate.label}
-                                        </button>
-                                      );
-                                    })}
-                                </div>
-                              </div>
-                            ) : null}
-                            <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-600">
-                              <label className="flex items-center gap-2">
-                                <input type="checkbox" checked={column.required} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { required: event.target.checked })} />
-                                Required
-                              </label>
-                              <label className="flex items-center gap-2">
-                                <input type="checkbox" checked={column.isEnabled} onChange={(event) => updateManualColumn(selectedExperiment.id, index, { isEnabled: event.target.checked })} />
-                                Enabled
-                              </label>
-                            </div>
-                          </div>
-                        ))}
-                        <Button type="button" variant="outline" onClick={() => addManualColumn(selectedExperiment.id)}>
-                          <Plus className="mr-2 h-4 w-4" />
-                          Add column
-                        </Button>
-                      </div>
-                    )}
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -1889,9 +1811,7 @@ export function BatteryCreationWizard({
                   <CardContent className="space-y-3">
                     {experimentDrafts.map((experiment) => {
                       const selectedColumns =
-                        experiment.sourceMode === "extract"
-                          ? experiment.extractedColumns.filter((column) => column.selected).length
-                          : experiment.manualColumns.length;
+                        experiment.extractedColumns.filter((column) => column.selected).length + experiment.manualColumns.length;
                       return (
                         <div key={experiment.id} className="rounded-2xl border border-slate-200 px-3 py-3">
                           <p className="font-semibold text-slate-900">{experiment.name || "Untitled experiment"}</p>
@@ -1936,7 +1856,7 @@ export function BatteryCreationWizard({
               </div>
 
               <div className="rounded-3xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
-                Saving will create reusable single-experiment definitions, save the battery layout, and create a linked battery summary record with named timepoint windows.
+                BPAN will automatically add the built-in Notes, Files, and URL result fields to every experiment when you save.
               </div>
             </section>
           ) : null}
@@ -1947,17 +1867,12 @@ export function BatteryCreationWizard({
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back
               </Button>
-              {onOpenDirectEditors ? (
-                <Button type="button" variant="ghost" onClick={onOpenDirectEditors} disabled={isPending}>
-                  Open direct editors
-                </Button>
-              ) : null}
             </div>
             <div className="flex gap-2">
               {currentStep.key === "review" ? (
                 <Button type="button" onClick={saveBattery} disabled={isPending || !canMoveNext}>
                   {isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                  Save battery
+                  {editingBattery ? "Save changes" : "Save battery"}
                 </Button>
               ) : (
                 <Button type="button" onClick={() => setStepIndex((current) => Math.min(current + 1, WIZARD_STEPS.length - 1))} disabled={!canMoveNext || isPending}>
@@ -1969,8 +1884,6 @@ export function BatteryCreationWizard({
           </div>
         </CardContent>
       </Card>
-
-      <BatteryOverview records={batteryRecords} protocols={protocols} templates={templates} />
     </div>
   );
 }

@@ -297,13 +297,12 @@ export function ExperimentsClient({
           experiments={experiments}
           timepoints={timepoints}
           protocols={protocols}
-          templates={experimentTemplates.map((template) => ({ id: template.id, title: template.title }))}
+          templates={experimentTemplates}
           scheduleTemplates={scheduleTemplates}
           scheduleDays={scheduleDays}
           scheduleSlots={scheduleSlots}
           scheduledBlocks={scheduledBlocks}
           persistenceEnabled={templateBuilderPersistenceEnabled && scheduleBuilderPersistenceEnabled}
-          onOpenDirectEditors={() => setTab("schedule")}
         />
       )}
       {tab === "calendar" && (
