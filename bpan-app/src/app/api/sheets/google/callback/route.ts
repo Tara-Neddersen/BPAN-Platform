@@ -50,11 +50,18 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    const { data: existingTokenRow } = await supabase
+      .from("google_sheets_tokens")
+      .select("refresh_token")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
     const tokens = await exchangeGoogleSheetsCode(code);
-    if (!tokens.refresh_token) {
+    const refreshToken = tokens.refresh_token || existingTokenRow?.refresh_token || null;
+    if (!refreshToken) {
       return redirectToResults({
         sheets: "error",
-        msg: "Google Sheets reconnect did not return a refresh token. Please try again.",
+        msg: "Google Sheets connection did not return a reusable refresh token. Please disconnect Sheets and try again.",
       });
     }
     const googleEmail = await getGoogleSheetsEmail(tokens.access_token);
@@ -66,7 +73,7 @@ export async function GET(req: NextRequest) {
         {
           user_id: user.id,
           access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token,
+          refresh_token: refreshToken,
           expires_at: expiresAt,
           google_email: googleEmail,
         },

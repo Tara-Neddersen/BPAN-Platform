@@ -81,6 +81,21 @@ const MIGRATION_BASE_COLUMNS = [
   "created_at",
   "updated_at",
   "legacy_result_id",
+  "attachment_cage_image_url",
+  "attachment_cage_image_urls",
+  "attachment_raw_data_url",
+  "attachment_raw_data_urls",
+  "attachment_folder_url",
+  "attachment_folder_urls",
+] as const;
+
+const MIGRATION_ATTACHMENT_COLUMNS = [
+  { sourceKey: "__cage_image", exportKey: "attachment_cage_image_url" },
+  { sourceKey: "__cage_images", exportKey: "attachment_cage_image_urls" },
+  { sourceKey: "__raw_data_url", exportKey: "attachment_raw_data_url" },
+  { sourceKey: "__raw_data_urls", exportKey: "attachment_raw_data_urls" },
+  { sourceKey: "__attachment_folder_url", exportKey: "attachment_folder_url" },
+  { sourceKey: "__attachment_folder_urls", exportKey: "attachment_folder_urls" },
 ] as const;
 
 function normalizeCellValue(value: unknown): string | number | boolean {
@@ -281,6 +296,10 @@ export function buildColonyResultsMigrationSheets(
       legacy_result_id: result.id,
     };
 
+    for (const attachmentColumn of MIGRATION_ATTACHMENT_COLUMNS) {
+      baseRow[attachmentColumn.exportKey] = result.measures?.[attachmentColumn.sourceKey] ?? "";
+    }
+
     for (const key of measureKeys) {
       baseRow[key] = result.measures?.[key] ?? "";
     }
@@ -314,6 +333,10 @@ export function buildColonyResultsMigrationSheets(
     {
       field: "measure columns",
       purpose: "All experiment/result values are flattened into top-level columns in the same row.",
+    },
+    {
+      field: "attachment_* columns",
+      purpose: "Preserves uploaded file URLs and attachment-folder links so the new importer can restore linked files without manual re-upload.",
     },
   ];
 

@@ -87,14 +87,6 @@ export function getGoogleSheetsReconnectMessage() {
   return GOOGLE_SHEETS_RECONNECT_MESSAGE;
 }
 
-async function invalidateGoogleSheetsToken(supabase: GoogleSheetsSupabaseLike, userId: string) {
-  try {
-    await supabase.from("google_sheets_tokens").delete().eq("user_id", userId);
-  } catch {
-    // Best effort cleanup so stale connections do not linger.
-  }
-}
-
 export async function validateGoogleSheetsAccess(accessToken: string) {
   const res = await fetch(
     "https://sheets.googleapis.com/v4/spreadsheets/0000000000000000000000000000000000000000000?fields=spreadsheetId",
@@ -165,7 +157,6 @@ export async function getUsableGoogleSheetsAccessToken(
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to refresh Google Sheets token";
       if (shouldReconnectGoogleSheets(message)) {
-        await invalidateGoogleSheetsToken(supabase, userId);
         throw new Error(GOOGLE_SHEETS_RECONNECT_MESSAGE);
       }
       throw error;
@@ -176,10 +167,6 @@ export async function getUsableGoogleSheetsAccessToken(
     await validateGoogleSheetsScopes(accessToken);
     await validateGoogleSheetsAccess(accessToken);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to validate Google Sheets access";
-    if (message === GOOGLE_SHEETS_RECONNECT_MESSAGE) {
-      await invalidateGoogleSheetsToken(supabase, userId);
-    }
     throw error;
   }
 
