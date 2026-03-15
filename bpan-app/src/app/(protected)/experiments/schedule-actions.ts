@@ -168,6 +168,18 @@ function normalizeDayInputs(value: unknown): ScheduleDayInput[] {
     }));
 }
 
+type PersistedScheduleDayRow = {
+  id: string;
+  day_index: number | null;
+  sort_order: number | null;
+};
+
+type PersistedScheduleSlotRow = {
+  id: string;
+  schedule_day_id: string;
+  sort_order: number | null;
+};
+
 export async function saveScheduleTemplate(formData: FormData) {
   const supabase = await createClient();
   const {
@@ -239,49 +251,77 @@ export async function saveScheduleTemplate(formData: FormData) {
     throw new Error(withScheduleSchemaGuidance(deleteDaysError.message));
   }
 
-  for (const day of days) {
-    const { data: insertedDay, error: dayError } = await supabase
-      .from("schedule_days")
-      .insert({
-        schedule_template_id: persistedScheduleTemplateId,
-        day_index: day.day_index,
-        label: day.label,
-        sort_order: day.sort_order,
-      })
-      .select("id")
-      .single();
+  if (days.length > 0) {
+    const dayPayload = days.map((day) => ({
+      schedule_template_id: persistedScheduleTemplateId,
+      day_index: day.day_index,
+      label: day.label,
+      sort_order: day.sort_order,
+    }));
 
-    if (dayError || !insertedDay?.id) {
-      throw new Error(withScheduleSchemaGuidance(dayError?.message || "Failed to save schedule day."));
+    const { data: insertedDays, error: dayError } = await supabase
+      .from("schedule_days")
+      .insert(dayPayload)
+      .select("id,day_index,sort_order");
+
+    if (dayError || !insertedDays || insertedDays.length !== dayPayload.length) {
+      throw new Error(withScheduleSchemaGuidance(dayError?.message || "Failed to save schedule days."));
     }
 
-    const persistedDayId = insertedDay.id as string;
+    const dayIdByKey = new Map(
+      (insertedDays as PersistedScheduleDayRow[]).map((day) => [`${day.day_index}:${day.sort_order}`, String(day.id)]),
+    );
 
-    for (const slot of day.slots) {
-      const { data: insertedSlot, error: slotError } = await supabase
-        .from("schedule_slots")
-        .insert({
+    const slotPayload = days.flatMap((day) =>
+      day.slots.map((slot) => {
+        const persistedDayId = dayIdByKey.get(`${day.day_index}:${day.sort_order}`);
+        if (!persistedDayId) {
+          throw new Error("Failed to resolve the schedule day id.");
+        }
+
+        return {
           schedule_day_id: persistedDayId,
           slot_kind: slot.slot_kind,
-          label: slot.slot_kind === "custom" ? slot.label : slot.label,
-          start_time: slot.slot_kind === "exact_time" ? slot.start_time : slot.start_time,
+          label: slot.label,
+          start_time: slot.start_time,
           sort_order: slot.sort_order,
-        })
-        .select("id")
-        .single();
+        };
+      }),
+    );
 
-      if (slotError || !insertedSlot?.id) {
-        throw new Error(withScheduleSchemaGuidance(slotError?.message || "Failed to save schedule slot."));
+    let slotIdByKey = new Map<string, string>();
+
+    if (slotPayload.length > 0) {
+      const { data: insertedSlots, error: slotError } = await supabase
+        .from("schedule_slots")
+        .insert(slotPayload)
+        .select("id,schedule_day_id,sort_order");
+
+      if (slotError || !insertedSlots || insertedSlots.length !== slotPayload.length) {
+        throw new Error(withScheduleSchemaGuidance(slotError?.message || "Failed to save schedule slots."));
       }
 
-      const persistedSlotId = insertedSlot.id as string;
+      slotIdByKey = new Map(
+        (insertedSlots as PersistedScheduleSlotRow[]).map((slot) => [
+          `${slot.schedule_day_id}:${slot.sort_order}`,
+          String(slot.id),
+        ]),
+      );
+    }
 
-      if (slot.blocks.length === 0) {
-        continue;
+    const blockPayload = days.flatMap((day) => {
+      const persistedDayId = dayIdByKey.get(`${day.day_index}:${day.sort_order}`);
+      if (!persistedDayId) {
+        throw new Error("Failed to resolve the schedule day id.");
       }
 
-      const { error: blockError } = await supabase.from("scheduled_blocks").insert(
-        slot.blocks.map((block) => ({
+      return day.slots.flatMap((slot) => {
+        const persistedSlotId = slotIdByKey.get(`${persistedDayId}:${slot.sort_order}`);
+        if (!persistedSlotId) {
+          throw new Error("Failed to resolve the schedule slot id.");
+        }
+
+        return slot.blocks.map((block) => ({
           schedule_slot_id: persistedSlotId,
           experiment_template_id: block.experiment_template_id,
           protocol_id: block.protocol_id,
@@ -290,8 +330,12 @@ export async function saveScheduleTemplate(formData: FormData) {
           sort_order: block.sort_order,
           repeat_key: block.repeat_key,
           metadata: block.metadata,
-        })),
-      );
+        }));
+      });
+    });
+
+    if (blockPayload.length > 0) {
+      const { error: blockError } = await supabase.from("scheduled_blocks").insert(blockPayload);
 
       if (blockError) {
         throw new Error(withScheduleSchemaGuidance(blockError.message));

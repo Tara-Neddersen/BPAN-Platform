@@ -230,6 +230,64 @@ export async function deleteTimepoint(id: string) {
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
+export async function replaceExperimentTimepoints(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const experimentId = formData.get("experiment_id") as string;
+  const windowsJson = (formData.get("windows") as string) || "[]";
+
+  if (!experimentId?.trim()) {
+    throw new Error("Experiment id is required.");
+  }
+
+  let windows: Array<{ label?: unknown; scheduled_at?: unknown; notes?: unknown }> = [];
+  try {
+    const parsed = JSON.parse(windowsJson);
+    if (Array.isArray(parsed)) {
+      windows = parsed;
+    }
+  } catch {
+    windows = [];
+  }
+
+  const normalizedWindows = windows
+    .map((window) => ({
+      label: typeof window.label === "string" ? window.label.trim() : "",
+      scheduled_at: typeof window.scheduled_at === "string" ? window.scheduled_at.trim() : "",
+      notes: typeof window.notes === "string" ? window.notes.trim() : "",
+    }))
+    .filter((window) => window.label.length > 0 && window.scheduled_at.length > 0);
+
+  const { error: deleteError } = await supabase
+    .from("experiment_timepoints")
+    .delete()
+    .eq("experiment_id", experimentId)
+    .eq("user_id", user.id);
+
+  if (deleteError) throw new Error(deleteError.message);
+
+  if (normalizedWindows.length > 0) {
+    const { error: insertError } = await supabase.from("experiment_timepoints").insert(
+      normalizedWindows.map((window) => ({
+        experiment_id: experimentId,
+        user_id: user.id,
+        label: window.label,
+        scheduled_at: window.scheduled_at,
+        notes: window.notes || null,
+      })),
+    );
+
+    if (insertError) throw new Error(insertError.message);
+  }
+
+  revalidatePath("/experiments");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+}
+
 // ─── Protocols ───────────────────────────────────────────────────────────────
 
 export async function createProtocol(formData: FormData) {
