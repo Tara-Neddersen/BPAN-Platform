@@ -38,6 +38,19 @@ const COLUMN_TYPE_OPTIONS = [
 
 type ColumnType = (typeof COLUMN_TYPE_OPTIONS)[number];
 
+const GUIDED_COLUMN_TYPE_OPTIONS: Array<{ value: ColumnType; label: string }> = [
+  { value: "text", label: "Short text" },
+  { value: "long_text", label: "Long text" },
+  { value: "number", label: "Number" },
+  { value: "boolean", label: "Yes / no" },
+  { value: "date", label: "Date" },
+  { value: "time", label: "Time" },
+  { value: "select", label: "Pick one" },
+  { value: "multi_select", label: "Pick multiple" },
+  { value: "file", label: "File" },
+  { value: "url", label: "Link" },
+];
+
 type WizardStep = "experiments" | "details" | "timepoints" | "layout" | "review";
 
 type ResultColumnDraft = {
@@ -305,6 +318,35 @@ function isChoiceColumnType(columnType: ColumnType) {
 
 function isNumericColumnType(columnType: ColumnType) {
   return columnType === "number" || columnType === "integer";
+}
+
+function formatColumnTypeLabel(columnType: ColumnType) {
+  switch (columnType) {
+    case "long_text":
+      return "Long text";
+    case "integer":
+      return "Whole number";
+    case "datetime":
+      return "Date and time";
+    case "multi_select":
+      return "Pick multiple";
+    case "animal_ref":
+      return "Animal reference";
+    case "cohort_ref":
+      return "Cohort reference";
+    case "batch_ref":
+      return "Batch reference";
+    default:
+      return columnType.charAt(0).toUpperCase() + columnType.slice(1).replace(/_/g, " ");
+  }
+}
+
+function getGuidedColumnTypeOptions(currentType: ColumnType) {
+  if (GUIDED_COLUMN_TYPE_OPTIONS.some((option) => option.value === currentType)) {
+    return GUIDED_COLUMN_TYPE_OPTIONS;
+  }
+
+  return [...GUIDED_COLUMN_TYPE_OPTIONS, { value: currentType, label: formatColumnTypeLabel(currentType) }];
 }
 
 function createAverageColumn(): ResultColumnDraft {
@@ -1491,8 +1533,8 @@ export function BatteryCreationWizard({
                                         }
                                         className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm shadow-xs outline-none"
                                       >
-                                        {COLUMN_TYPE_OPTIONS.map((option) => (
-                                          <option key={option} value={option}>{option}</option>
+                                        {getGuidedColumnTypeOptions(entry.column.columnType).map((option) => (
+                                          <option key={option.value} value={option.value}>{option.label}</option>
                                         ))}
                                       </select>
                                     </div>
@@ -1617,8 +1659,8 @@ export function BatteryCreationWizard({
                                     }
                                     className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm shadow-xs outline-none"
                                   >
-                                    {COLUMN_TYPE_OPTIONS.map((option) => (
-                                      <option key={option} value={option}>{option}</option>
+                                    {getGuidedColumnTypeOptions(column.columnType).map((option) => (
+                                      <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
                                   </select>
                                 </div>
