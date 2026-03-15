@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createManagedGoogleSheetMirrorForUser } from "@/lib/google-sheet-mirror";
+import { createManagedGoogleSheetMirrorForUserWithClient } from "@/lib/google-sheet-mirror";
 import { getGoogleSheetsAuthUrl, getGoogleSheetsReconnectMessage } from "@/lib/google-sheets";
 
 export async function POST(req: Request) {
@@ -13,7 +13,7 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => ({}));
     const target = body?.target === "colony_results" ? "colony_results" : "results_workspace";
-    const created = await createManagedGoogleSheetMirrorForUser(user.id, target);
+    const created = await createManagedGoogleSheetMirrorForUserWithClient(supabase, user.id, target);
 
     return NextResponse.json({
       success: true,

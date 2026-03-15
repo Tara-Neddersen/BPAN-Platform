@@ -448,6 +448,14 @@ export async function pullManagedGoogleSheetMirrorLinkWithClient(
 
 export async function createManagedGoogleSheetMirrorForUser(userId: string, target: MirrorTarget) {
   const supabase = await createClient();
+  return createManagedGoogleSheetMirrorForUserWithClient(supabase, userId, target);
+}
+
+export async function createManagedGoogleSheetMirrorForUserWithClient(
+  supabase: SupabaseLike,
+  userId: string,
+  target: MirrorTarget,
+) {
   const accessToken = await getFreshAccessToken(supabase, userId);
   const sheets = await loadMirrorSheets(supabase, userId, target);
   const title =
