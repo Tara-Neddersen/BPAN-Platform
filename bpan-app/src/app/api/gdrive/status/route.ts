@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { isDriveConfigured } from "@/lib/google-drive";
+import {
+  getGoogleDriveReconnectMessage,
+  getUsableGoogleDriveTokenRow,
+  isDriveConfigured,
+} from "@/lib/google-drive";
 
 export async function GET() {
   if (!isDriveConfigured()) {
@@ -17,7 +21,25 @@ export async function GET() {
     .from("google_drive_tokens")
     .select("google_email")
     .eq("user_id", user.id)
-    .single();
+    .maybeSingle();
+
+  if (data) {
+    try {
+      await getUsableGoogleDriveTokenRow(supabase, user.id);
+    } catch (error) {
+      const reconnectMessage = getGoogleDriveReconnectMessage();
+      const message = error instanceof Error ? error.message : reconnectMessage;
+      if (message === reconnectMessage) {
+        return NextResponse.json({
+          configured: true,
+          connected: false,
+          needsReconnect: true,
+          email: data.google_email || null,
+        });
+      }
+      throw error;
+    }
+  }
 
   return NextResponse.json({
     configured: true,
@@ -25,4 +47,3 @@ export async function GET() {
     email: data?.google_email || null,
   });
 }
-

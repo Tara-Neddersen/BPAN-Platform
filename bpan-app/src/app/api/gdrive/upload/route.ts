@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
-  refreshAccessToken,
   findOrCreateFolder,
+  getUsableGoogleDriveTokenRow,
   uploadFile,
   makeFilePublic,
 } from "@/lib/google-drive";
@@ -31,39 +31,17 @@ export async function POST(req: NextRequest) {
 
     // Get user's Drive tokens
     const serviceSupabase = createServiceClient();
-    const { data: tokenRow, error: tokenErr } = await serviceSupabase
-      .from("google_drive_tokens")
-      .select("*")
-      .eq("user_id", user.id)
-      .single();
-
-    if (tokenErr || !tokenRow) {
+    let accessToken = "";
+    let tokenRow: { root_folder_id: string | null };
+    try {
+      const tokenState = await getUsableGoogleDriveTokenRow(serviceSupabase, user.id);
+      accessToken = tokenState.accessToken;
+      tokenRow = tokenState.tokenRow;
+    } catch (error) {
       return NextResponse.json(
-        { error: "Google Drive not connected. Please connect your Drive first." },
+        { error: error instanceof Error ? error.message : "Google Drive not connected. Please connect your Drive first." },
         { status: 400 }
       );
-    }
-
-    // Refresh access token if expired
-    let accessToken = tokenRow.access_token;
-    const expiresAt = new Date(tokenRow.expires_at);
-
-    if (expiresAt <= new Date()) {
-      try {
-        const refreshed = await refreshAccessToken(tokenRow.refresh_token);
-        accessToken = refreshed.access_token;
-        const newExpiry = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
-
-        await serviceSupabase
-          .from("google_drive_tokens")
-          .update({ access_token: accessToken, expires_at: newExpiry })
-          .eq("user_id", user.id);
-      } catch {
-        return NextResponse.json(
-          { error: "Failed to refresh Drive access. Please reconnect Google Drive." },
-          { status: 401 }
-        );
-      }
     }
 
     // Create folder structure: LabLynk / [Cohort] / [Animal]

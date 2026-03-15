@@ -19,6 +19,7 @@ const SCOPES = "https://www.googleapis.com/auth/drive.file";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_FETCH_TIMEOUT_MS = 30_000;
+const GOOGLE_DRIVE_RECONNECT_MESSAGE = "Google Drive needs to be reconnected. Please connect Google Drive again.";
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = GOOGLE_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -107,6 +108,97 @@ export async function refreshAccessToken(refreshToken: string) {
   return {
     access_token: data.access_token as string,
     expires_in: data.expires_in as number,
+  };
+}
+
+function shouldReconnectGoogleDrive(raw: string) {
+  return /ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|invalid_grant|invalid_token|invalid credentials|unauthorized/i.test(
+    raw
+  );
+}
+
+export function getGoogleDriveReconnectMessage() {
+  return GOOGLE_DRIVE_RECONNECT_MESSAGE;
+}
+
+async function invalidateGoogleDriveToken(supabase: any, userId: string) {
+  try {
+    await supabase.from("google_drive_tokens").delete().eq("user_id", userId);
+  } catch {
+    // Best effort cleanup so stale connections do not linger.
+  }
+}
+
+export async function validateGoogleDriveAccess(accessToken: string) {
+  const res = await fetchWithTimeout(
+    "https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)",
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+
+  if (res.ok) {
+    return;
+  }
+
+  const text = await res.text();
+  if (res.status === 401 || (res.status === 403 && shouldReconnectGoogleDrive(text))) {
+    throw new Error(GOOGLE_DRIVE_RECONNECT_MESSAGE);
+  }
+}
+
+export async function getUsableGoogleDriveTokenRow(
+  supabase: any,
+  userId: string
+) {
+  const { data: tokenRow, error: tokenErr } = await supabase
+    .from("google_drive_tokens")
+    .select("access_token, refresh_token, expires_at, root_folder_id, google_email")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (tokenErr || !tokenRow) {
+    throw new Error("Google Drive not connected. Please connect your Drive first.");
+  }
+
+  let accessToken = String(tokenRow.access_token);
+  if (new Date(String(tokenRow.expires_at)).getTime() < Date.now() + 60_000) {
+    try {
+      const refreshed = await refreshAccessToken(String(tokenRow.refresh_token));
+      accessToken = refreshed.access_token;
+      await supabase
+        .from("google_drive_tokens")
+        .update({
+          access_token: accessToken,
+          expires_at: new Date(Date.now() + refreshed.expires_in * 1000).toISOString(),
+        })
+        .eq("user_id", userId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to refresh Google Drive token";
+      if (shouldReconnectGoogleDrive(message)) {
+        await invalidateGoogleDriveToken(supabase, userId);
+        throw new Error(GOOGLE_DRIVE_RECONNECT_MESSAGE);
+      }
+      throw error;
+    }
+  }
+
+  try {
+    await validateGoogleDriveAccess(accessToken);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to validate Google Drive access";
+    if (message === GOOGLE_DRIVE_RECONNECT_MESSAGE) {
+      await invalidateGoogleDriveToken(supabase, userId);
+    }
+    throw error;
+  }
+
+  return {
+    accessToken,
+    tokenRow: {
+      ...tokenRow,
+      access_token: accessToken,
+    },
   };
 }
 

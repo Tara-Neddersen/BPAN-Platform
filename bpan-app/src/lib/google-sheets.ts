@@ -1,6 +1,7 @@
 const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_SHEETS_RECONNECT_MESSAGE = "Google Sheets needs to be reconnected. Please connect Google Sheets again.";
 
 function getBaseUrl() {
   return process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
@@ -66,6 +67,91 @@ export async function refreshGoogleSheetsToken(refreshToken: string) {
     access_token: data.access_token as string,
     expires_in: data.expires_in as number,
   };
+}
+
+function shouldReconnectGoogleSheets(raw: string) {
+  return /ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficient authentication scopes|invalid_grant|invalid_token|invalid credentials|unauthorized/i.test(
+    raw
+  );
+}
+
+export function getGoogleSheetsReconnectMessage() {
+  return GOOGLE_SHEETS_RECONNECT_MESSAGE;
+}
+
+async function invalidateGoogleSheetsToken(supabase: any, userId: string) {
+  try {
+    await supabase.from("google_sheets_tokens").delete().eq("user_id", userId);
+  } catch {
+    // Best effort cleanup so stale connections do not linger.
+  }
+}
+
+export async function validateGoogleSheetsAccess(accessToken: string) {
+  const res = await fetch(
+    "https://sheets.googleapis.com/v4/spreadsheets/0000000000000000000000000000000000000000000?fields=spreadsheetId",
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+
+  if (res.ok || res.status === 404) {
+    return;
+  }
+
+  const text = await res.text();
+  if (res.status === 401 || (res.status === 403 && shouldReconnectGoogleSheets(text))) {
+    throw new Error(GOOGLE_SHEETS_RECONNECT_MESSAGE);
+  }
+}
+
+export async function getUsableGoogleSheetsAccessToken(
+  supabase: any,
+  userId: string
+) {
+  const { data: tokenRow, error: tokenErr } = await supabase
+    .from("google_sheets_tokens")
+    .select("access_token, refresh_token, expires_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (tokenErr || !tokenRow) {
+    throw new Error("Google Sheets not connected");
+  }
+
+  let accessToken = String(tokenRow.access_token);
+  if (new Date(String(tokenRow.expires_at)).getTime() < Date.now() + 60_000) {
+    try {
+      const refreshed = await refreshGoogleSheetsToken(String(tokenRow.refresh_token));
+      accessToken = refreshed.access_token;
+      await supabase
+        .from("google_sheets_tokens")
+        .update({
+          access_token: accessToken,
+          expires_at: new Date(Date.now() + refreshed.expires_in * 1000).toISOString(),
+        })
+        .eq("user_id", userId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to refresh Google Sheets token";
+      if (shouldReconnectGoogleSheets(message)) {
+        await invalidateGoogleSheetsToken(supabase, userId);
+        throw new Error(GOOGLE_SHEETS_RECONNECT_MESSAGE);
+      }
+      throw error;
+    }
+  }
+
+  try {
+    await validateGoogleSheetsAccess(accessToken);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to validate Google Sheets access";
+    if (message === GOOGLE_SHEETS_RECONNECT_MESSAGE) {
+      await invalidateGoogleSheetsToken(supabase, userId);
+    }
+    throw error;
+  }
+
+  return accessToken;
 }
 
 export async function getGoogleSheetsEmail(accessToken: string): Promise<string | null> {

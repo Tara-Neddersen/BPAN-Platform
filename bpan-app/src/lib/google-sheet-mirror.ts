@@ -12,7 +12,7 @@ import {
   fetchGoogleSheetTabs,
   deleteGoogleSpreadsheetTabs,
   ensureGoogleSpreadsheetTabs,
-  refreshGoogleSheetsToken,
+  getUsableGoogleSheetsAccessToken,
   writeGoogleSpreadsheetTabs,
 } from "@/lib/google-sheets";
 import { parseRowsToTabularPreview } from "@/lib/google-sheet-sync";
@@ -57,28 +57,7 @@ async function getFreshAccessToken(
   supabase: SupabaseLike,
   userId: string
 ) {
-  const { data: tokenRow, error } = await supabase
-    .from("google_sheets_tokens")
-    .select("access_token, refresh_token, expires_at")
-    .eq("user_id", userId)
-    .single();
-
-  if (error || !tokenRow) throw new Error("Google Sheets not connected");
-
-  let accessToken = String(tokenRow.access_token);
-  if (new Date(String(tokenRow.expires_at)).getTime() < Date.now() + 60_000) {
-    const refreshed = await refreshGoogleSheetsToken(String(tokenRow.refresh_token));
-    accessToken = refreshed.access_token;
-    await supabase
-      .from("google_sheets_tokens")
-      .update({
-        access_token: accessToken,
-        expires_at: new Date(Date.now() + refreshed.expires_in * 1000).toISOString(),
-      })
-      .eq("user_id", userId);
-  }
-
-  return accessToken;
+  return getUsableGoogleSheetsAccessToken(supabase, userId);
 }
 
 async function loadMirrorSheets(

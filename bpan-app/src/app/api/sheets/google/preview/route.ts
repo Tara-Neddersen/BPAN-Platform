@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
   fetchGoogleSheetRows,
+  getUsableGoogleSheetsAccessToken,
   parseGoogleSheetUrl,
-  refreshGoogleSheetsToken,
 } from "@/lib/google-sheets";
 import { detectImportTarget, parseRowsToTabularPreview } from "@/lib/google-sheet-sync";
 
@@ -14,30 +14,15 @@ async function getAccessToken() {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Unauthorized", status: 401 as const };
 
-  const { data: tokenRow, error: tokenErr } = await supabase
-    .from("google_sheets_tokens")
-    .select("access_token, refresh_token, expires_at")
-    .eq("user_id", user.id)
-    .single();
-
-  if (tokenErr || !tokenRow) {
-    return { error: "Google Sheets not connected", status: 400 as const };
+  try {
+    const accessToken = await getUsableGoogleSheetsAccessToken(supabase, user.id);
+    return { supabase, userId: user.id, accessToken };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "Google Sheets not connected",
+      status: 400 as const,
+    };
   }
-
-  let accessToken = String(tokenRow.access_token);
-  if (new Date(String(tokenRow.expires_at)).getTime() < Date.now() + 60_000) {
-    const refreshed = await refreshGoogleSheetsToken(String(tokenRow.refresh_token));
-    accessToken = refreshed.access_token;
-    await supabase
-      .from("google_sheets_tokens")
-      .update({
-        access_token: accessToken,
-        expires_at: new Date(Date.now() + refreshed.expires_in * 1000).toISOString(),
-      })
-      .eq("user_id", user.id);
-  }
-
-  return { supabase, userId: user.id, accessToken };
 }
 
 export async function POST(req: Request) {
