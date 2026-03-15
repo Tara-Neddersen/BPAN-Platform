@@ -83,6 +83,12 @@ type SlotDraft = {
   titleOverride: string;
 };
 
+type ViewMode = "list" | "calendar";
+
+type WindowScheduleSettings = {
+  preferredStartWeekday: string;
+};
+
 interface ScheduleBuilderProps {
   experiments: Experiment[];
   timepoints: ExperimentTimepoint[];
@@ -103,6 +109,43 @@ const DEFAULT_SLOT_DRAFT: SlotDraft = {
   blockTemplateId: "",
   titleOverride: "",
 };
+
+const DEFAULT_WINDOW_SETTINGS: WindowScheduleSettings = {
+  preferredStartWeekday: "",
+};
+
+const WEEKDAY_OPTIONS = [
+  { value: "", label: "Closest to start age" },
+  { value: "monday", label: "Monday" },
+  { value: "tuesday", label: "Tuesday" },
+  { value: "wednesday", label: "Wednesday" },
+  { value: "thursday", label: "Thursday" },
+  { value: "friday", label: "Friday" },
+  { value: "saturday", label: "Saturday" },
+  { value: "sunday", label: "Sunday" },
+] as const;
+
+const WEEKDAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+const EXPERIMENT_TYPE_OPTIONS = [
+  { value: "", label: "Use template/category" },
+  { value: "handling", label: "Handling" },
+  { value: "y_maze", label: "Y-Maze" },
+  { value: "ldb", label: "Light-Dark Box" },
+  { value: "marble", label: "Marble Burying" },
+  { value: "nesting", label: "Nesting" },
+  { value: "data_collection", label: "Transport to Core" },
+  { value: "core_acclimation", label: "Core Acclimation" },
+  { value: "catwalk", label: "CatWalk" },
+  { value: "rotarod_hab", label: "Rotarod Habituation" },
+  { value: "rotarod_test1", label: "Rotarod Test 1" },
+  { value: "rotarod_test2", label: "Rotarod Test 2" },
+  { value: "rotarod", label: "Rotarod" },
+  { value: "stamina", label: "Stamina Test" },
+  { value: "blood_draw", label: "Plasma Collection" },
+  { value: "eeg_implant", label: "EEG Surgery" },
+  { value: "eeg_recording", label: "EEG Recording" },
+] as const;
 
 let localIdCounter = 0;
 
@@ -347,6 +390,33 @@ function getWindowNameFromMetadata(metadata: Record<string, unknown>) {
   return names[0] || "";
 }
 
+function getPreferredStartWeekdayFromMetadata(metadata: Record<string, unknown>) {
+  const value = typeof metadata.preferredStartWeekday === "string" ? metadata.preferredStartWeekday.trim().toLowerCase() : "";
+  return WEEKDAY_OPTIONS.some((option) => option.value === value) ? value : "";
+}
+
+function getMetadataStringValue(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === "string" ? value : "";
+}
+
+function buildWindowSettingsFromDays(days: BuilderDay[], windowNames: string[]) {
+  const next: Record<string, WindowScheduleSettings> = {};
+  for (const windowName of windowNames) {
+    const block =
+      days
+        .flatMap((day) => day.slots)
+        .flatMap((slot) => slot.blocks)
+        .find((candidate) => getWindowNameFromMetadata(candidate.metadata) === windowName) || null;
+
+    next[windowName] = {
+      preferredStartWeekday: block ? getPreferredStartWeekdayFromMetadata(block.metadata) : "",
+    };
+  }
+
+  return next;
+}
+
 function blockMatchesWindow(block: BuilderBlock, selectedWindowName: string) {
   if (!selectedWindowName) return true;
   const blockWindowName = getWindowNameFromMetadata(block.metadata);
@@ -380,6 +450,8 @@ export function ScheduleBuilder({
   const [dayDrafts, setDayDrafts] = useState<Record<string, DayDraft>>({});
   const [slotDrafts, setSlotDrafts] = useState<Record<string, SlotDraft>>({});
   const [dragging, setDragging] = useState<DragPayload | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [windowSettingsByName, setWindowSettingsByName] = useState<Record<string, WindowScheduleSettings>>({});
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>(() => {
     const initialDraft = buildDraftForTemplate(
       initialTemplateId,
@@ -453,12 +525,31 @@ export function ScheduleBuilder({
     }));
   }, [draft.days, experiments, selectedTemplateId, timepoints]);
   const [selectedWindowName, setSelectedWindowName] = useState("");
+  const discoveredWindowSettings = useMemo(
+    () =>
+      buildWindowSettingsFromDays(
+        draft.days,
+        windowOptions.map((window) => window.name),
+      ),
+    [draft.days, windowOptions],
+  );
+  const resolvedWindowSettingsByName = useMemo(
+    () =>
+      Object.fromEntries(
+        windowOptions.map((window) => [
+          window.name,
+          windowSettingsByName[window.name] ?? discoveredWindowSettings[window.name] ?? DEFAULT_WINDOW_SETTINGS,
+        ]),
+      ),
+    [discoveredWindowSettings, windowOptions, windowSettingsByName],
+  );
   const activeWindowName =
     windowOptions.length === 0
       ? ""
       : windowOptions.some((window) => window.name === selectedWindowName)
         ? selectedWindowName
         : (windowOptions[0]?.name || "");
+  const activeWindowSettings = activeWindowName ? resolvedWindowSettingsByName[activeWindowName] ?? DEFAULT_WINDOW_SETTINGS : DEFAULT_WINDOW_SETTINGS;
 
   const loadTemplate = (templateId: string) => {
     const nextDraft = buildDraftForTemplate(
@@ -474,6 +565,7 @@ export function ScheduleBuilder({
     setSlotDrafts({});
     setDragging(null);
     setSelectedWindowName("");
+    setWindowSettingsByName({});
     setExpandedDays(nextDraft.days[0]?.id ? { [nextDraft.days[0].id]: true } : {});
   };
 
@@ -566,6 +658,51 @@ export function ScheduleBuilder({
     setDraft((current) => ({
       ...current,
       days: normalizeDays(updater(current.days)),
+    }));
+  };
+
+  const updateBlocksForWindow = (
+    windowName: string,
+    updater: (block: BuilderBlock) => BuilderBlock,
+  ) => {
+    if (!windowName) {
+      return;
+    }
+
+    updateDays((current) =>
+      current.map((day) => ({
+        ...day,
+        slots: day.slots.map((slot) => ({
+          ...slot,
+          blocks: slot.blocks.map((block) =>
+            getWindowNameFromMetadata(block.metadata) === windowName ? updater(block) : block,
+          ),
+        })),
+      })),
+    );
+  };
+
+  const updateWindowSettings = (windowName: string, patch: Partial<WindowScheduleSettings>) => {
+    if (!windowName) {
+      return;
+    }
+
+    const nextSettings = {
+      ...(windowSettingsByName[windowName] ?? DEFAULT_WINDOW_SETTINGS),
+      ...patch,
+    };
+
+    setWindowSettingsByName((current) => ({
+      ...current,
+      [windowName]: nextSettings,
+    }));
+
+    updateBlocksForWindow(windowName, (block) => ({
+      ...block,
+      metadata: {
+        ...block.metadata,
+        preferredStartWeekday: nextSettings.preferredStartWeekday || undefined,
+      },
     }));
   };
 
@@ -735,6 +872,7 @@ export function ScheduleBuilder({
                         ? {
                             timepointWindowName: activeWindowName,
                             timepointWindowNames: [activeWindowName],
+                            preferredStartWeekday: activeWindowSettings.preferredStartWeekday || undefined,
                           }
                         : {},
                     },
@@ -775,7 +913,7 @@ export function ScheduleBuilder({
     dayId: string,
     slotId: string,
     blockId: string,
-    patch: Partial<Pick<BuilderBlock, "title_override" | "notes">>,
+    patch: Partial<Pick<BuilderBlock, "title_override" | "notes" | "metadata">>,
   ) => {
     updateDays((current) =>
       current.map((day) => {
@@ -794,6 +932,7 @@ export function ScheduleBuilder({
                       ? {
                           ...block,
                           ...patch,
+                          metadata: patch.metadata ? { ...block.metadata, ...patch.metadata } : block.metadata,
                         }
                       : block,
                   ),
@@ -1057,6 +1196,395 @@ export function ScheduleBuilder({
     });
   };
 
+  const calendarWeeks = useMemo(() => {
+    const startIndex = Math.max(
+      0,
+      WEEKDAY_OPTIONS.findIndex((option) => option.value === activeWindowSettings.preferredStartWeekday) - 1,
+    );
+    const weeks: Array<Array<BuilderDay | null>> = [];
+
+    for (const day of draft.days) {
+      const zeroBasedDay = Math.max(day.day_index - 1, 0);
+      const absoluteIndex = startIndex + zeroBasedDay;
+      const weekIndex = Math.floor(absoluteIndex / 7);
+      const weekdayIndex = absoluteIndex % 7;
+      while (weeks.length <= weekIndex) {
+        weeks.push(Array.from({ length: 7 }, () => null));
+      }
+      weeks[weekIndex][weekdayIndex] = day;
+    }
+
+    return weeks.length > 0 ? weeks : [Array.from({ length: 7 }, () => null)];
+  }, [activeWindowSettings.preferredStartWeekday, draft.days]);
+
+  const renderDayCard = (day: BuilderDay) => (
+    <Card
+      key={day.id}
+      draggable
+      onDragStart={() => setDragging({ kind: "day", dayId: day.id })}
+      onDragEnd={() => setDragging(null)}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={() => handleDropOnDay(day.id)}
+      className={cn(
+        "border-2 transition-colors",
+        dragging?.kind === "day" && dragging.dayId === day.id
+          ? "border-primary/60 bg-primary/5"
+          : "border-border",
+      )}
+    >
+      <CardHeader className="gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => toggleDayExpanded(day.id)}
+            className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <CalendarDays className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <CardTitle className="text-base">Day {day.day_index}</CardTitle>
+              <p className="truncate text-sm text-muted-foreground">
+                {getDaySummary(
+                  {
+                    ...day,
+                    slots: day.slots.map((slot) => ({
+                      ...slot,
+                      blocks: slot.blocks.filter((block) => blockMatchesWindow(block, activeWindowName)),
+                    })),
+                  },
+                  templateTitleById,
+                )}
+              </p>
+            </div>
+            {expandedDays[day.id] ? (
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            )}
+          </button>
+          <div className="flex items-center gap-2">
+            <GripVertical className="h-4 w-4 text-muted-foreground" />
+            <Button type="button" variant="ghost" size="icon" onClick={() => deleteDay(day.id)} disabled={draft.days.length === 1}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      {expandedDays[day.id] ? (
+        <CardContent className="space-y-4">
+          <Input
+            value={day.label}
+            onChange={(event) => updateDayLabel(day.id, event.target.value)}
+            placeholder="Optional note for this day"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => insertWorkDayAfter(day.id)}>
+              Insert Work Day
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 1)}>
+              Insert 1 No-Work Day
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 2)}>
+              Insert 2 No-Work Days
+            </Button>
+          </div>
+          {day.slots.length === 0 ? (
+            <div className="rounded-lg border border-dashed bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
+              This is an intentional no-work day. Keep it to preserve spacing, or add slots if work should happen here.
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2 rounded-lg border bg-muted/20 p-3">
+            <Button type="button" variant="secondary" size="sm" onClick={() => addSlot(day.id, "am")}>
+              Add AM
+            </Button>
+            <Button type="button" variant="secondary" size="sm" onClick={() => addSlot(day.id, "pm")}>
+              Add PM
+            </Button>
+            <Button type="button" variant="secondary" size="sm" onClick={() => addSlot(day.id, "midday")}>
+              Add Midday
+            </Button>
+            <Button type="button" variant="secondary" size="sm" onClick={() => addSlot(day.id, "evening")}>
+              Add Evening
+            </Button>
+            <div className="flex min-w-[220px] flex-1 gap-2">
+              <Input
+                value={dayDrafts[day.id]?.customLabel ?? ""}
+                onChange={(event) => updateDayDraft(day.id, { customLabel: event.target.value })}
+                placeholder="Custom slot label"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const label = (dayDrafts[day.id]?.customLabel ?? "").trim();
+                  if (!label) {
+                    return;
+                  }
+                  addSlot(day.id, "custom", label);
+                  resetDayDraft(day.id, ["customLabel"]);
+                }}
+              >
+                Add Custom
+              </Button>
+            </div>
+            <div className="flex min-w-[220px] flex-1 gap-2">
+              <Input
+                type="time"
+                value={dayDrafts[day.id]?.exactTime ?? ""}
+                onChange={(event) => updateDayDraft(day.id, { exactTime: event.target.value })}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const exactTime = dayDrafts[day.id]?.exactTime ?? "";
+                  if (!exactTime) {
+                    return;
+                  }
+                  addSlot(day.id, "exact_time", exactTime);
+                  resetDayDraft(day.id, ["exactTime"]);
+                }}
+              >
+                Add Exact Time
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {day.slots.map((slot) => {
+              const slotDraft = slotDrafts[slot.id] ?? DEFAULT_SLOT_DRAFT;
+              const visibleBlocks = slot.blocks.filter((block) => blockMatchesWindow(block, activeWindowName));
+
+              return (
+                <div
+                  key={slot.id}
+                  draggable
+                  onDragStart={() => setDragging({ kind: "slot", dayId: day.id, slotId: slot.id })}
+                  onDragEnd={() => setDragging(null)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={() => handleDropOnSlot(day.id, slot.id)}
+                  className={cn(
+                    "space-y-3 rounded-xl border bg-background p-4",
+                    dragging?.kind === "slot" && dragging.slotId === slot.id
+                      ? "border-primary/60"
+                      : "border-border",
+                  )}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <GripVertical className="h-4 w-4 text-muted-foreground" />
+                      <Badge className={cn("border-0", slotTone(slot.slot_kind))}>{slot.label}</Badge>
+                      {slot.slot_kind === "exact_time" && slot.start_time ? (
+                        <span className="text-xs text-muted-foreground">{slot.start_time}</span>
+                      ) : null}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => deleteSlot(day.id, slot.id)}
+                      disabled={day.slots.length === 1}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                    <select
+                      value={slotDraft.blockTemplateId}
+                      onChange={(event) => updateSlotDraft(slot.id, { blockTemplateId: event.target.value })}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="">Choose experiment</option>
+                      {experimentTemplates.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.title}
+                        </option>
+                      ))}
+                    </select>
+                    <Input
+                      value={slotDraft.titleOverride}
+                      onChange={(event) => updateSlotDraft(slot.id, { titleOverride: event.target.value })}
+                      placeholder="Optional custom name"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => addBlock(day.id, slot.id)}
+                      disabled={!slotDraft.blockTemplateId}
+                    >
+                      Add
+                    </Button>
+                  </div>
+
+                  <div
+                    className={cn(
+                      "space-y-2 rounded-lg border border-dashed p-3",
+                      dragging?.kind === "block" ? "border-primary/40" : "border-border",
+                    )}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => handleDropOnSlot(day.id, slot.id)}
+                  >
+                    {visibleBlocks.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        Drop blocks here or add one from the controls above.
+                      </p>
+                    ) : (
+                      visibleBlocks.map((block) => (
+                        <div
+                          key={block.id}
+                          draggable
+                          onDragStart={(event: DragEvent<HTMLDivElement>) => {
+                            event.stopPropagation();
+                            setDragging({
+                              kind: "block",
+                              dayId: day.id,
+                              slotId: slot.id,
+                              blockId: block.id,
+                            });
+                          }}
+                          onDragEnd={() => setDragging(null)}
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            handleDropOnBlock(day.id, slot.id, block.id);
+                          }}
+                          className={cn(
+                            "space-y-3 rounded-lg border bg-background px-3 py-3",
+                            dragging?.kind === "block" && dragging.blockId === block.id
+                              ? "border-primary/60"
+                              : "border-border",
+                          )}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-medium">
+                                  {block.title_override.trim() || templateTitleById.get(block.experiment_template_id) || "Untitled template"}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  <span className="inline-flex items-center gap-1">
+                                    <Layers3 className="h-3 w-3" />
+                                    {templateTitleById.get(block.experiment_template_id) || "Unknown template"}
+                                  </span>
+                                  {block.repeat_key ? " • repeat group" : ""}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => duplicateBlock(day.id, slot.id, block.id)}
+                                title="Repeat block"
+                              >
+                                <Copy className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => deleteBlock(day.id, slot.id, block.id)}
+                                title="Delete block"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <Input
+                              value={block.title_override}
+                              onChange={(event) =>
+                                updateBlock(day.id, slot.id, block.id, { title_override: event.target.value })
+                              }
+                              placeholder="Optional title override"
+                            />
+                            <Input
+                              value={block.notes}
+                              onChange={(event) =>
+                                updateBlock(day.id, slot.id, block.id, { notes: event.target.value })
+                              }
+                              placeholder="Optional block notes"
+                            />
+                          </div>
+
+                          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                            <select
+                              value={getMetadataStringValue(block.metadata, "experimentType")}
+                              onChange={(event) =>
+                                updateBlock(day.id, slot.id, block.id, {
+                                  metadata: { experimentType: event.target.value || undefined },
+                                })
+                              }
+                              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            >
+                              {EXPERIMENT_TYPE_OPTIONS.map((option) => (
+                                <option key={option.value || "default"} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                            <Input
+                              type="number"
+                              min="0"
+                              value={getMetadataStringValue(block.metadata, "targetAgeDays")}
+                              onChange={(event) =>
+                                updateBlock(day.id, slot.id, block.id, {
+                                  metadata: { targetAgeDays: event.target.value },
+                                })
+                              }
+                              placeholder="Target age (days)"
+                            />
+                            <Input
+                              type="number"
+                              min="0"
+                              value={getMetadataStringValue(block.metadata, "minAgeDays")}
+                              onChange={(event) =>
+                                updateBlock(day.id, slot.id, block.id, {
+                                  metadata: { minAgeDays: event.target.value },
+                                })
+                              }
+                              placeholder="Earliest age"
+                            />
+                            <Input
+                              type="number"
+                              min="0"
+                              value={getMetadataStringValue(block.metadata, "maxAgeDays")}
+                              onChange={(event) =>
+                                updateBlock(day.id, slot.id, block.id, {
+                                  metadata: { maxAgeDays: event.target.value },
+                                })
+                              }
+                              placeholder="Latest age"
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Use age rules for exceptions like EEG surgery at day 25 but never earlier.
+                          </p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      ) : null}
+    </Card>
+  );
+
   if (experimentTemplates.length === 0) {
     return (
       <Card className="border-dashed">
@@ -1160,346 +1688,104 @@ export function ScheduleBuilder({
       {windowOptions.length > 0 ? (
         <Card>
           <CardContent className="pt-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm font-medium text-slate-700">Timepoint layout:</p>
-              {windowOptions.map((window) => (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-medium text-slate-700">Timepoint layout:</p>
+                {windowOptions.map((window) => (
+                  <button
+                    key={window.id}
+                    type="button"
+                    onClick={() => setSelectedWindowName(window.name)}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-sm transition-colors",
+                      activeWindowName === window.name
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-300 bg-white text-slate-700",
+                    )}
+                  >
+                    {window.name}
+                  </button>
+                ))}
+              </div>
+              <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
                 <button
-                  key={window.id}
                   type="button"
-                  onClick={() => setSelectedWindowName(window.name)}
+                  onClick={() => setViewMode("list")}
                   className={cn(
-                    "rounded-full border px-3 py-1.5 text-sm transition-colors",
-                    activeWindowName === window.name
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-300 bg-white text-slate-700",
+                    "rounded-full px-3 py-1 text-sm",
+                    viewMode === "list" ? "bg-white shadow-sm" : "text-slate-600",
                   )}
                 >
-                  {window.name}
+                  List View
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => setViewMode("calendar")}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-sm",
+                    viewMode === "calendar" ? "bg-white shadow-sm" : "text-slate-600",
+                  )}
+                >
+                  Weekly Calendar
+                </button>
+              </div>
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              You are editing the schedule for {activeWindowName || "all timepoints"} here.
-            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+              <div>
+                <p className="text-xs text-muted-foreground">
+                  You are editing the schedule for {activeWindowName || "all timepoints"} here.
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Weekly calendar mode positions Day 1 on the preferred weekday for this timepoint.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700">Preferred start weekday</p>
+                <select
+                  value={activeWindowSettings.preferredStartWeekday}
+                  onChange={(event) => updateWindowSettings(activeWindowName, { preferredStartWeekday: event.target.value })}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  disabled={!activeWindowName}
+                >
+                  {WEEKDAY_OPTIONS.map((option) => (
+                    <option key={option.label} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </CardContent>
         </Card>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        {draft.days.map((day) => (
-          <Card
-            key={day.id}
-            draggable
-            onDragStart={() => setDragging({ kind: "day", dayId: day.id })}
-            onDragEnd={() => setDragging(null)}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={() => handleDropOnDay(day.id)}
-            className={cn(
-              "border-2 transition-colors",
-              dragging?.kind === "day" && dragging.dayId === day.id
-                ? "border-primary/60 bg-primary/5"
-                : "border-border",
-            )}
-          >
-            <CardHeader className="gap-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={() => toggleDayExpanded(day.id)}
-                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                >
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-                    <CalendarDays className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0">
-                    <CardTitle className="text-base">Day {day.day_index}</CardTitle>
-                    <p className="truncate text-sm text-muted-foreground">
-                      {getDaySummary(
-                        {
-                          ...day,
-                          slots: day.slots.map((slot) => ({
-                            ...slot,
-                            blocks: slot.blocks.filter((block) => blockMatchesWindow(block, activeWindowName)),
-                          })),
-                        },
-                        templateTitleById,
-                      )}
-                    </p>
-                  </div>
-                  {expandedDays[day.id] ? (
-                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  )}
-                </button>
-                <div className="flex items-center gap-2">
-                  <GripVertical className="h-4 w-4 text-muted-foreground" />
-                  <Button type="button" variant="ghost" size="icon" onClick={() => deleteDay(day.id)} disabled={draft.days.length === 1}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
+      {viewMode === "calendar" ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-7">
+            {WEEKDAY_LABELS.map((label) => (
+              <div key={label} className="rounded-xl border bg-slate-50 px-3 py-2 text-center text-sm font-medium text-slate-700">
+                {label}
               </div>
-            </CardHeader>
-            {expandedDays[day.id] ? (
-              <CardContent className="space-y-4">
-                <Input
-                  value={day.label}
-                  onChange={(event) => updateDayLabel(day.id, event.target.value)}
-                  placeholder="Optional note for this day"
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" size="sm" onClick={() => insertWorkDayAfter(day.id)}>
-                    Insert Work Day
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 1)}>
-                    Insert 1 No-Work Day
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 2)}>
-                    Insert 2 No-Work Days
-                  </Button>
-                </div>
-              {day.slots.length === 0 ? (
-                <div className="rounded-lg border border-dashed bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
-                  This is an intentional no-work day. Keep it to preserve spacing, or add slots if work should happen here.
-                </div>
-              ) : null}
-
-              <div className="flex flex-wrap gap-2 rounded-lg border bg-muted/20 p-3">
-                <Button type="button" variant="secondary" size="sm" onClick={() => addSlot(day.id, "am")}>
-                  Add AM
-                </Button>
-                <Button type="button" variant="secondary" size="sm" onClick={() => addSlot(day.id, "pm")}>
-                  Add PM
-                </Button>
-                <Button type="button" variant="secondary" size="sm" onClick={() => addSlot(day.id, "midday")}>
-                  Add Midday
-                </Button>
-                <Button type="button" variant="secondary" size="sm" onClick={() => addSlot(day.id, "evening")}>
-                  Add Evening
-                </Button>
-                <div className="flex min-w-[220px] flex-1 gap-2">
-                  <Input
-                    value={dayDrafts[day.id]?.customLabel ?? ""}
-                    onChange={(event) => updateDayDraft(day.id, { customLabel: event.target.value })}
-                    placeholder="Custom slot label"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const label = (dayDrafts[day.id]?.customLabel ?? "").trim();
-                      if (!label) {
-                        return;
-                      }
-                      addSlot(day.id, "custom", label);
-                      resetDayDraft(day.id, ["customLabel"]);
-                    }}
+            ))}
+          </div>
+          <div className="space-y-4">
+            {calendarWeeks.map((week, weekIndex) => (
+              <div key={`week-${weekIndex}`} className="grid gap-4 md:grid-cols-7">
+                {week.map((day, weekdayIndex) => (
+                  <div
+                    key={`week-${weekIndex}-weekday-${weekdayIndex}`}
+                    className="min-h-[180px] rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-2"
                   >
-                    Add Custom
-                  </Button>
-                </div>
-                <div className="flex min-w-[220px] flex-1 gap-2">
-                  <Input
-                    type="time"
-                    value={dayDrafts[day.id]?.exactTime ?? ""}
-                    onChange={(event) => updateDayDraft(day.id, { exactTime: event.target.value })}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const exactTime = dayDrafts[day.id]?.exactTime ?? "";
-                      if (!exactTime) {
-                        return;
-                      }
-                      addSlot(day.id, "exact_time", exactTime);
-                      resetDayDraft(day.id, ["exactTime"]);
-                    }}
-                  >
-                    Add Exact Time
-                  </Button>
-                </div>
+                    {day ? renderDayCard(day) : <div className="h-full rounded-xl border border-transparent" />}
+                  </div>
+                ))}
               </div>
-
-              <div className="space-y-3">
-                {day.slots.map((slot) => {
-                  const slotDraft = slotDrafts[slot.id] ?? DEFAULT_SLOT_DRAFT;
-                  const visibleBlocks = slot.blocks.filter((block) => blockMatchesWindow(block, activeWindowName));
-
-                  return (
-                    <div
-                      key={slot.id}
-                      draggable
-                      onDragStart={() => setDragging({ kind: "slot", dayId: day.id, slotId: slot.id })}
-                      onDragEnd={() => setDragging(null)}
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={() => handleDropOnSlot(day.id, slot.id)}
-                      className={cn(
-                        "space-y-3 rounded-xl border bg-background p-4",
-                        dragging?.kind === "slot" && dragging.slotId === slot.id
-                          ? "border-primary/60"
-                          : "border-border",
-                      )}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <GripVertical className="h-4 w-4 text-muted-foreground" />
-                          <Badge className={cn("border-0", slotTone(slot.slot_kind))}>{slot.label}</Badge>
-                          {slot.slot_kind === "exact_time" && slot.start_time ? (
-                            <span className="text-xs text-muted-foreground">{slot.start_time}</span>
-                          ) : null}
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => deleteSlot(day.id, slot.id)}
-                          disabled={day.slots.length === 1}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-
-                      <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                        <select
-                          value={slotDraft.blockTemplateId}
-                          onChange={(event) => updateSlotDraft(slot.id, { blockTemplateId: event.target.value })}
-                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                        >
-                          <option value="">Choose experiment</option>
-                          {experimentTemplates.map((template) => (
-                            <option key={template.id} value={template.id}>
-                              {template.title}
-                            </option>
-                          ))}
-                        </select>
-                        <Input
-                          value={slotDraft.titleOverride}
-                          onChange={(event) => updateSlotDraft(slot.id, { titleOverride: event.target.value })}
-                          placeholder="Optional custom name"
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => addBlock(day.id, slot.id)}
-                          disabled={!slotDraft.blockTemplateId}
-                        >
-                          Add
-                        </Button>
-                      </div>
-
-                      <div
-                        className={cn(
-                          "space-y-2 rounded-lg border border-dashed p-3",
-                          dragging?.kind === "block" ? "border-primary/40" : "border-border",
-                        )}
-                        onDragOver={(event) => event.preventDefault()}
-                        onDrop={() => handleDropOnSlot(day.id, slot.id)}
-                      >
-                        {visibleBlocks.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">
-                            Drop blocks here or add one from the controls above.
-                          </p>
-                        ) : (
-                          visibleBlocks.map((block) => (
-                            <div
-                              key={block.id}
-                              draggable
-                              onDragStart={(event: DragEvent<HTMLDivElement>) => {
-                                event.stopPropagation();
-                                setDragging({
-                                  kind: "block",
-                                  dayId: day.id,
-                                  slotId: slot.id,
-                                  blockId: block.id,
-                                });
-                              }}
-                              onDragEnd={() => setDragging(null)}
-                              onDragOver={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                              }}
-                              onDrop={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                handleDropOnBlock(day.id, slot.id, block.id);
-                              }}
-                              className={cn(
-                                "space-y-2 rounded-lg border bg-background px-3 py-3",
-                                dragging?.kind === "block" && dragging.blockId === block.id
-                                  ? "border-primary/60"
-                                  : "border-border",
-                              )}
-                            >
-                              <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                  <div className="min-w-0">
-                                    <p className="truncate text-sm font-medium">
-                                      {block.title_override.trim() || templateTitleById.get(block.experiment_template_id) || "Untitled template"}
-                                    </p>
-                                    <p className="text-xs text-muted-foreground">
-                                      <span className="inline-flex items-center gap-1">
-                                        <Layers3 className="h-3 w-3" />
-                                        {templateTitleById.get(block.experiment_template_id) || "Unknown template"}
-                                      </span>
-                                      {block.repeat_key ? " • repeat group" : ""}
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => duplicateBlock(day.id, slot.id, block.id)}
-                                    title="Repeat block"
-                                  >
-                                    <Copy className="h-4 w-4" />
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => deleteBlock(day.id, slot.id, block.id)}
-                                    title="Delete block"
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </div>
-
-                              <div className="grid gap-2 md:grid-cols-2">
-                                <Input
-                                  value={block.title_override}
-                                  onChange={(event) =>
-                                    updateBlock(day.id, slot.id, block.id, { title_override: event.target.value })
-                                  }
-                                  placeholder="Optional title override"
-                                />
-                                <Input
-                                  value={block.notes}
-                                  onChange={(event) =>
-                                    updateBlock(day.id, slot.id, block.id, { notes: event.target.value })
-                                  }
-                                  placeholder="Optional block notes"
-                                />
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              </CardContent>
-            ) : null}
-          </Card>
-        ))}
-      </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-2">{draft.days.map((day) => renderDayCard(day))}</div>
+      )}
     </div>
   );
 }

@@ -2,8 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { scheduleExperimentsForCohort } from "@/app/(protected)/colony/actions";
-import type { PlatformAssignmentScope, PlatformRunStatus, PlatformSlotKind, ScheduledBlock } from "@/types";
+import type { ExperimentType, PlatformAssignmentScope, PlatformRunStatus, PlatformSlotKind, ScheduledBlock } from "@/types";
 
 type RunScheduleBlockInput = {
   day_index: number;
@@ -36,6 +35,41 @@ type CohortScheduleGenerationSummary = {
   total_items: number;
   rescheduled_items: number;
   message: string | null;
+};
+
+type WindowAgeRange = {
+  label: string;
+  minAgeDays: number;
+  maxAgeDays: number | null;
+};
+
+const VALID_EXPERIMENT_TYPES: ExperimentType[] = [
+  "y_maze",
+  "ldb",
+  "marble",
+  "nesting",
+  "catwalk",
+  "rotarod_hab",
+  "rotarod_test1",
+  "rotarod_test2",
+  "rotarod",
+  "stamina",
+  "blood_draw",
+  "data_collection",
+  "core_acclimation",
+  "eeg_implant",
+  "eeg_recording",
+  "handling",
+];
+
+const WEEKDAY_TO_INDEX: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
 };
 
 function parseJsonField<T>(formData: FormData, key: string, fallback: T): T {
@@ -121,6 +155,389 @@ function normalizeRunScheduleBlocks(value: unknown): RunScheduleBlockInput[] {
       day_index: item.day_index > 0 ? item.day_index : 1,
       sort_order: index,
     }));
+}
+
+function parseWindowRange(notes: string | null | undefined) {
+  const match = String(notes || "").match(/(\d+)\s*-\s*(\d+)\s*days/i);
+  const minAgeDays = match ? Number(match[1]) : null;
+  const maxAgeDays = match ? Number(match[2]) : null;
+  return {
+    minAgeDays,
+    maxAgeDays,
+  };
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function isoDate(date: Date) {
+  return date.toISOString().split("T")[0];
+}
+
+function getMetadataString(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getMetadataNumber(metadata: Record<string, unknown>, key: string) {
+  const raw = getMetadataString(metadata, key);
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getPreferredStartWeekday(metadata: Record<string, unknown>) {
+  const weekday = getMetadataString(metadata, "preferredStartWeekday").toLowerCase();
+  return weekday in WEEKDAY_TO_INDEX ? weekday : "";
+}
+
+function normalizeExperimentType(value: string) {
+  return VALID_EXPERIMENT_TYPES.includes(value as ExperimentType) ? (value as ExperimentType) : null;
+}
+
+function inferExperimentTypeFromTitle(title: string) {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  const aliases: Record<string, ExperimentType> = {
+    y_maze: "y_maze",
+    ymmaze: "y_maze",
+    light_dark_box: "ldb",
+    ldb: "ldb",
+    marble_burying: "marble",
+    nesting: "nesting",
+    catwalk: "catwalk",
+    rotarod_hab: "rotarod_hab",
+    rotarod_habituation: "rotarod_hab",
+    rotarod_test_1: "rotarod_test1",
+    rotarod_test1: "rotarod_test1",
+    rotarod_test_2: "rotarod_test2",
+    rotarod_test2: "rotarod_test2",
+    rotarod: "rotarod",
+    stamina: "stamina",
+    blood_draw: "blood_draw",
+    plasma_collection: "blood_draw",
+    eeg_implant: "eeg_implant",
+    eeg_surgery: "eeg_implant",
+    eeg_recording: "eeg_recording",
+    handling: "handling",
+    data_collection: "data_collection",
+    core_acclimation: "core_acclimation",
+  };
+
+  return aliases[slug] || normalizeExperimentType(slug);
+}
+
+function chooseNearestWeekdayDate(
+  birthDate: Date,
+  targetAgeDays: number,
+  preferredWeekday: string,
+  minimumAgeDays?: number | null,
+  maximumAgeDays?: number | null,
+) {
+  const weekdayIndex = WEEKDAY_TO_INDEX[preferredWeekday];
+  if (weekdayIndex == null) {
+    const clampedAge = Math.max(targetAgeDays, minimumAgeDays ?? targetAgeDays);
+    const boundedAge =
+      typeof maximumAgeDays === "number" ? Math.min(clampedAge, maximumAgeDays) : clampedAge;
+    return addDays(birthDate, boundedAge);
+  }
+
+  const minAge = typeof minimumAgeDays === "number" ? minimumAgeDays : targetAgeDays - 7;
+  const maxAge = typeof maximumAgeDays === "number" ? maximumAgeDays : targetAgeDays + 7;
+  let bestDate = addDays(birthDate, Math.max(targetAgeDays, minAge));
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let age = minAge; age <= maxAge; age += 1) {
+    const candidate = addDays(birthDate, age);
+    if (candidate.getDay() !== weekdayIndex) {
+      continue;
+    }
+
+    const distance = Math.abs(age - targetAgeDays);
+    if (distance < bestDistance || (distance === bestDistance && age >= targetAgeDays)) {
+      bestDistance = distance;
+      bestDate = candidate;
+    }
+  }
+
+  return bestDate;
+}
+
+async function generateCohortScheduleFromRunInternal(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  runId: string,
+  cohortId: string,
+) {
+  const [{ data: run, error: runError }, { data: blocks, error: blocksError }] = await Promise.all([
+    supabase.from("experiment_runs").select("id,template_id,name").eq("id", runId).single(),
+    supabase
+      .from("run_schedule_blocks")
+      .select("*")
+      .eq("experiment_run_id", runId)
+      .order("day_index", { ascending: true })
+      .order("sort_order", { ascending: true }),
+  ]);
+
+  if (runError || !run?.id) {
+    throw new Error(withRunSchemaGuidance(runError?.message || "Run not found."));
+  }
+
+  if (blocksError) {
+    throw new Error(withRunSchemaGuidance(blocksError.message));
+  }
+
+  const runBlocks = (blocks as Array<RunScheduleBlockInput & { id?: string; metadata: Record<string, unknown> }>) || [];
+  if (runBlocks.length === 0) {
+    return {
+      cohort_id: cohortId,
+      scheduled_animals: 0,
+      total_items: 0,
+      rescheduled_items: 0,
+    };
+  }
+
+  const templateIds = [...new Set(runBlocks.map((block) => block.experiment_template_id).filter(Boolean))];
+
+  const [
+    { data: cohort, error: cohortError },
+    { data: animals, error: animalsError },
+    { data: experiments, error: experimentsError },
+    { data: experimentTimepoints, error: experimentTimepointsError },
+    { data: templates, error: templatesError },
+  ] = await Promise.all([
+    supabase.from("cohorts").select("*").eq("id", cohortId).eq("user_id", userId).single(),
+    supabase
+      .from("animals")
+      .select("id,birth_date")
+      .eq("cohort_id", cohortId)
+      .eq("user_id", userId)
+      .in("status", ["active", "eeg_implanted"]),
+    supabase.from("experiments").select("id,title,tags").eq("user_id", userId),
+    supabase.from("experiment_timepoints").select("*").eq("user_id", userId),
+    templateIds.length > 0
+      ? supabase.from("experiment_templates").select("id,title,category").in("id", templateIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (cohortError || !cohort) {
+    throw new Error(cohortError?.message || "Cohort not found.");
+  }
+
+  if (animalsError) {
+    throw new Error(animalsError.message);
+  }
+
+  const cohortAnimals = animals || [];
+  if (cohortAnimals.length === 0) {
+    throw new Error("No active animals in this cohort.");
+  }
+
+  const animalIds = cohortAnimals.map((animal) => String(animal.id));
+  const { data: cohortExistingRows, error: cohortExistingError } = await supabase
+    .from("animal_experiments")
+    .select("*")
+    .eq("user_id", userId)
+    .in("animal_id", animalIds);
+
+  if (cohortExistingError) {
+    throw new Error(cohortExistingError.message);
+  }
+
+  if (experimentsError || experimentTimepointsError || templatesError) {
+    throw new Error(
+      experimentsError?.message || experimentTimepointsError?.message || templatesError?.message || "Failed to load scheduler context.",
+    );
+  }
+
+  const batteryExperiment =
+    (experiments || []).find((experiment) =>
+      Array.isArray(experiment.tags) &&
+      experiment.tags.includes("kind:battery") &&
+      experiment.tags.includes(`battery_template:${run.template_id}`),
+    ) || null;
+
+  const windowRanges = new Map<string, WindowAgeRange>();
+  if (batteryExperiment) {
+    for (const timepoint of (experimentTimepoints || []).filter((item) => item.experiment_id === batteryExperiment.id)) {
+      const parsed = parseWindowRange(timepoint.notes);
+      if (parsed.minAgeDays == null) {
+        continue;
+      }
+      windowRanges.set(timepoint.label, {
+        label: timepoint.label,
+        minAgeDays: parsed.minAgeDays,
+        maxAgeDays: parsed.maxAgeDays,
+      });
+    }
+  }
+
+  const templateById = new Map(
+    ((templates as Array<{ id: string; title: string | null; category: string | null }>) || []).map((template) => [
+      String(template.id),
+      template,
+    ]),
+  );
+
+  const deletableStatuses = new Set(["pending", "scheduled", "skipped"]);
+  const touchedExperimentTypes = new Set<ExperimentType>();
+  const touchedTimepointAges = new Set<number>();
+
+  const records: Array<{
+    user_id: string;
+    animal_id: string;
+    experiment_type: ExperimentType;
+    timepoint_age_days: number | null;
+    scheduled_date: string;
+    status: "scheduled";
+    notes: string;
+  }> = [];
+
+  for (const animal of cohortAnimals) {
+    const birthValue = animal.birth_date || cohort.birth_date;
+    if (!birthValue) {
+      continue;
+    }
+    const birthDate = new Date(birthValue);
+    const startAgeCache = new Map<string, number>();
+
+    for (const block of runBlocks) {
+      const metadata =
+        block.metadata && typeof block.metadata === "object" && !Array.isArray(block.metadata)
+          ? block.metadata
+          : {};
+      const template = block.experiment_template_id ? templateById.get(block.experiment_template_id) : null;
+      const explicitType = normalizeExperimentType(getMetadataString(metadata, "experimentType"));
+      const experimentType =
+        explicitType ||
+        normalizeExperimentType(String(template?.category || "").trim().toLowerCase()) ||
+        inferExperimentTypeFromTitle(block.title || template?.title || "");
+
+      if (!experimentType) {
+        continue;
+      }
+
+      const windowName = getMetadataString(metadata, "timepointWindowName");
+      const windowRange = windowRanges.get(windowName) || null;
+      const timepointAgeDays = windowRange?.minAgeDays ?? null;
+      const preferredStartWeekday = getPreferredStartWeekday(metadata);
+      const targetAgeDays = getMetadataNumber(metadata, "targetAgeDays");
+      const minAgeDays = getMetadataNumber(metadata, "minAgeDays");
+      const maxAgeDays = getMetadataNumber(metadata, "maxAgeDays");
+
+      if (timepointAgeDays != null) {
+        touchedTimepointAges.add(timepointAgeDays);
+      }
+      touchedExperimentTypes.add(experimentType);
+
+      const cacheKey = `${windowName || "default"}::${preferredStartWeekday || "exact"}`;
+      if (!startAgeCache.has(cacheKey)) {
+        const startAge = windowRange?.minAgeDays ?? 0;
+        const resolvedStartDate =
+          preferredStartWeekday && windowRange
+            ? chooseNearestWeekdayDate(birthDate, startAge, preferredStartWeekday)
+            : addDays(birthDate, startAge);
+        startAgeCache.set(cacheKey, Math.round((resolvedStartDate.getTime() - birthDate.getTime()) / (24 * 60 * 60 * 1000)));
+      }
+
+      const resolvedStartAge = startAgeCache.get(cacheKey) ?? (windowRange?.minAgeDays ?? 0);
+      const defaultAge = resolvedStartAge + Math.max(block.day_index - 1, 0);
+      const baseAge = targetAgeDays ?? defaultAge;
+      const scheduledDate =
+        preferredStartWeekday
+          ? chooseNearestWeekdayDate(birthDate, baseAge, preferredStartWeekday, minAgeDays, maxAgeDays)
+          : addDays(
+              birthDate,
+              Math.max(minAgeDays ?? baseAge, typeof maxAgeDays === "number" ? Math.min(baseAge, maxAgeDays) : baseAge),
+            );
+
+      const slotLabel =
+        block.slot_kind === "exact_time" && block.scheduled_time
+          ? block.scheduled_time
+          : block.slot_label || block.slot_kind.toUpperCase();
+      const marker = `[#runblock:${block.id || `${block.day_index}-${block.sort_order}`} ]`.replace(" ]", "]");
+      const notes = [
+        block.notes?.trim() || null,
+        `${windowName || "General"} · Day ${block.day_index} · ${slotLabel}`,
+        marker,
+      ]
+        .filter(Boolean)
+        .join(" | ");
+
+      records.push({
+        user_id: userId,
+        animal_id: String(animal.id),
+        experiment_type: experimentType,
+        timepoint_age_days: timepointAgeDays,
+        scheduled_date: isoDate(scheduledDate),
+        status: "scheduled",
+        notes,
+      });
+    }
+  }
+
+  const existing = (cohortExistingRows || []) as Array<{
+    id: string;
+    animal_id: string;
+    experiment_type: ExperimentType;
+    timepoint_age_days: number | null;
+    status: string;
+    notes: string | null;
+  }>;
+
+  const keepMarkers = new Set(
+    existing
+      .filter((row) => row.status === "completed" || row.status === "in_progress")
+      .map((row) => `${row.animal_id}::${row.experiment_type}::${row.timepoint_age_days ?? "none"}::${row.notes || ""}`),
+  );
+
+  const deleteIds = existing
+    .filter(
+      (row) =>
+        deletableStatuses.has(row.status) &&
+        touchedExperimentTypes.has(row.experiment_type) &&
+        (row.timepoint_age_days == null || touchedTimepointAges.size === 0 || touchedTimepointAges.has(row.timepoint_age_days)),
+    )
+    .map((row) => row.id);
+
+  if (deleteIds.length > 0) {
+    for (let i = 0; i < deleteIds.length; i += 50) {
+      const batch = deleteIds.slice(i, i + 50);
+      const { error: deleteError } = await supabase.from("animal_experiments").delete().in("id", batch);
+      if (deleteError) {
+        throw new Error(deleteError.message);
+      }
+    }
+  }
+
+  const filteredRecords = records.filter((record) => {
+    const key = `${record.animal_id}::${record.experiment_type}::${record.timepoint_age_days ?? "none"}::${record.notes}`;
+    return !keepMarkers.has(key);
+  });
+
+  if (filteredRecords.length > 0) {
+    for (let i = 0; i < filteredRecords.length; i += 50) {
+      const batch = filteredRecords.slice(i, i + 50);
+      const { error: insertError } = await supabase.from("animal_experiments").insert(batch);
+      if (insertError) {
+        throw new Error(insertError.message);
+      }
+    }
+  }
+
+  return {
+    cohort_id: cohortId,
+    scheduled_animals: new Set(filteredRecords.map((record) => record.animal_id)).size,
+    total_items: filteredRecords.length,
+    rescheduled_items: deleteIds.length,
+  };
 }
 
 function normalizeAssignmentInput(value: unknown): RunAssignmentInput | null {
@@ -301,6 +718,9 @@ async function instantiateRunBlocksFromScheduleTemplate(
 }
 
 async function maybeGenerateCohortScheduleForAssignment(
+  runId: string,
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
   assignment: RunAssignmentInput | null,
   shouldGenerate: boolean,
 ) {
@@ -316,21 +736,18 @@ async function maybeGenerateCohortScheduleForAssignment(
     } satisfies CohortScheduleGenerationSummary;
   }
 
-  const result = await scheduleExperimentsForCohort(assignment.cohort_id);
-  if (result.error) {
-    throw new Error(result.error);
-  }
+  const result = await generateCohortScheduleFromRunInternal(supabase, userId, runId, assignment.cohort_id);
 
   return {
     requested: true,
     attempted: true,
     cohort_id: assignment.cohort_id,
-    scheduled_animals: typeof result.scheduled === "number" ? result.scheduled : 0,
-    total_items: typeof result.total === "number" ? result.total : 0,
-    rescheduled_items: typeof result.rescheduled === "number" ? result.rescheduled : 0,
+    scheduled_animals: typeof result.scheduled_animals === "number" ? result.scheduled_animals : 0,
+    total_items: typeof result.total_items === "number" ? result.total_items : 0,
+    rescheduled_items: typeof result.rescheduled_items === "number" ? result.rescheduled_items : 0,
     message:
-      typeof result.total === "number"
-        ? `Generated ${result.total} cohort schedule item${result.total === 1 ? "" : "s"} across ${result.scheduled ?? 0} animal${result.scheduled === 1 ? "" : "s"}.`
+      typeof result.total_items === "number"
+        ? `Generated ${result.total_items} cohort schedule item${result.total_items === 1 ? "" : "s"} across ${result.scheduled_animals ?? 0} animal${result.scheduled_animals === 1 ? "" : "s"}.`
         : "Cohort schedule generated.",
   } satisfies CohortScheduleGenerationSummary;
 }
@@ -453,7 +870,13 @@ export async function createExperimentRunFromTemplate(formData: FormData) {
     }
   }
 
-  const scheduleGeneration = await maybeGenerateCohortScheduleForAssignment(assignment, generateCohortSchedule);
+  const scheduleGeneration = await maybeGenerateCohortScheduleForAssignment(
+    runId,
+    supabase,
+    user.id,
+    assignment,
+    generateCohortSchedule,
+  );
 
   const { data: runRow, error: runSelectError } = await supabase
     .from("experiment_runs")
@@ -804,18 +1227,15 @@ export async function generateCohortScheduleFromRun(runId: string) {
     throw new Error("Assign this run to a cohort before generating the cohort schedule.");
   }
 
-  const result = await scheduleExperimentsForCohort(String(assignment.cohort_id));
-  if (result.error) {
-    throw new Error(result.error);
-  }
+  const result = await generateCohortScheduleFromRunInternal(supabase, user.id, runId, String(assignment.cohort_id));
 
   revalidatePath("/experiments");
   revalidatePath("/colony");
 
   return {
     cohort_id: String(assignment.cohort_id),
-    scheduled_animals: typeof result.scheduled === "number" ? result.scheduled : 0,
-    total_items: typeof result.total === "number" ? result.total : 0,
-    rescheduled_items: typeof result.rescheduled === "number" ? result.rescheduled : 0,
+    scheduled_animals: typeof result.scheduled_animals === "number" ? result.scheduled_animals : 0,
+    total_items: typeof result.total_items === "number" ? result.total_items : 0,
+    rescheduled_items: typeof result.rescheduled_items === "number" ? result.rescheduled_items : 0,
   };
 }
