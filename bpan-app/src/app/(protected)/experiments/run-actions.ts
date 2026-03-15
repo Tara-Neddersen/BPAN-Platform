@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { scheduleExperimentsForCohort } from "@/app/(protected)/colony/actions";
 import type { PlatformAssignmentScope, PlatformRunStatus, PlatformSlotKind, ScheduledBlock } from "@/types";
 
 type RunScheduleBlockInput = {
@@ -27,6 +28,16 @@ type RunAssignmentInput = {
   sort_order: number;
 };
 
+type CohortScheduleGenerationSummary = {
+  requested: boolean;
+  attempted: boolean;
+  cohort_id: string | null;
+  scheduled_animals: number;
+  total_items: number;
+  rescheduled_items: number;
+  message: string | null;
+};
+
 function parseJsonField<T>(formData: FormData, key: string, fallback: T): T {
   const raw = formData.get(key);
   if (typeof raw !== "string" || raw.trim().length === 0) {
@@ -38,6 +49,15 @@ function parseJsonField<T>(formData: FormData, key: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function parseBooleanField(formData: FormData, key: string) {
+  const raw = formData.get(key);
+  if (typeof raw !== "string") {
+    return false;
+  }
+
+  return ["true", "1", "yes", "on"].includes(raw.trim().toLowerCase());
 }
 
 function withRunSchemaGuidance(message: string) {
@@ -280,6 +300,41 @@ async function instantiateRunBlocksFromScheduleTemplate(
   }
 }
 
+async function maybeGenerateCohortScheduleForAssignment(
+  assignment: RunAssignmentInput | null,
+  shouldGenerate: boolean,
+) {
+  if (!shouldGenerate || !assignment || assignment.scope_type !== "cohort" || !assignment.cohort_id) {
+    return {
+      requested: shouldGenerate,
+      attempted: false,
+      cohort_id: assignment?.scope_type === "cohort" ? assignment.cohort_id : null,
+      scheduled_animals: 0,
+      total_items: 0,
+      rescheduled_items: 0,
+      message: null,
+    } satisfies CohortScheduleGenerationSummary;
+  }
+
+  const result = await scheduleExperimentsForCohort(assignment.cohort_id);
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  return {
+    requested: true,
+    attempted: true,
+    cohort_id: assignment.cohort_id,
+    scheduled_animals: typeof result.scheduled === "number" ? result.scheduled : 0,
+    total_items: typeof result.total === "number" ? result.total : 0,
+    rescheduled_items: typeof result.rescheduled === "number" ? result.rescheduled : 0,
+    message:
+      typeof result.total === "number"
+        ? `Generated ${result.total} cohort schedule item${result.total === 1 ? "" : "s"} across ${result.scheduled ?? 0} animal${result.scheduled === 1 ? "" : "s"}.`
+        : "Cohort schedule generated.",
+  } satisfies CohortScheduleGenerationSummary;
+}
+
 export async function createExperimentRunFromTemplate(formData: FormData) {
   const supabase = await createClient();
   const {
@@ -301,6 +356,7 @@ export async function createExperimentRunFromTemplate(formData: FormData) {
   const startAnchorDate =
     typeof formData.get("start_anchor_date") === "string" ? (formData.get("start_anchor_date") as string).trim() : "";
   const assignment = normalizeAssignmentInput(parseJsonField(formData, "assignment", null));
+  const generateCohortSchedule = parseBooleanField(formData, "generate_cohort_schedule");
 
   if (!templateId) {
     throw new Error("Template is required.");
@@ -397,6 +453,8 @@ export async function createExperimentRunFromTemplate(formData: FormData) {
     }
   }
 
+  const scheduleGeneration = await maybeGenerateCohortScheduleForAssignment(assignment, generateCohortSchedule);
+
   const { data: runRow, error: runSelectError } = await supabase
     .from("experiment_runs")
     .select("*")
@@ -412,6 +470,7 @@ export async function createExperimentRunFromTemplate(formData: FormData) {
   return {
     run_id: runId,
     run: runRow,
+    schedule_generation: scheduleGeneration,
   };
 }
 
@@ -717,4 +776,46 @@ export async function saveRunAssignment(formData: FormData) {
   }
 
   revalidatePath("/experiments");
+}
+
+export async function generateCohortScheduleFromRun(runId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error("Unauthorized");
+  }
+
+  const { data: assignment, error } = await supabase
+    .from("run_assignments")
+    .select("scope_type,cohort_id")
+    .eq("experiment_run_id", runId)
+    .order("sort_order", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(withRunSchemaGuidance(error.message));
+  }
+
+  if (!assignment || assignment.scope_type !== "cohort" || !assignment.cohort_id) {
+    throw new Error("Assign this run to a cohort before generating the cohort schedule.");
+  }
+
+  const result = await scheduleExperimentsForCohort(String(assignment.cohort_id));
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  revalidatePath("/experiments");
+  revalidatePath("/colony");
+
+  return {
+    cohort_id: String(assignment.cohort_id),
+    scheduled_animals: typeof result.scheduled === "number" ? result.scheduled : 0,
+    total_items: typeof result.total === "number" ? result.total : 0,
+    rescheduled_items: typeof result.rescheduled === "number" ? result.rescheduled : 0,
+  };
 }

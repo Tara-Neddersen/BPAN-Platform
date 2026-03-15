@@ -151,6 +151,7 @@ function timepointProtocolPreview(tp: ColonyTimepoint) {
 
 interface ColonyClientProps {
   defaultTab?: string;
+  initialFilterCohort?: string;
   showTabList?: boolean;
   breederCages: BreederCage[];
   cohorts: Cohort[];
@@ -264,6 +265,7 @@ function convertDriveUrl(url: string): string {
 
 export function ColonyClient({
   defaultTab = "animals",
+  initialFilterCohort = "all",
   showTabList = true,
   breederCages: initCages,
   cohorts: initCohorts,
@@ -308,7 +310,15 @@ export function ColonyClient({
 
   function handleTabChange(nextTab: string) {
     setActiveTab(nextTab);
-    const url = nextTab === "animals" ? "/colony" : `/colony?tab=${encodeURIComponent(nextTab)}`;
+    const params = new URLSearchParams();
+    if (nextTab !== "animals") {
+      params.set("tab", nextTab);
+    }
+    if (filterCohort !== "all") {
+      params.set("cohort", filterCohort);
+    }
+    const query = params.toString();
+    const url = query ? `/colony?${query}` : "/colony";
     router.replace(url, { scroll: false });
   }
 
@@ -440,8 +450,12 @@ export function ColonyClient({
   const [photoUrlInput, setPhotoUrlInput] = useState("");
   const [photoUploading, setPhotoUploading] = useState(false);
   const photoUploadInputRef = useRef<HTMLInputElement>(null);
-  const [filterCohort, setFilterCohort] = useState("all");
+  const [filterCohort, setFilterCohort] = useState(initialFilterCohort);
   const [filterGenotype, setFilterGenotype] = useState("all");
+
+  useEffect(() => {
+    setFilterCohort(initialFilterCohort || "all");
+  }, [initialFilterCohort]);
   const [animalFormCohortId, setAnimalFormCohortId] = useState("");
   const [animalFormEarTag, setAnimalFormEarTag] = useState("0000");
   const birthDateRef = useRef<HTMLInputElement>(null);

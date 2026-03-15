@@ -98,6 +98,7 @@ async function fetchAllRows(supabase: any, table: string, userId: string): Promi
 
 interface ColonyPageViewOptions {
   defaultTab?: string;
+  initialFilterCohort?: string;
   title?: string;
   description?: string;
   showTabList?: boolean;
@@ -106,6 +107,7 @@ interface ColonyPageViewOptions {
 
 export async function renderColonyPageView({
   defaultTab = "animals",
+  initialFilterCohort = "all",
   title = "Mouse Colony",
   description = "Manage breeder cages, cohorts, animals, experiment schedules, meetings, and PI access.",
   showTabList = true,
@@ -209,6 +211,7 @@ export async function renderColonyPageView({
       <section className="section-card card-density-comfy">
         <ColonyClient
           defaultTab={defaultTab}
+          initialFilterCohort={initialFilterCohort}
           showTabList={showTabList}
           breederCages={(breederCages || []) as BreederCage[]}
           cohorts={(cohorts || []) as Cohort[]}
@@ -272,8 +275,9 @@ export async function renderColonyPageView({
   );
 }
 
-export default async function ColonyPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+export default async function ColonyPage({ searchParams }: { searchParams: Promise<{ tab?: string; cohort?: string }> }) {
   const params = await searchParams;
   const defaultTab = params?.tab || "animals";
-  return renderColonyPageView({ defaultTab });
+  const initialFilterCohort = params?.cohort || "all";
+  return renderColonyPageView({ defaultTab, initialFilterCohort });
 }

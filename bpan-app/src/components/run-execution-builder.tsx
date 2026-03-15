@@ -43,6 +43,7 @@ import {
   BarChart3,
   CalendarDays,
   Copy,
+  ExternalLink,
   GripVertical,
   Layers2,
   Play,
@@ -939,6 +940,17 @@ export function RunExecutionBuilder({
     router.push(`/results?${params.toString()}`);
   };
 
+  const goToCohortTasksFromRun = () => {
+    if (!selectedRun || selectedAssignment.scope_type !== "cohort" || !selectedAssignment.cohort_id) {
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set("tab", "animals");
+    params.set("cohort", selectedAssignment.cohort_id);
+    router.push(`/colony?${params.toString()}`);
+  };
+
   const hasDraftEdits = timelineDirty || assignmentDirty;
 
   return (
@@ -1297,6 +1309,16 @@ export function RunExecutionBuilder({
                 >
                   <Play className="h-4 w-4" />
                   {pendingAction === "generate_schedule" ? "Generating Cohort Schedule..." : "Generate Cohort Schedule"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={goToCohortTasksFromRun}
+                  disabled={!selectedRunId || selectedAssignment.scope_type !== "cohort" || !selectedAssignment.cohort_id}
+                  className="w-full gap-2 sm:w-auto"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Open Cohort Tasks
                 </Button>
                 <Button size="sm" variant="outline" onClick={saveAssignmentForRun} disabled={!selectedRunId || isPending || !assignmentDirty} className="w-full sm:w-auto">
                   {pendingAction === "save_assignment" ? "Saving Assignment..." : "Save Assignment"}
