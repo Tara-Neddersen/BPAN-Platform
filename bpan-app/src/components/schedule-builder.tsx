@@ -323,6 +323,19 @@ function parseBatteryTag(tags: string[], prefix: string) {
   return tags.find((tag) => tag.startsWith(prefix))?.slice(prefix.length) || null;
 }
 
+function getInitialScheduleTemplateId(
+  experiments: Experiment[],
+  experimentTemplates: ExperimentTemplateRecord[],
+) {
+  const firstBatteryTemplateId =
+    experiments
+      .filter((experiment) => experiment.tags.includes("kind:battery"))
+      .map((experiment) => parseBatteryTag(experiment.tags, "battery_template:"))
+      .find((value): value is string => Boolean(value)) || null;
+
+  return firstBatteryTemplateId || experimentTemplates[0]?.id || "";
+}
+
 function getWindowNameFromMetadata(metadata: Record<string, unknown>) {
   const singleName = typeof metadata.timepointWindowName === "string" ? metadata.timepointWindowName.trim() : "";
   if (singleName) return singleName;
@@ -351,11 +364,12 @@ export function ScheduleBuilder({
   persistenceEnabled,
 }: ScheduleBuilderProps) {
   const router = useRouter();
+  const initialTemplateId = getInitialScheduleTemplateId(experiments, experimentTemplates);
   const [isPending, startTransition] = useTransition();
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(experimentTemplates[0]?.id ?? "");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(initialTemplateId);
   const [draft, setDraft] = useState<ScheduleDraft>(() =>
     buildDraftForTemplate(
-      experimentTemplates[0]?.id ?? "",
+      initialTemplateId,
       scheduleTemplates,
       scheduleDays,
       scheduleSlots,
@@ -367,7 +381,7 @@ export function ScheduleBuilder({
   const [dragging, setDragging] = useState<DragPayload | null>(null);
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>(() => {
     const initialDraft = buildDraftForTemplate(
-      experimentTemplates[0]?.id ?? "",
+      initialTemplateId,
       scheduleTemplates,
       scheduleDays,
       scheduleSlots,
@@ -378,6 +392,30 @@ export function ScheduleBuilder({
   });
 
   const templateTitleById = new Map(experimentTemplates.map((template) => [template.id, template.title]));
+  const batteryOptions = useMemo(
+    () =>
+      experiments
+        .filter((experiment) => experiment.tags.includes("kind:battery"))
+        .map((experiment) => {
+          const templateId = parseBatteryTag(experiment.tags, "battery_template:");
+          if (!templateId) return null;
+          return {
+            experimentId: experiment.id,
+            templateId,
+            label: experiment.title,
+            timepointCount: timepoints.filter((timepoint) => timepoint.experiment_id === experiment.id).length,
+          };
+        })
+        .filter(
+          (
+            option,
+          ): option is { experimentId: string; templateId: string; label: string; timepointCount: number } =>
+            Boolean(option),
+        ),
+    [experiments, timepoints],
+  );
+  const selectedBatteryOption =
+    batteryOptions.find((option) => option.templateId === selectedTemplateId) || null;
   const windowOptions = useMemo(() => {
     const batteryExperiment = experiments.find((experiment) => parseBatteryTag(experiment.tags, "battery_template:") === selectedTemplateId) || null;
     const fromTimepoints = batteryExperiment
@@ -1025,18 +1063,29 @@ export function ScheduleBuilder({
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
         <div className="grid gap-4 md:grid-cols-3">
           <div className="space-y-2">
-            <p className="text-sm font-medium">Template</p>
+            <p className="text-sm font-medium">{batteryOptions.length > 0 ? "Battery" : "Template"}</p>
             <select
               value={selectedTemplateId}
               onChange={(event) => loadTemplate(event.target.value)}
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             >
-              {experimentTemplates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.title}
-                </option>
-              ))}
+              {batteryOptions.length > 0
+                ? batteryOptions.map((battery) => (
+                    <option key={battery.templateId} value={battery.templateId}>
+                      {battery.label}
+                    </option>
+                  ))
+                : experimentTemplates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.title}
+                    </option>
+                  ))}
             </select>
+            {selectedBatteryOption ? (
+              <p className="text-xs text-muted-foreground">
+                Editing the same saved battery used in `Create Battery`. Changes here will show there too.
+              </p>
+            ) : null}
           </div>
           <div className="space-y-2">
             <p className="text-sm font-medium">Schedule Name</p>
