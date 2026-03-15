@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { HelpHint } from "@/components/ui/help-hint";
-import { ExperimentTemplateBuilder, type ExperimentTemplateRecord } from "@/components/experiment-template-builder";
+import type { ExperimentTemplateRecord } from "@/components/experiment-template-builder";
 import { ScheduleBuilder } from "@/components/schedule-builder";
 import { RunExecutionBuilder } from "@/components/run-execution-builder";
 import { BatteryCreationWizard } from "@/components/battery-creation-wizard";
@@ -29,7 +29,6 @@ import {
   Loader2,
   GripVertical,
   Upload,
-  Layers3,
   Play,
   Sparkles,
   FlaskConical,
@@ -85,13 +84,12 @@ import { UI_SURFACE_TITLES } from "@/lib/ui-copy";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-type TabKey = "battery_wizard" | "calendar" | "gantt" | "schedule" | "runs" | "templates" | "protocols" | "reagents";
+type TabKey = "battery_wizard" | "calendar" | "gantt" | "schedule" | "runs" | "protocols" | "reagents";
 
 const PRIMARY_TABS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
   { key: "battery_wizard", label: "Create Battery", icon: <FlaskConical className="h-4 w-4" /> },
   { key: "calendar", label: "Calendar", icon: <Calendar className="h-4 w-4" /> },
   { key: "gantt", label: "Timeline", icon: <BarChart3 className="h-4 w-4" /> },
-  { key: "templates", label: "Battery Records", icon: <Layers3 className="h-4 w-4" /> },
   { key: "runs", label: "Runs", icon: <Play className="h-4 w-4" /> },
   { key: "schedule", label: "Battery Layout", icon: <GripVertical className="h-4 w-4" /> },
   { key: "protocols", label: "Single Experiments", icon: <FileText className="h-4 w-4" /> },
@@ -352,13 +350,6 @@ export function ExperimentsClient({
           animals={animals}
           persistenceEnabled={runExecutionPersistenceEnabled}
           dataWarning={runExecutionWarning}
-        />
-      )}
-      {tab === "templates" && (
-        <ExperimentTemplateBuilder
-          templates={experimentTemplates}
-          protocols={protocols}
-          persistenceEnabled={templateBuilderPersistenceEnabled}
         />
       )}
       {tab === "protocols" && <ProtocolsView protocols={protocols} />}
