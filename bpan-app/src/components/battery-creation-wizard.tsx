@@ -5,7 +5,7 @@ import * as XLSX from "xlsx";
 import { ArrowLeft, ArrowRight, Loader2, Pencil, Plus, Save, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { createExperiment, createProtocol, createTimepoint, deleteTimepoint, updateExperiment } from "@/app/(protected)/experiments/actions";
+import { createExperiment, createProtocol, replaceExperimentTimepoints, updateExperiment } from "@/app/(protected)/experiments/actions";
 import { saveScheduleTemplate } from "@/app/(protected)/experiments/schedule-actions";
 import { saveExperimentTemplate } from "@/app/(protected)/experiments/template-actions";
 import type { ExperimentTemplateRecord } from "@/components/experiment-template-builder";
@@ -18,25 +18,22 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { detectDatasetColumnType, parseTextDatasetPreview } from "@/lib/dataset-preview";
 
-const COLUMN_TYPE_OPTIONS = [
-  "text",
-  "long_text",
-  "number",
-  "integer",
-  "boolean",
-  "date",
-  "time",
-  "datetime",
-  "select",
-  "multi_select",
-  "file",
-  "url",
-  "animal_ref",
-  "cohort_ref",
-  "batch_ref",
-] as const;
-
-type ColumnType = (typeof COLUMN_TYPE_OPTIONS)[number];
+type ColumnType =
+  | "text"
+  | "long_text"
+  | "number"
+  | "integer"
+  | "boolean"
+  | "date"
+  | "time"
+  | "datetime"
+  | "select"
+  | "multi_select"
+  | "file"
+  | "url"
+  | "animal_ref"
+  | "cohort_ref"
+  | "batch_ref";
 
 const GUIDED_COLUMN_TYPE_OPTIONS: Array<{ value: ColumnType; label: string }> = [
   { value: "text", label: "Short text" },
@@ -108,7 +105,7 @@ type LayoutItemDraft = {
   slotKind: PlatformSlotKind;
   customLabel: string;
   exactTime: string;
-  timepointWindowIds: string[];
+  timepointWindowId: string;
   notes: string;
 };
 
@@ -263,7 +260,7 @@ function createEmptyWindow(): TimepointWindowDraft {
   };
 }
 
-function createEmptyLayoutItem(experimentId = "", windowIds: string[] = []): LayoutItemDraft {
+function createEmptyLayoutItem(experimentId = "", windowId = ""): LayoutItemDraft {
   return {
     id: makeId("layout"),
     experimentId,
@@ -271,7 +268,7 @@ function createEmptyLayoutItem(experimentId = "", windowIds: string[] = []): Lay
     slotKind: "am",
     customLabel: "",
     exactTime: "",
-    timepointWindowIds: windowIds,
+    timepointWindowId: windowId,
     notes: "",
   };
 }
@@ -628,18 +625,28 @@ function buildDraftsFromBatteryRecord(
       const windowNames = Array.isArray(metadata.timepointWindowNames)
         ? metadata.timepointWindowNames.filter((value): value is string => typeof value === "string")
         : [];
+      const singularWindowName =
+        typeof metadata.timepointWindowName === "string" ? metadata.timepointWindowName : "";
+      const resolvedWindowIds = [
+        ...windowNames.map((name) => windowIdByName.get(name)).filter((value): value is string => Boolean(value)),
+        ...(singularWindowName ? [windowIdByName.get(singularWindowName)].filter((value): value is string => Boolean(value)) : []),
+      ];
+      const uniqueWindowIds = Array.from(new Set(resolvedWindowIds));
+      const fallbackWindowId = windows[0]?.id || "";
+      const itemWindowIds = uniqueWindowIds.length > 0 ? uniqueWindowIds : [fallbackWindowId].filter(Boolean);
 
-      return {
+      return itemWindowIds.map((windowId) => ({
         id: makeId("layout"),
         experimentId: experimentIdByTemplateId.get(block.experiment_template_id) || "",
         dayIndex: String(day?.day_index || 1),
         slotKind: slot?.slot_kind || "am",
         customLabel: slot?.slot_kind === "custom" ? slot.label || "" : "",
         exactTime: slot?.slot_kind === "exact_time" ? slot.start_time || "" : "",
-        timepointWindowIds: windowNames.map((name) => windowIdByName.get(name)).filter((value): value is string => Boolean(value)),
+        timepointWindowId: windowId,
         notes: block.notes || "",
-      } satisfies LayoutItemDraft;
-    });
+      } satisfies LayoutItemDraft));
+    })
+    .flat();
 
   return {
     batteryName: record.experiment.title,
@@ -685,6 +692,7 @@ export function BatteryCreationWizard({
   const [selectedExperimentId, setSelectedExperimentId] = useState<string>("");
   const [timepointWindows, setTimepointWindows] = useState<TimepointWindowDraft[]>([createEmptyWindow()]);
   const [layoutItems, setLayoutItems] = useState<LayoutItemDraft[]>([]);
+  const [selectedLayoutWindowId, setSelectedLayoutWindowId] = useState<string>("");
   const [editingBattery, setEditingBattery] = useState<EditingBatteryState | null>(null);
   const [isPending, startTransition] = useTransition();
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -709,6 +717,24 @@ export function BatteryCreationWizard({
     }
   }, [experimentDrafts, selectedExperimentId]);
 
+  useEffect(() => {
+    if (!selectedLayoutWindowId && timepointWindows[0]?.id) {
+      setSelectedLayoutWindowId(timepointWindows[0].id);
+      return;
+    }
+
+    if (selectedLayoutWindowId && !timepointWindows.some((window) => window.id === selectedLayoutWindowId)) {
+      setSelectedLayoutWindowId(timepointWindows[0]?.id || "");
+    }
+  }, [selectedLayoutWindowId, timepointWindows]);
+
+  const activeLayoutWindow =
+    timepointWindows.find((window) => window.id === selectedLayoutWindowId) || timepointWindows[0] || null;
+  const activeLayoutItems = useMemo(
+    () => layoutItems.filter((item) => item.timepointWindowId === activeLayoutWindow?.id),
+    [activeLayoutWindow?.id, layoutItems],
+  );
+
   const canMoveNext =
     currentStep.key === "experiments"
       ? batteryName.trim().length > 0 && experimentDrafts.every((experiment) => experiment.name.trim().length > 0)
@@ -727,7 +753,7 @@ export function BatteryCreationWizard({
               layoutItems.every((item) =>
                 item.experimentId &&
                 item.dayIndex.trim() &&
-                item.timepointWindowIds.length > 0 &&
+                item.timepointWindowId &&
                 (item.slotKind !== "custom" || item.customLabel.trim()) &&
                 (item.slotKind !== "exact_time" || item.exactTime.trim()),
               )
@@ -945,6 +971,7 @@ export function BatteryCreationWizard({
     setSelectedExperimentId("");
     setTimepointWindows([createEmptyWindow()]);
     setLayoutItems([]);
+    setSelectedLayoutWindowId("");
     setEditingBattery(null);
     setStepIndex(0);
   };
@@ -957,6 +984,7 @@ export function BatteryCreationWizard({
     setSelectedExperimentId(draft.experimentDrafts[0]?.id || "");
     setTimepointWindows(draft.timepointWindows);
     setLayoutItems(draft.layoutItems);
+    setSelectedLayoutWindowId(draft.timepointWindows[0]?.id || "");
     setEditingBattery(draft.editingState);
     setStepIndex(1);
   };
@@ -969,76 +997,78 @@ export function BatteryCreationWizard({
 
     startTransition(async () => {
       try {
-        const experimentMap = new Map<string, { protocolId: string; templateId: string; name: string }>();
+        const experimentEntries = await Promise.all(
+          experimentDrafts.map(async (experiment) => {
+            let protocolLinks = experiment.protocolLinks.map((link, index) => ({
+              protocolId: link.protocolId,
+              sortOrder: index,
+              isDefault: link.isDefault,
+              notes: link.notes,
+            }));
 
-        for (const experiment of experimentDrafts) {
-          let protocolLinks = experiment.protocolLinks.map((link, index) => ({
-            protocolId: link.protocolId,
-            sortOrder: index,
-            isDefault: link.isDefault,
-            notes: link.notes,
-          }));
+            if (protocolLinks.length === 0) {
+              const protocolForm = new FormData();
+              protocolForm.set("title", experiment.name.trim());
+              protocolForm.set("description", experiment.description.trim());
+              protocolForm.set("category", experiment.category.trim());
+              protocolForm.set("steps", "[]");
 
-          if (protocolLinks.length === 0) {
-            const protocolForm = new FormData();
-            protocolForm.set("title", experiment.name.trim());
-            protocolForm.set("description", experiment.description.trim());
-            protocolForm.set("category", experiment.category.trim());
-            protocolForm.set("steps", "[]");
+              const createdProtocol = await createProtocol(protocolForm);
+              if (!createdProtocol?.id) {
+                throw new Error(`Could not create the "${experiment.name}" single experiment.`);
+              }
 
-            const createdProtocol = await createProtocol(protocolForm);
-            if (!createdProtocol?.id) {
-              throw new Error(`Could not create the "${experiment.name}" single experiment.`);
+              protocolLinks = [
+                {
+                  protocolId: createdProtocol.id,
+                  sortOrder: 0,
+                  isDefault: true,
+                  notes: "",
+                },
+              ];
             }
 
-            protocolLinks = [
+            const defaultProtocolId =
+              protocolLinks.find((link) => link.isDefault)?.protocolId || protocolLinks[0]?.protocolId || "";
+            if (!defaultProtocolId) {
+              throw new Error(`Could not resolve the default protocol for "${experiment.name}".`);
+            }
+
+            const chosenColumns = buildPersistedColumns([
+              ...experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column),
+              ...experiment.manualColumns,
+            ]);
+
+            const templateForm = new FormData();
+            if (experiment.templateId) {
+              templateForm.set("template_id", experiment.templateId);
+            }
+            templateForm.set("title", experiment.name.trim());
+            templateForm.set("description", experiment.description.trim());
+            templateForm.set("category", experiment.category.trim());
+            templateForm.set("default_assignment_scope", "animal");
+            templateForm.set("schema_name", `${experiment.name.trim()} results`);
+            templateForm.set("schema_description", `Result fields for ${experiment.name.trim()}.`);
+            templateForm.set("protocol_links", JSON.stringify(protocolLinks));
+            templateForm.set("result_columns", JSON.stringify(chosenColumns.map(serializeColumn)));
+
+            const savedTemplate = await saveExperimentTemplate(templateForm);
+            if (!savedTemplate?.templateId) {
+              throw new Error(`Could not create the "${experiment.name}" experiment definition.`);
+            }
+
+            return [
+              experiment.id,
               {
-                protocolId: createdProtocol.id,
-                sortOrder: 0,
-                isDefault: true,
-                notes: "",
+                protocolId: defaultProtocolId,
+                templateId: savedTemplate.templateId,
+                name: experiment.name.trim(),
               },
-            ];
-          }
+            ] as const;
+          }),
+        );
 
-          const defaultProtocolId =
-            protocolLinks.find((link) => link.isDefault)?.protocolId || protocolLinks[0]?.protocolId || "";
-          if (!defaultProtocolId) {
-            throw new Error(`Could not resolve the default protocol for "${experiment.name}".`);
-          }
-
-          const chosenColumns = buildPersistedColumns([
-            ...experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column),
-            ...experiment.manualColumns,
-          ]);
-
-          const templateForm = new FormData();
-          if (experiment.templateId) {
-            templateForm.set("template_id", experiment.templateId);
-          }
-          templateForm.set("title", experiment.name.trim());
-          templateForm.set("description", experiment.description.trim());
-          templateForm.set("category", experiment.category.trim());
-          templateForm.set("default_assignment_scope", "animal");
-          templateForm.set("schema_name", `${experiment.name.trim()} results`);
-          templateForm.set("schema_description", `Result fields for ${experiment.name.trim()}.`);
-          templateForm.set("protocol_links", JSON.stringify(protocolLinks));
-          templateForm.set(
-            "result_columns",
-            JSON.stringify(chosenColumns.map(serializeColumn)),
-          );
-
-          const savedTemplate = await saveExperimentTemplate(templateForm);
-          if (!savedTemplate?.templateId) {
-            throw new Error(`Could not create the "${experiment.name}" experiment definition.`);
-          }
-
-          experimentMap.set(experiment.id, {
-            protocolId: defaultProtocolId,
-            templateId: savedTemplate.templateId,
-            name: experiment.name.trim(),
-          });
-        }
+        const experimentMap = new Map(experimentEntries);
 
         const batteryTemplateForm = new FormData();
         if (editingBattery?.batteryTemplateId) {
@@ -1111,14 +1141,11 @@ export function BatteryCreationWizard({
                   sort_order: slotIndex,
                   blocks: bucket.map((item, blockIndex) => {
                     const saved = experimentMap.get(item.experimentId);
-                    const windowNames = item.timepointWindowIds
-                      .map((windowId) => timepointWindows.find((window) => window.id === windowId))
-                      .filter((window): window is TimepointWindowDraft => Boolean(window))
-                      .map((window) => ({
-                        id: window.id,
-                        name: window.name.trim(),
-                        range: `${window.minAgeDays.trim()}-${window.maxAgeDays.trim()} days`,
-                      }));
+                    const matchedWindow = timepointWindows.find((window) => window.id === item.timepointWindowId);
+                    const windowName = matchedWindow?.name.trim() || "";
+                    const windowRange = matchedWindow
+                      ? `${matchedWindow.minAgeDays.trim()}-${matchedWindow.maxAgeDays.trim()} days`
+                      : "";
 
                     return {
                       experiment_template_id: saved?.templateId || "",
@@ -1128,9 +1155,12 @@ export function BatteryCreationWizard({
                       sort_order: blockIndex,
                       repeat_key: null,
                       metadata: {
-                        timepointWindowIds: windowNames.map((window) => window.id),
-                        timepointWindowNames: windowNames.map((window) => window.name),
-                        timepointWindowRanges: windowNames.map((window) => window.range),
+                        timepointWindowId: item.timepointWindowId,
+                        timepointWindowName: windowName,
+                        timepointWindowRange: windowRange,
+                        timepointWindowIds: item.timepointWindowId ? [item.timepointWindowId] : [],
+                        timepointWindowNames: windowName ? [windowName] : [],
+                        timepointWindowRanges: windowRange ? [windowRange] : [],
                       },
                     };
                   }),
@@ -1179,18 +1209,19 @@ export function BatteryCreationWizard({
           batteryExperimentId = createdBatteryExperiment.id;
         }
 
-        for (const timepointId of editingBattery?.timepointIds || []) {
-          await deleteTimepoint(timepointId);
-        }
-
-        for (const window of timepointWindows) {
-          const timepointForm = new FormData();
-          timepointForm.set("experiment_id", batteryExperimentId);
-          timepointForm.set("label", window.name.trim());
-          timepointForm.set("scheduled_at", new Date().toISOString());
-          timepointForm.set("notes", `${window.minAgeDays.trim()}-${window.maxAgeDays.trim()} days`);
-          await createTimepoint(timepointForm);
-        }
+        const timepointForm = new FormData();
+        timepointForm.set("experiment_id", batteryExperimentId);
+        timepointForm.set(
+          "windows",
+          JSON.stringify(
+            timepointWindows.map((window) => ({
+              label: window.name.trim(),
+              scheduled_at: new Date().toISOString(),
+              notes: `${window.minAgeDays.trim()}-${window.maxAgeDays.trim()} days`,
+            })),
+          ),
+        );
+        await replaceExperimentTimepoints(timepointForm);
 
         router.refresh();
         toast.success(editingBattery ? "Battery updated." : "Battery created.");
@@ -1760,7 +1791,16 @@ export function BatteryCreationWizard({
                 <div key={window.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
                   <div className="mb-3 flex items-center justify-between">
                     <p className="text-sm font-semibold text-slate-900">Window {index + 1}</p>
-                    <Button type="button" variant="outline" size="sm" onClick={() => setTimepointWindows((current) => current.filter((item) => item.id !== window.id))} disabled={timepointWindows.length === 1}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setTimepointWindows((current) => current.filter((item) => item.id !== window.id));
+                        setLayoutItems((current) => current.filter((item) => item.timepointWindowId !== window.id));
+                      }}
+                      disabled={timepointWindows.length === 1}
+                    >
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -1780,7 +1820,15 @@ export function BatteryCreationWizard({
                   </div>
                 </div>
               ))}
-              <Button type="button" variant="outline" onClick={() => setTimepointWindows((current) => [...current, createEmptyWindow()])}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  const nextWindow = createEmptyWindow();
+                  setTimepointWindows((current) => [...current, nextWindow]);
+                  setSelectedLayoutWindowId(nextWindow.id);
+                }}
+              >
                 <Plus className="mr-2 h-4 w-4" />
                 Add timepoint window
               </Button>
@@ -1789,13 +1837,39 @@ export function BatteryCreationWizard({
 
           {currentStep.key === "layout" ? (
             <section className="space-y-4">
-              {layoutItems.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-2">
+                <div className="flex flex-wrap gap-2">
+                  {timepointWindows.map((window) => (
+                    <button
+                      key={window.id}
+                      type="button"
+                      onClick={() => setSelectedLayoutWindowId(window.id)}
+                      className={`rounded-full border px-3 py-1.5 text-sm ${
+                        window.id === activeLayoutWindow?.id
+                          ? "border-slate-900 bg-slate-900 text-white"
+                          : "border-slate-300 bg-white text-slate-700"
+                      }`}
+                    >
+                      {window.name || "Untitled window"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-sm font-semibold text-slate-900">{activeLayoutWindow?.name || "Select a timepoint window"}</p>
+                <p className="text-xs text-slate-600">
+                  Build the battery layout specifically for this timepoint window. Other windows can have a different schedule.
+                </p>
+              </div>
+
+              {activeLayoutItems.length === 0 ? (
                 <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
-                  <p className="text-sm text-slate-600">Add the first battery item to place an experiment into a day and time window.</p>
+                  <p className="text-sm text-slate-600">Add the first battery item for this timepoint window.</p>
                 </div>
               ) : null}
 
-              {layoutItems.map((item, index) => (
+              {activeLayoutItems.map((item, index) => (
                 <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
                   <div className="mb-3 flex items-center justify-between">
                     <p className="text-sm font-semibold text-slate-900">Battery Item {index + 1}</p>
@@ -1850,44 +1924,23 @@ export function BatteryCreationWizard({
                     ) : null}
                   </div>
                   <div className="mt-4 space-y-2">
-                    <Label>Timepoint Windows</Label>
-                    <div className="flex flex-wrap gap-2">
-                      {timepointWindows.map((window) => {
-                        const selected = item.timepointWindowIds.includes(window.id);
-                        return (
-                          <button
-                            key={window.id}
-                            type="button"
-                            onClick={() =>
-                              setLayoutItems((current) =>
-                                current.map((entry) =>
-                                  entry.id === item.id
-                                    ? {
-                                        ...entry,
-                                        timepointWindowIds: selected
-                                          ? entry.timepointWindowIds.filter((windowId) => windowId !== window.id)
-                                          : [...entry.timepointWindowIds, window.id],
-                                      }
-                                    : entry,
-                                ),
-                              )
-                            }
-                            className={`rounded-full border px-3 py-1 text-sm ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`}
-                          >
-                            {window.name || "Untitled window"}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div className="mt-4 space-y-2">
                     <Label>Notes</Label>
                     <Textarea value={item.notes} onChange={(event) => setLayoutItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, notes: event.target.value } : entry))} rows={2} placeholder="Optional notes for this battery item." />
                   </div>
                 </div>
               ))}
 
-              <Button type="button" variant="outline" onClick={() => setLayoutItems((current) => [...current, createEmptyLayoutItem(experimentDrafts[0]?.id || "", timepointWindows[0]?.id ? [timepointWindows[0].id] : [])])}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() =>
+                  setLayoutItems((current) => [
+                    ...current,
+                    createEmptyLayoutItem(experimentDrafts[0]?.id || "", activeLayoutWindow?.id || timepointWindows[0]?.id || ""),
+                  ])
+                }
+                disabled={!activeLayoutWindow}
+              >
                 <Plus className="mr-2 h-4 w-4" />
                 Add battery item
               </Button>
@@ -1931,19 +1984,29 @@ export function BatteryCreationWizard({
                 </Card>
 
                 <Card>
-                  <CardHeader><CardTitle className="text-base">Battery Items</CardTitle></CardHeader>
+                  <CardHeader><CardTitle className="text-base">Battery Layout</CardTitle></CardHeader>
                   <CardContent className="space-y-3">
-                    {layoutItems.map((item) => {
-                      const experiment = experimentDrafts.find((entry) => entry.id === item.experimentId);
-                      const windows = item.timepointWindowIds
-                        .map((windowId) => timepointWindows.find((window) => window.id === windowId)?.name)
-                        .filter((value): value is string => Boolean(value));
-
+                    {timepointWindows.map((window) => {
+                      const windowItems = layoutItems.filter((item) => item.timepointWindowId === window.id);
                       return (
-                        <div key={item.id} className="rounded-2xl border border-slate-200 px-3 py-3">
-                          <p className="font-semibold text-slate-900">Day {item.dayIndex} • {slotLabel(item)}</p>
-                          <p className="text-sm text-slate-700">{experiment?.name || "Choose experiment"}</p>
-                          <p className="text-xs text-slate-600">{windows.join(", ") || "No windows selected"}</p>
+                        <div key={window.id} className="rounded-2xl border border-slate-200 px-3 py-3">
+                          <p className="font-semibold text-slate-900">{window.name || "Untitled window"}</p>
+                          <p className="text-xs text-slate-600">{window.minAgeDays || "?"}-{window.maxAgeDays || "?"} days</p>
+                          <div className="mt-3 space-y-2">
+                            {windowItems.length === 0 ? (
+                              <p className="text-xs text-slate-500">No battery items added yet.</p>
+                            ) : (
+                              windowItems.map((item) => {
+                                const experiment = experimentDrafts.find((entry) => entry.id === item.experimentId);
+                                return (
+                                  <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                    <p className="font-semibold text-slate-900">Day {item.dayIndex} • {slotLabel(item)}</p>
+                                    <p className="text-sm text-slate-700">{experiment?.name || "Choose experiment"}</p>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
                         </div>
                       );
                     })}
