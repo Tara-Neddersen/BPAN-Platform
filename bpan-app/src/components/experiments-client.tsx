@@ -327,6 +327,8 @@ export function ExperimentsClient({
       )}
       {tab === "schedule" && (
         <ScheduleBuilder
+          experiments={experiments}
+          timepoints={timepoints}
           experimentTemplates={experimentTemplates}
           scheduleTemplates={scheduleTemplates}
           scheduleDays={scheduleDays}

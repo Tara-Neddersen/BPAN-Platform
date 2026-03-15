@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import type { DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import type {
+  Experiment,
+  ExperimentTimepoint,
   PlatformSlotKind,
   ScheduleTemplate,
   ScheduleDay,
@@ -82,6 +84,8 @@ type SlotDraft = {
 };
 
 interface ScheduleBuilderProps {
+  experiments: Experiment[];
+  timepoints: ExperimentTimepoint[];
   experimentTemplates: ExperimentTemplateRecord[];
   scheduleTemplates: ScheduleTemplate[];
   scheduleDays: ScheduleDay[];
@@ -315,7 +319,30 @@ function getDaySummary(day: BuilderDay, templateTitleById: Map<string, string>) 
   return `${blockTitles[0]} +${blockTitles.length - 1} more`;
 }
 
+function parseBatteryTag(tags: string[], prefix: string) {
+  return tags.find((tag) => tag.startsWith(prefix))?.slice(prefix.length) || null;
+}
+
+function getWindowNameFromMetadata(metadata: Record<string, unknown>) {
+  const singleName = typeof metadata.timepointWindowName === "string" ? metadata.timepointWindowName.trim() : "";
+  if (singleName) return singleName;
+
+  const names = Array.isArray(metadata.timepointWindowNames)
+    ? metadata.timepointWindowNames.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : [];
+  return names[0] || "";
+}
+
+function blockMatchesWindow(block: BuilderBlock, selectedWindowName: string) {
+  if (!selectedWindowName) return true;
+  const blockWindowName = getWindowNameFromMetadata(block.metadata);
+  if (!blockWindowName) return true;
+  return blockWindowName === selectedWindowName;
+}
+
 export function ScheduleBuilder({
+  experiments,
+  timepoints,
   experimentTemplates,
   scheduleTemplates,
   scheduleDays,
@@ -351,6 +378,48 @@ export function ScheduleBuilder({
   });
 
   const templateTitleById = new Map(experimentTemplates.map((template) => [template.id, template.title]));
+  const windowOptions = useMemo(() => {
+    const batteryExperiment = experiments.find((experiment) => parseBatteryTag(experiment.tags, "battery_template:") === selectedTemplateId) || null;
+    const fromTimepoints = batteryExperiment
+      ? timepoints
+          .filter((timepoint) => timepoint.experiment_id === batteryExperiment.id)
+          .sort((a, b) => a.label.localeCompare(b.label))
+          .map((timepoint) => ({
+            id: timepoint.id,
+            name: timepoint.label,
+            rangeLabel: timepoint.notes || "",
+          }))
+      : [];
+
+    if (fromTimepoints.length > 0) {
+      return fromTimepoints;
+    }
+
+    const discoveredNames = Array.from(
+      new Set(
+        draft.days.flatMap((day) =>
+          day.slots.flatMap((slot) =>
+            slot.blocks
+              .map((block) => getWindowNameFromMetadata(block.metadata))
+              .filter(Boolean),
+          ),
+        ),
+      ),
+    );
+
+    return discoveredNames.map((name, index) => ({
+      id: `window-${index}-${name}`,
+      name,
+      rangeLabel: "",
+    }));
+  }, [draft.days, experiments, selectedTemplateId, timepoints]);
+  const [selectedWindowName, setSelectedWindowName] = useState("");
+  const activeWindowName =
+    windowOptions.length === 0
+      ? ""
+      : windowOptions.some((window) => window.name === selectedWindowName)
+        ? selectedWindowName
+        : (windowOptions[0]?.name || "");
 
   const loadTemplate = (templateId: string) => {
     const nextDraft = buildDraftForTemplate(
@@ -365,6 +434,7 @@ export function ScheduleBuilder({
     setDayDrafts({});
     setSlotDrafts({});
     setDragging(null);
+    setSelectedWindowName("");
     setExpandedDays(nextDraft.days[0]?.id ? { [nextDraft.days[0].id]: true } : {});
   };
 
@@ -594,7 +664,12 @@ export function ScheduleBuilder({
                       notes: "",
                       sort_order: slot.blocks.length,
                       repeat_key: null,
-                      metadata: {},
+                      metadata: activeWindowName
+                        ? {
+                            timepointWindowName: activeWindowName,
+                            timepointWindowNames: [activeWindowName],
+                          }
+                        : {},
                     },
                   ],
                 }
@@ -1004,6 +1079,34 @@ export function ScheduleBuilder({
         </div>
       </div>
 
+      {windowOptions.length > 0 ? (
+        <Card>
+          <CardContent className="pt-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-slate-700">Timepoint layout:</p>
+              {windowOptions.map((window) => (
+                <button
+                  key={window.id}
+                  type="button"
+                  onClick={() => setSelectedWindowName(window.name)}
+                  className={cn(
+                    "rounded-full border px-3 py-1.5 text-sm transition-colors",
+                    activeWindowName === window.name
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-300 bg-white text-slate-700",
+                  )}
+                >
+                  {window.name}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              You are editing the schedule for {activeWindowName || "all timepoints"} here.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className="grid gap-4 xl:grid-cols-2">
         {draft.days.map((day) => (
           <Card
@@ -1033,7 +1136,16 @@ export function ScheduleBuilder({
                   <div className="min-w-0">
                     <CardTitle className="text-base">Day {day.day_index}</CardTitle>
                     <p className="truncate text-sm text-muted-foreground">
-                      {getDaySummary(day, templateTitleById)}
+                      {getDaySummary(
+                        {
+                          ...day,
+                          slots: day.slots.map((slot) => ({
+                            ...slot,
+                            blocks: slot.blocks.filter((block) => blockMatchesWindow(block, activeWindowName)),
+                          })),
+                        },
+                        templateTitleById,
+                      )}
                     </p>
                   </div>
                   {expandedDays[day.id] ? (
@@ -1133,6 +1245,7 @@ export function ScheduleBuilder({
               <div className="space-y-3">
                 {day.slots.map((slot) => {
                   const slotDraft = slotDrafts[slot.id] ?? DEFAULT_SLOT_DRAFT;
+                  const visibleBlocks = slot.blocks.filter((block) => blockMatchesWindow(block, activeWindowName));
 
                   return (
                     <div
@@ -1204,12 +1317,12 @@ export function ScheduleBuilder({
                         onDragOver={(event) => event.preventDefault()}
                         onDrop={() => handleDropOnSlot(day.id, slot.id)}
                       >
-                        {slot.blocks.length === 0 ? (
+                        {visibleBlocks.length === 0 ? (
                           <p className="text-sm text-muted-foreground">
                             Drop blocks here or add one from the controls above.
                           </p>
                         ) : (
-                          slot.blocks.map((block) => (
+                          visibleBlocks.map((block) => (
                             <div
                               key={block.id}
                               draggable
