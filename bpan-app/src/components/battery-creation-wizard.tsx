@@ -604,7 +604,10 @@ export function BatteryCreationWizard({
         ? experimentDrafts.every((experiment) => {
             const chosenColumns =
               experiment.sourceMode === "extract"
-                ? experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column)
+                ? [
+                    ...experiment.extractedColumns.filter((column) => column.selected).map((column) => column.column),
+                    ...experiment.manualColumns,
+                  ]
                 : experiment.manualColumns;
             return chosenColumns.length > 0;
           })
