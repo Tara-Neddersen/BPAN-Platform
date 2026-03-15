@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import type { Dataset, Analysis, Figure, Animal, Cohort, ColonyResult } from "@/types";
+import type { Dataset, Analysis, Figure, Animal, Cohort, ColonyResult, ColonyTimepoint } from "@/types";
 
 type ResultsDatasetRecord = Dataset & {
   experiment_run_id?: string | null;
@@ -42,6 +42,46 @@ export type ExportSheet = {
   title: string;
   rows: SheetRecordRow[];
 };
+
+const COLONY_EXPERIMENT_LABELS: Record<string, string> = {
+  y_maze: "Y-Maze",
+  ldb: "Light-Dark Box",
+  marble: "Marble Burying",
+  nesting: "Nesting",
+  catwalk: "CatWalk",
+  rotarod_hab: "Rotarod Habituation",
+  rotarod_test1: "Rotarod Test 1",
+  rotarod_test2: "Rotarod Test 2",
+  rotarod: "Rotarod",
+  stamina: "Stamina",
+  blood_draw: "Blood Draw",
+  eeg_recording: "EEG Recording",
+  eeg_implant: "EEG Implant",
+  data_collection: "Data Collection",
+  core_acclimation: "Core Acclimation",
+  handling: "Handling",
+};
+
+const MIGRATION_BASE_COLUMNS = [
+  "animal_id",
+  "animal_identifier",
+  "ear_tag",
+  "cohort_id",
+  "cohort_name",
+  "animal_birth_date",
+  "genotype",
+  "sex",
+  "timepoint_name",
+  "timepoint_age_days",
+  "timepoint_range_label",
+  "experiment_type",
+  "experiment_label",
+  "notes",
+  "recorded_at",
+  "created_at",
+  "updated_at",
+  "legacy_result_id",
+] as const;
 
 function normalizeCellValue(value: unknown): string | number | boolean {
   if (value === null || value === undefined) return "";
@@ -196,6 +236,94 @@ export function buildColonyResultsSheets(
   return sheets;
 }
 
+export function buildColonyResultsMigrationSheets(
+  colonyResults: ColonyResult[],
+  animals: Animal[],
+  cohorts: Cohort[],
+  timepoints: ColonyTimepoint[],
+): ExportSheet[] {
+  const animalById = new Map(animals.map((animal) => [animal.id, animal]));
+  const cohortById = new Map(cohorts.map((cohort) => [cohort.id, cohort]));
+  const timepointByAgeDays = new Map(timepoints.map((timepoint) => [timepoint.age_days, timepoint]));
+
+  const measureKeys = Array.from(
+    new Set(
+      colonyResults.flatMap((result) =>
+        Object.keys(result.measures || {}).filter((key) => !key.startsWith("__")),
+      ),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+
+  const migrationRows = colonyResults.map((result) => {
+    const animal = animalById.get(result.animal_id);
+    const cohort = animal?.cohort_id ? cohortById.get(animal.cohort_id) : null;
+    const timepoint = timepointByAgeDays.get(result.timepoint_age_days);
+    const baseRow: Record<string, unknown> = {
+      animal_id: result.animal_id,
+      animal_identifier: animal?.identifier || "",
+      ear_tag: animal?.ear_tag || "",
+      cohort_id: cohort?.id || "",
+      cohort_name: cohort?.name || "",
+      animal_birth_date: animal?.birth_date || "",
+      genotype: animal?.genotype || "",
+      sex: animal?.sex || "",
+      timepoint_name: timepoint?.name || `${result.timepoint_age_days}d`,
+      timepoint_age_days: result.timepoint_age_days,
+      timepoint_range_label: timepoint
+        ? `${timepoint.age_days}-${timepoint.age_days + Math.max(timepoint.grace_period_days || 0, timepoint.duration_days || 0)} days`
+        : `${result.timepoint_age_days} days`,
+      experiment_type: result.experiment_type,
+      experiment_label: COLONY_EXPERIMENT_LABELS[result.experiment_type] || result.experiment_type,
+      notes: result.notes || "",
+      recorded_at: result.recorded_at,
+      created_at: result.created_at,
+      updated_at: result.updated_at,
+      legacy_result_id: result.id,
+    };
+
+    for (const key of measureKeys) {
+      baseRow[key] = result.measures?.[key] ?? "";
+    }
+
+    return orderedRow(baseRow, [...MIGRATION_BASE_COLUMNS, ...measureKeys]);
+  });
+
+  const timepointRows = buildOrderedRows(
+    timepoints
+      .slice()
+      .sort((a, b) => a.sort_order - b.sort_order || a.age_days - b.age_days)
+      .map((timepoint) => ({
+        timepoint_name: timepoint.name,
+        timepoint_age_days: timepoint.age_days,
+        timepoint_range_label: `${timepoint.age_days}-${timepoint.age_days + Math.max(timepoint.grace_period_days || 0, timepoint.duration_days || 0)} days`,
+        duration_days: timepoint.duration_days,
+        grace_period_days: timepoint.grace_period_days,
+        notes: timepoint.notes || "",
+      })),
+  );
+
+  const importGuideRows = [
+    {
+      field: "animal_identifier + experiment_type + timepoint_age_days",
+      purpose: "Recommended unique import key for each result row.",
+    },
+    {
+      field: "timepoint_name",
+      purpose: "Human-readable window label for the new importer and review.",
+    },
+    {
+      field: "measure columns",
+      purpose: "All experiment/result values are flattened into top-level columns in the same row.",
+    },
+  ];
+
+  return [
+    { title: "Migration Import", rows: migrationRows },
+    { title: "Timepoint Reference", rows: timepointRows },
+    { title: "Import Guide", rows: importGuideRows },
+  ];
+}
+
 export function exportResultsWorkspaceWorkbook(
   datasets: ResultsDatasetRecord[],
   analyses: Analysis[],
@@ -220,4 +348,18 @@ export function exportColonyResultsWorkbook(
   });
 
   downloadWorkbook(workbook, `bpan-colony-results-backup-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+export function exportColonyResultsMigrationWorkbook(
+  colonyResults: ColonyResult[],
+  animals: Animal[],
+  cohorts: Cohort[],
+  timepoints: ColonyTimepoint[],
+) {
+  const workbook = XLSX.utils.book_new();
+  buildColonyResultsMigrationSheets(colonyResults, animals, cohorts, timepoints).forEach((sheet, index) => {
+    appendSheet(workbook, sheet.rows, sheet.title, `Sheet_${index + 1}`);
+  });
+
+  downloadWorkbook(workbook, `bpan-colony-results-migration-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }

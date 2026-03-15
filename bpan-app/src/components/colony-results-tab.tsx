@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 import { MiniEarTag } from "@/components/ear-tag-selector";
 import { BehaviorImportDialog } from "@/components/behavior-import-dialog";
-import { exportColonyResultsWorkbook } from "@/lib/results-export";
+import { exportColonyResultsMigrationWorkbook, exportColonyResultsWorkbook } from "@/lib/results-export";
 
 // ─── Default experiment measures per type ─────────────────────────────
 
@@ -732,6 +732,11 @@ export function ColonyResultsTab({
     toast.success("Exported full colony backup workbook.");
   }, [animals, cohorts, colonyResults]);
 
+  const handleExportMigration = useCallback(() => {
+    exportColonyResultsMigrationWorkbook(colonyResults, animals, cohorts, timepoints);
+    toast.success("Exported migration-ready colony workbook.");
+  }, [animals, cohorts, colonyResults, timepoints]);
+
   const handleExportAllToGoogleSheets = useCallback(async () => {
     setExportingGoogleBackup(true);
     try {
@@ -1148,6 +1153,15 @@ export function ColonyResultsTab({
                             aria-label="Reconcile Tracker"
                           >
                             {reconciling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleExportMigration}
+                            className="h-8 text-xs"
+                          >
+                            <Download className="mr-1 h-3.5 w-3.5" />
+                            Export Migration
                           </Button>
                           <Button
                             size="sm"
