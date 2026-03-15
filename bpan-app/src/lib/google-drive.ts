@@ -221,12 +221,13 @@ export async function findOrCreateFolder(
   folderName: string,
   parentId?: string
 ): Promise<string> {
+  const escapedFolderName = folderName.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
   // Search for existing folder
-  let query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  let query = `name='${escapedFolderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
   if (parentId) query += ` and '${parentId}' in parents`;
 
   const searchRes = await fetchWithTimeout(
-    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`,
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=10&supportsAllDrives=true&includeItemsFromAllDrives=true`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
 
@@ -274,28 +275,30 @@ export async function uploadFile(
     parents: [folderId],
   };
 
-  // Use multipart upload
   const boundary = "bpan_upload_boundary";
-  const delimiter = `\r\n--${boundary}\r\n`;
-  const closeDelim = `\r\n--${boundary}--`;
+  const openingBoundary = `--${boundary}\r\n`;
+  const partBoundary = `\r\n--${boundary}\r\n`;
+  const closingBoundary = `\r\n--${boundary}--\r\n`;
 
-  const metadataPart = `${delimiter}Content-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}`;
-  const mediaPart = `${delimiter}Content-Type: ${mimeType}\r\n\r\n`;
+  const metadataPart =
+    `${openingBoundary}Content-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}`;
+  const mediaPart = `${partBoundary}Content-Type: ${mimeType}\r\n\r\n`;
 
   const body = Buffer.concat([
     Buffer.from(metadataPart, "utf-8"),
     Buffer.from(mediaPart, "utf-8"),
     fileBuffer,
-    Buffer.from(closeDelim, "utf-8"),
+    Buffer.from(closingBoundary, "utf-8"),
   ]);
 
   const res = await fetchWithTimeout(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink",
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink&supportsAllDrives=true",
     {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": `multipart/related; boundary=${boundary}`,
+        "Content-Length": String(body.byteLength),
       },
       body,
     }
