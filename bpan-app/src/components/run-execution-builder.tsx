@@ -209,7 +209,7 @@ function normalizeSlotLabelForKind(slotKind: PlatformSlotKind, value: string | n
   return null;
 }
 
-function snapToPreviousMonday(isoDate: string) {
+function snapToNearestMonday(isoDate: string) {
   if (!isoDate) {
     return "";
   }
@@ -220,8 +220,15 @@ function snapToPreviousMonday(isoDate: string) {
   }
 
   const weekday = date.getDay();
-  const offset = weekday === 0 ? 6 : weekday - 1;
-  date.setDate(date.getDate() - offset);
+  const daysSinceMonday = weekday === 0 ? 6 : weekday - 1;
+  const daysUntilMonday = weekday === 0 ? 1 : 8 - weekday;
+
+  if (daysSinceMonday <= daysUntilMonday) {
+    date.setDate(date.getDate() - daysSinceMonday);
+  } else {
+    date.setDate(date.getDate() + daysUntilMonday);
+  }
+
   return date.toISOString().slice(0, 10);
 }
 
@@ -264,7 +271,7 @@ export function RunExecutionBuilder({
     selected_protocol_id: "",
     status: "planned" as PlatformRunStatus,
     start_anchor_date: "",
-    start_alignment: "exact" as "exact" | "previous_monday",
+    start_alignment: "exact" as "exact" | "nearest_monday",
     assignment: {
       scope_type: "study" as PlatformAssignmentScope,
       study_id: "",
@@ -554,8 +561,8 @@ export function RunExecutionBuilder({
         fd.append("status", createDraft.status);
         fd.append(
           "start_anchor_date",
-          createDraft.start_alignment === "previous_monday"
-            ? snapToPreviousMonday(createDraft.start_anchor_date)
+          createDraft.start_alignment === "nearest_monday"
+            ? snapToNearestMonday(createDraft.start_anchor_date)
             : createDraft.start_anchor_date,
         );
         fd.append(
@@ -1048,13 +1055,13 @@ export function RunExecutionBuilder({
               onChange={(event) =>
                 setCreateDraft((current) => ({
                   ...current,
-                  start_alignment: event.target.value as "exact" | "previous_monday",
+                  start_alignment: event.target.value as "exact" | "nearest_monday",
                 }))
               }
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             >
               <option value="exact">Start on exact selected day</option>
-              <option value="previous_monday">Start on previous Monday</option>
+              <option value="nearest_monday">Snap day 1 to nearest Monday</option>
             </select>
             <select
               value={createDraft.status}
@@ -1072,7 +1079,7 @@ export function RunExecutionBuilder({
           </div>
 
           <p className="text-xs text-muted-foreground">
-            The Monday option is optional. When selected, day 1 snaps back to the Monday of the chosen week, which is useful when you want batteries to start on a work week instead of the exact target-age day.
+            The Monday option is optional. When selected, day 1 moves to the closer Monday before or after the target-age date, so the battery stays close to the intended age while fitting a work week.
           </p>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[180px_minmax(0,1fr)_auto]">
