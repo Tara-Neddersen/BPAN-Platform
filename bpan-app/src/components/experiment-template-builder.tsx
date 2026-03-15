@@ -828,7 +828,7 @@ export function ExperimentTemplateBuilder({
                 <div>
                   <p className="text-sm font-semibold text-slate-900">AI Fill Template</p>
                   <p className="text-xs text-slate-600">
-                    Paste a study plan, SOP, or protocol summary and BPAN will draft the template details for you.
+                    Paste a study plan, SOP, or protocol summary and LabLynx will draft the template details for you.
                   </p>
                 </div>
                 <Button type="button" variant="outline" onClick={handleAiFill} disabled={isAiFilling}>
@@ -849,7 +849,7 @@ export function ExperimentTemplateBuilder({
                 <div>
                   <p className="text-sm font-semibold text-slate-900">Example Data Sheet to Columns</p>
                   <p className="text-xs text-slate-600">
-                    Upload a sample `.txt`, `.rtf`, `.csv`, `.tsv`, `.xlsx`, or `.xls` data file and BPAN will detect result columns for this template.
+                    Upload a sample `.txt`, `.rtf`, `.csv`, `.tsv`, `.xlsx`, or `.xls` data file and LabLynx will detect result columns for this template.
                   </p>
                 </div>
                 <input

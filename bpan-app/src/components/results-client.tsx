@@ -3102,10 +3102,10 @@ function GoogleSheetsDialog({
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(json.error || "Failed to pull Google Sheet changes into BPAN.");
+        toast.error(json.error || "Failed to pull Google Sheet changes into LabLynx.");
         return;
       }
-      toast.success("Pulled Google Sheet changes into BPAN.");
+      toast.success("Pulled Google Sheet changes into LabLynx.");
       await refreshState();
     } finally {
       setSyncing(false);
@@ -3341,7 +3341,7 @@ function GoogleSheetsDialog({
                               onClick={() => pullMirrorLink(link.id)}
                               disabled={syncing}
                             >
-                              Pull into BPAN
+                              Pull into LabLynx
                             </Button>
                           ) : null}
                           <Button

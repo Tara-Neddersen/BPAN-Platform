@@ -460,8 +460,8 @@ export async function createManagedGoogleSheetMirrorForUserWithClient(
   const sheets = await loadMirrorSheets(supabase, userId, target);
   const title =
     target === "results_workspace"
-      ? `BPAN Results Live Sync ${new Date().toISOString().slice(0, 10)}`
-      : `BPAN Colony Results Live Sync ${new Date().toISOString().slice(0, 10)}`;
+      ? `LabLynx Results Live Sync ${new Date().toISOString().slice(0, 10)}`
+      : `LabLynx Colony Results Live Sync ${new Date().toISOString().slice(0, 10)}`;
 
   const created = await createGoogleSpreadsheet(accessToken, title, sheets.map((sheet) => sheet.title));
   await writeGoogleSpreadsheetTabs(

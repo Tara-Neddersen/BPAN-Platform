@@ -417,6 +417,12 @@ function buildWindowSettingsFromDays(days: BuilderDay[], windowNames: string[]) 
   return next;
 }
 
+function getVisibleDayBlocks(day: BuilderDay, selectedWindowName: string) {
+  return day.slots.flatMap((slot) =>
+    slot.blocks.filter((block) => blockMatchesWindow(block, selectedWindowName)),
+  );
+}
+
 function blockMatchesWindow(block: BuilderBlock, selectedWindowName: string) {
   if (!selectedWindowName) return true;
   const blockWindowName = getWindowNameFromMetadata(block.metadata);

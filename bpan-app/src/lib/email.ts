@@ -1,6 +1,6 @@
 import { Resend } from "resend";
 
-const FROM_ADDRESS = "LabLynk <onboarding@resend.dev>";
+const FROM_ADDRESS = "LabLynx <onboarding@resend.dev>";
 
 function getResendClient() {
   const key = process.env.RESEND_API_KEY;

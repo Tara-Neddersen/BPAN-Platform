@@ -68,7 +68,7 @@ function buildBookingBody(booking: BookingRecord, equipment: EquipmentSyncConfig
   const segments = [
     `Equipment: ${equipment.name}`,
     booking.notes ? `Notes: ${booking.notes}` : null,
-    `BPAN booking id: ${booking.id}`,
+    `LabLynx booking id: ${booking.id}`,
   ].filter((segment): segment is string => Boolean(segment));
   return segments.join("\n");
 }

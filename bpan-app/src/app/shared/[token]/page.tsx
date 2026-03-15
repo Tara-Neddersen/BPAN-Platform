@@ -267,7 +267,7 @@ export default function SharedPage({
       )}
 
       <div className="text-center text-xs text-muted-foreground py-4">
-        Powered by LabLynk
+        Powered by LabLynx
       </div>
     </div>
   );

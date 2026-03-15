@@ -38,10 +38,10 @@ export async function GET(_: Request, context: { params: Promise<Record<string, 
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//LabLynk//Workspace Calendar//EN",
+    "PRODID:-//LabLynx//Workspace Calendar//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    "X-WR-CALNAME:LabLynk Workspace",
+    "X-WR-CALNAME:LabLynx Workspace",
   ];
 
   const pushEvent = (uid: string, summary: string, startDateOrDateTime: string, opts?: { end?: string | null; allDay?: boolean; description?: string | null; location?: string | null }) => {

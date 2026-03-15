@@ -206,7 +206,7 @@ export function normalizeIcloudFeedUrl(input: string) {
 export async function fetchIcloudFeedEvents(feedUrl: string) {
   const response = await fetch(normalizeIcloudFeedUrl(feedUrl), {
     headers: {
-      "user-agent": "LabLynk Calendar Importer/1.0",
+      "user-agent": "LabLynx Calendar Importer/1.0",
       accept: "text/calendar,text/plain;q=0.9,*/*;q=0.1",
     },
     cache: "no-store",

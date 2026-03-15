@@ -4,7 +4,7 @@ self.addEventListener('push', (event) => {
     payload = event.data ? event.data.json() : {};
   } catch {
     payload = {
-      title: 'LabLynk',
+      title: 'LabLynx',
       body: event.data ? event.data.text() : 'New notification',
     };
   }
@@ -45,7 +45,7 @@ self.addEventListener('push', (event) => {
     return false;
   };
 
-  const title = payload.title || 'LabLynk';
+  const title = payload.title || 'LabLynx';
   const tag = payload.tag || `lablynk-notification-${Date.now()}`;
   const options = {
     body: payload.body || 'New notification',

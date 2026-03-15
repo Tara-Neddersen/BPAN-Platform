@@ -1818,7 +1818,7 @@ export function LabsClient({
                                 ...current,
                                 [workspace.membership.lab.id]: {
                                   tone: "error",
-                                  message: "No LabLynk account matches that email address.",
+                                  message: "No LabLynx account matches that email address.",
                                 },
                               }));
                             } else {
@@ -1992,7 +1992,7 @@ export function LabsClient({
                                       ...current,
                                       [workspace.membership.lab.id]: {
                                         tone: "error",
-                                        message: "No LabLynk account matches that email address.",
+                                        message: "No LabLynx account matches that email address.",
                                       },
                                     }));
                                   }

@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true, linkId });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to pull mirror changes into BPAN" },
+      { error: err instanceof Error ? err.message : "Failed to pull mirror changes into LabLynx" },
       { status: 500 }
     );
   }

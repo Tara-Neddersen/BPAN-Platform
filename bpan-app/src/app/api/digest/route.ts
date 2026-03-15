@@ -86,7 +86,7 @@ export async function GET(request: Request) {
 
           await sendEmail({
             to: profile.email,
-            subject: `LabLynk Digest: ${totalPapers} new paper${totalPapers !== 1 ? "s" : ""} — ${displayDate}`,
+            subject: `LabLynx Digest: ${totalPapers} new paper${totalPapers !== 1 ? "s" : ""} — ${displayDate}`,
             html,
           });
 

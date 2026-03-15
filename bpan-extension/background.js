@@ -1,4 +1,4 @@
-// BPAN Research Notes — Background Service Worker
+// LabLynx Research Notes — Background Service Worker
 // Handles extension icon click → toggle sidebar
 
 chrome.action.onClicked.addListener((tab) => {
@@ -7,5 +7,5 @@ chrome.action.onClicked.addListener((tab) => {
 
 // When the extension is installed, set up defaults
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("BPAN Research Notes extension installed");
+  console.log("LabLynx Research Notes extension installed");
 });

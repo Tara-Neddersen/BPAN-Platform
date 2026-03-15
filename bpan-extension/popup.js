@@ -1,4 +1,4 @@
-// BPAN Research Notes — Popup Script
+// LabLynx Research Notes — Popup Script
 let API_BASE = "https://bpan-app.vercel.app";
 
 // Load saved API base on startup
@@ -63,7 +63,7 @@ loginBtn.addEventListener("click", async () => {
       showError(data.error || "Login failed");
     }
   } catch (err) {
-    showError("Could not connect to BPAN. Is the app running?");
+    showError("Could not connect to LabLynx. Is the app running?");
   }
 
   loginBtn.textContent = "Log in";

@@ -859,7 +859,7 @@ export function ColonyClient({
                   panelClassName="left-auto right-0 -translate-x-0"
                   text={
                     driveStatus.connected
-                      ? "Experiment results are uploaded to Google Drive automatically and organized as LabLynk / Cohort / Animal."
+                      ? "Experiment results are uploaded to Google Drive automatically and organized as LabLynx / Cohort / Animal."
                       : driveStatus.configured
                         ? "Connect Google Drive to auto-upload experiment result files."
                         : "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment to enable Drive integration."
@@ -2015,7 +2015,7 @@ export function ColonyClient({
                     {photoUploading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />}
                     Upload to Google Drive
                   </Button>
-                  <span className="text-xs text-muted-foreground">BPAN saves only the Drive link.</span>
+                  <span className="text-xs text-muted-foreground">LabLynx saves only the Drive link.</span>
                 </div>
               )}
             </div>

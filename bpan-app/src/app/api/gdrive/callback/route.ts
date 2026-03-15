@@ -26,8 +26,8 @@ export async function GET(req: NextRequest) {
     // Get the Google email
     const googleEmail = await getGoogleEmail(tokens.access_token);
 
-    // Create root folder "LabLynk" on their Drive
-    const rootFolderId = await findOrCreateFolder(tokens.access_token, "LabLynk");
+    // Create root folder "LabLynx" on their Drive
+    const rootFolderId = await findOrCreateFolder(tokens.access_token, "LabLynx");
 
     // Store tokens in database
     const supabase = createServiceClient();

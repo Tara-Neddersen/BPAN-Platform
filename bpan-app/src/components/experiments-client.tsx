@@ -922,7 +922,7 @@ function CalendarView({
         return;
       }
       toast.success(
-        `Imported ${data.imported || 0}, updated ${data.updated || 0} iCloud event${((data.imported || 0) + (data.updated || 0)) === 1 ? "" : "s"} into LabLynk`
+        `Imported ${data.imported || 0}, updated ${data.updated || 0} iCloud event${((data.imported || 0) + (data.updated || 0)) === 1 ? "" : "s"} into LabLynx`
       );
       await loadCalendarIntegrations();
       router.refresh();
@@ -1028,7 +1028,7 @@ function CalendarView({
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                Sync BPAN calendar into Google, and import external Google-only events back into BPAN.
+                Sync the LabLynx calendar into Google, and import external Google-only events back into LabLynx.
               </p>
               {googleCalendarStatus?.email && (
                 <p className="text-xs text-muted-foreground">Account: {googleCalendarStatus.email}</p>
@@ -1073,7 +1073,7 @@ function CalendarView({
                   }}
                 >
                   {syncingGoogleCalendar ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
-                  Sync BPAN calendar
+                  Sync LabLynx calendar
                 </Button>
                 <Button
                   size="sm"
@@ -1089,7 +1089,7 @@ function CalendarView({
                         toast.error(data.error || "Import failed");
                       } else {
                         toast.success(
-                          `Imported ${data.imported || 0}, updated ${data.updated || 0} Google event${((data.imported || 0) + (data.updated || 0)) === 1 ? "" : "s"} into BPAN`
+                          `Imported ${data.imported || 0}, updated ${data.updated || 0} Google event${((data.imported || 0) + (data.updated || 0)) === 1 ? "" : "s"} into LabLynx`
                         );
                         router.refresh();
                       }
@@ -1133,7 +1133,7 @@ function CalendarView({
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                Sync BPAN calendar into Outlook, and import external Outlook events back into BPAN.
+                Sync the LabLynx calendar into Outlook, and import external Outlook-only events back into LabLynx.
               </p>
               {outlookCalendarStatus?.email && (
                 <p className="text-xs text-muted-foreground">Account: {outlookCalendarStatus.email}</p>
@@ -1169,7 +1169,7 @@ function CalendarView({
                       const res = await fetch("/api/calendar/outlook/sync", { method: "POST" });
                       const data = await res.json();
                       if (!res.ok) toast.error(data.error || "Sync failed");
-                      else toast.success(`Synced ${data.synced || 0} BPAN event${(data.synced || 0) === 1 ? "" : "s"} to Outlook`);
+                      else toast.success(`Synced ${data.synced || 0} LabLynx event${(data.synced || 0) === 1 ? "" : "s"} to Outlook`);
                     } catch {
                       toast.error("Could not sync to Outlook Calendar. Please try again.");
                     } finally {
@@ -1178,7 +1178,7 @@ function CalendarView({
                   }}
                 >
                   {syncingOutlookCalendar ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
-                  Sync BPAN calendar
+                  Sync LabLynx calendar
                 </Button>
                 <Button
                   size="sm"
@@ -1194,7 +1194,7 @@ function CalendarView({
                         toast.error(data.error || "Import failed");
                       } else {
                         toast.success(
-                          `Imported ${data.imported || 0}, updated ${data.updated || 0} Outlook event${((data.imported || 0) + (data.updated || 0)) === 1 ? "" : "s"} into BPAN`
+                          `Imported ${data.imported || 0}, updated ${data.updated || 0} Outlook event${((data.imported || 0) + (data.updated || 0)) === 1 ? "" : "s"} into LabLynx`
                         );
                         router.refresh();
                       }
@@ -1233,7 +1233,7 @@ function CalendarView({
             <div className="rounded-md border bg-background p-3 space-y-2">
               <p className="text-sm font-medium">Apple / Outlook / Google (Subscribe URL)</p>
               <p className="text-xs text-muted-foreground">
-                Subscribe to one live BPAN calendar feed in Apple Calendar, Outlook, or Google Calendar.
+                Subscribe to one live LabLynx calendar feed in Apple Calendar, Outlook, or Google Calendar.
               </p>
               <div className="flex gap-2">
                 <Input readOnly value={calendarFeed?.icsUrl || ""} className="h-8 text-xs" />
@@ -1254,7 +1254,7 @@ function CalendarView({
                 Apple/Outlook use this URL for subscription sync. Google also supports subscription, but direct Google sync above gives richer event updates.
               </p>
               <p className="text-[11px] text-muted-foreground">
-                External-provider imports create LabLynk workspace events (category: external) and skip LabLynk-managed events to avoid duplicates.
+                External-provider imports create LabLynx workspace events (category: external) and skip LabLynx-managed events to avoid duplicates.
               </p>
             </div>
 
@@ -1266,7 +1266,7 @@ function CalendarView({
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                Paste public iCloud calendar links here to show those events inside LabLynk. These imports are read only.
+                Paste public iCloud calendar links here to show those events inside LabLynx. These imports are read only.
               </p>
               <div className="space-y-2">
                 <Input
@@ -2744,7 +2744,7 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                   <div>
                     <p className="text-xs font-medium">AI Fill From Protocol Text</p>
                     <p className="text-[11px] text-muted-foreground">
-                      Paste a protocol section, SOP, or methods text and BPAN will draft the title, description, and steps for you.
+                      Paste a protocol section, SOP, or methods text and LabLynx will draft the title, description, and steps for you.
                     </p>
                   </div>
                   <Button type="button" variant="outline" size="sm" onClick={autofillProtocolDraft} disabled={aiFilling}>
@@ -2832,7 +2832,7 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                     Upload to Google Drive
                   </Button>
                   <span className="text-[11px] text-muted-foreground">
-                    Files stay in your cloud storage. BPAN only saves the links.
+                    Files stay in your cloud storage. LabLynx only saves the links.
                   </span>
                 </div>
               </div>

@@ -72,7 +72,7 @@ export function renderDigestEmail(
 <head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #111; background: #fff;">
   <div style="text-align: center; padding: 20px 0; border-bottom: 1px solid #eee; margin-bottom: 24px;">
-    <h1 style="font-size: 20px; margin: 0;">LabLynk</h1>
+    <h1 style="font-size: 20px; margin: 0;">LabLynx</h1>
     <p style="color: #666; font-size: 14px; margin: 4px 0 0 0;">Daily Literature Digest &middot; ${escapeHtml(date)}</p>
   </div>
 
@@ -90,7 +90,7 @@ export function renderDigestEmail(
 
   <div style="text-align: center; padding: 20px 0; border-top: 1px solid #eee; margin-top: 24px;">
     <p style="color: #999; font-size: 12px;">
-      You're receiving this because you have digest enabled in your LabLynk settings.
+      You're receiving this because you have digest enabled in your LabLynx settings.
     </p>
   </div>
 </body>

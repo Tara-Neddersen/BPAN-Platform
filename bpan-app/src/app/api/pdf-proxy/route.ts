@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     let fetchUrl = url;
     let res = await fetch(fetchUrl, {
       headers: {
-        "User-Agent": "LabLynk/1.0 (research tool)",
+        "User-Agent": "LabLynx/1.0 (research tool)",
         Accept: "application/pdf,*/*",
       },
       redirect: "follow",
@@ -36,7 +36,7 @@ export async function GET(request: Request) {
         fetchUrl = `${fetchUrl}${separator}confirm=${confirmMatch[1]}`;
         res = await fetch(fetchUrl, {
           headers: {
-            "User-Agent": "LabLynk/1.0 (research tool)",
+            "User-Agent": "LabLynx/1.0 (research tool)",
             Accept: "application/pdf,*/*",
           },
           redirect: "follow",

@@ -11,7 +11,7 @@ const allowedHost = (() => {
 
 const config: CapacitorConfig = {
   appId: 'com.lablynk.app',
-  appName: 'LabLynk',
+  appName: 'LabLynx',
   webDir: 'public',
   server: {
     url: serverUrl,

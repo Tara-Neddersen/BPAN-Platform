@@ -15,7 +15,7 @@ export function BrandLogo({
   className,
   imageClassName,
   fallbackClassName,
-  alt = "LabLynk logo",
+  alt = "LabLynx logo",
 }: BrandLogoProps) {
   const [failed, setFailed] = useState(false);
 

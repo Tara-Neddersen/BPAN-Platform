@@ -198,9 +198,9 @@ export function Nav({ userEmail, labMemberships = [], activeLabId = null, unread
               className="h-7 w-7 shrink-0 transition-transform group-hover:scale-[1.03]"
               imageClassName="drop-shadow-[0_4px_8px_rgba(15,23,42,0.12)]"
               fallbackClassName="text-xs shadow-sm shadow-slate-900/20 group-hover:shadow-md group-hover:shadow-slate-900/25"
-              alt="LabLynk logo"
+              alt="LabLynx logo"
             />
-            <span className="truncate text-sm font-semibold tracking-tight text-slate-900">LabLynk</span>
+            <span className="truncate text-sm font-semibold tracking-tight text-slate-900">LabLynx</span>
           </Link>
 
           {userEmail && (

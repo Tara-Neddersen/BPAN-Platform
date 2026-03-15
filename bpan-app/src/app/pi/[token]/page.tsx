@@ -1862,7 +1862,7 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
                   </div>
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[11px] text-muted-foreground">
-                      Creates a real task in the main LabLynk workspace (source: PI Portal).
+                      Creates a real task in the main LabLynx workspace (source: PI Portal).
                     </p>
                     <Button
                       size="sm"
@@ -2113,7 +2113,7 @@ export default function PIPortalPage({ params }: { params: Promise<{ token: stri
       )}
 
       <div className="text-center text-xs text-slate-400 py-4">
-        Powered by LabLynk
+        Powered by LabLynx
       </div>
     </div>
     </div>

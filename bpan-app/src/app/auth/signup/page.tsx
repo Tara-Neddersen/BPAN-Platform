@@ -88,7 +88,7 @@ export default function SignupPage() {
       <div className="rounded-2xl border border-white/80 bg-white/84 p-5 shadow-[0_16px_30px_-20px_rgba(15,23,42,0.36)] backdrop-blur-xl sm:p-6">
         <div className="mb-5">
           <h2 className="text-xl font-semibold text-slate-900">Create account</h2>
-          <p className="mt-1 text-sm text-slate-600">Get started with LabLynk</p>
+          <p className="mt-1 text-sm text-slate-600">Get started with LabLynx</p>
         </div>
 
         <form onSubmit={handleSignup} className="space-y-4">

@@ -86,7 +86,7 @@ export async function POST(req: Request) {
         (analyses || []) as Analysis[],
         (figures || []) as Figure[]
       );
-      title = `BPAN Results Backup ${new Date().toISOString().slice(0, 10)}`;
+      title = `LabLynx Results Backup ${new Date().toISOString().slice(0, 10)}`;
     } else {
       const [
         { data: animals, error: animalsError },
@@ -107,7 +107,7 @@ export async function POST(req: Request) {
         (animals || []) as Animal[],
         (cohorts || []) as Cohort[]
       );
-      title = `BPAN Colony Results Backup ${new Date().toISOString().slice(0, 10)}`;
+      title = `LabLynx Colony Results Backup ${new Date().toISOString().slice(0, 10)}`;
     }
 
     const created = await createGoogleSpreadsheet(

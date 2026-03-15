@@ -21,7 +21,7 @@ export async function POST() {
 
     const uniqueTestTag = `lablynk-push-test-${Date.now()}`;
     const summary = await sendWebPushToUser(deliveryClient, user.id, {
-      title: "LabLynk test notification",
+      title: "LabLynx test notification",
       body: "Push notifications are enabled on this device.",
       url: "/notifications",
       tag: uniqueTestTag,

@@ -193,7 +193,7 @@ const SYSTEM_TRAILING_COLUMNS: ResultColumnDraft[] = [
     options: [],
     averageSourceKeys: [],
     unit: "",
-    helpText: "Uploads files to Google Drive and stores only their links in BPAN.",
+    helpText: "Uploads files to Google Drive and stores only their links in LabLynx.",
     groupKey: "files",
     sortOrder: 0,
     isSystemDefault: false,
@@ -1277,7 +1277,7 @@ export function BatteryCreationWizard({
             <div>
               <CardTitle className="text-xl">{editingBattery ? "Edit Battery" : "Guided Battery Builder"}</CardTitle>
               <CardDescription>
-                Build the full battery in one place. BPAN adds the system fields automatically so you only define the fields researchers actually use.
+                Build the full battery in one place. LabLynx adds the system fields automatically so you only define the fields researchers actually use.
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1448,7 +1448,7 @@ export function BatteryCreationWizard({
 
                     {selectedExperiment.protocolLinks.length === 0 ? (
                       <p className="text-sm text-slate-500">
-                        No protocol linked yet. If you leave this empty, BPAN will create a simple protocol automatically from the experiment name.
+                        No protocol linked yet. If you leave this empty, LabLynx will create a simple protocol automatically from the experiment name.
                       </p>
                     ) : (
                       <div className="space-y-3">
@@ -2106,7 +2106,7 @@ export function BatteryCreationWizard({
               </div>
 
               <div className="rounded-3xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
-                BPAN will automatically add the built-in Notes, Files, and URL result fields to every experiment when you save.
+                LabLynx will automatically add the built-in Notes, Files, and URL result fields to every experiment when you save.
               </div>
             </section>
           ) : null}

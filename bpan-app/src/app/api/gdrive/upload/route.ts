@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create folder structure: LabLynk / [Cohort] / [Animal]
+    // Create folder structure: LabLynx / [Cohort] / [Animal]
     const rootFolderId = tokenRow.root_folder_id;
 
     let parentFolder = rootFolderId;
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
       parentFolder = animalFolder;
     } else {
       // Create root folder if it doesn't exist
-      const root = await findOrCreateFolder(accessToken, "LabLynk");
+      const root = await findOrCreateFolder(accessToken, "LabLynx");
       const cohortFolder = await findOrCreateFolder(accessToken, cohortName, root);
       const animalFolder = await findOrCreateFolder(accessToken, animalId, cohortFolder);
       parentFolder = animalFolder;

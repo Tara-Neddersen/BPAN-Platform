@@ -1,4 +1,4 @@
-// BPAN Research Notes — Content Script
+// LabLynx Research Notes — Content Script
 // Injects sidebar + floating "Create Note" button on text selection
 
 (function () {
@@ -73,7 +73,7 @@
       <div class="bpan-header">
         <div class="bpan-logo">
           <span class="bpan-logo-icon">📝</span>
-          <span>BPAN Notes</span>
+          <span>LabLynx Notes</span>
         </div>
         <button id="bpan-close" class="bpan-icon-btn" title="Close">✕</button>
       </div>
@@ -177,7 +177,7 @@
           }
         }
       } catch (err) {
-        console.warn("BPAN: paper detection failed", err);
+        console.warn("LabLynx: paper detection failed", err);
       }
     }
 
@@ -200,7 +200,7 @@
         renderNotes();
       }
     } catch (err) {
-      console.warn("BPAN: failed to load notes", err);
+      console.warn("LabLynx: failed to load notes", err);
     }
   }
 
@@ -283,7 +283,7 @@
         hidePending();
       }
     } catch (err) {
-      console.error("BPAN: save failed", err);
+      console.error("LabLynx: save failed", err);
     }
   }
 
