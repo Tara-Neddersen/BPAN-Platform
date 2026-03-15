@@ -87,6 +87,7 @@ type ViewMode = "list" | "calendar";
 
 type WindowScheduleSettings = {
   preferredStartWeekday: string;
+  dayCount: number;
 };
 
 interface ScheduleBuilderProps {
@@ -112,6 +113,7 @@ const DEFAULT_SLOT_DRAFT: SlotDraft = {
 
 const DEFAULT_WINDOW_SETTINGS: WindowScheduleSettings = {
   preferredStartWeekday: "",
+  dayCount: 1,
 };
 
 const WEEKDAY_OPTIONS = [
@@ -403,14 +405,23 @@ function getMetadataStringValue(metadata: Record<string, unknown>, key: string) 
 function buildWindowSettingsFromDays(days: BuilderDay[], windowNames: string[]) {
   const next: Record<string, WindowScheduleSettings> = {};
   for (const windowName of windowNames) {
-    const block =
+    const windowBlocks =
       days
         .flatMap((day) => day.slots)
         .flatMap((slot) => slot.blocks)
-        .find((candidate) => getWindowNameFromMetadata(candidate.metadata) === windowName) || null;
+        .filter((candidate) => getWindowNameFromMetadata(candidate.metadata) === windowName);
+    const block = windowBlocks[0] || null;
+    const storedDayCount = block ? Number(getMetadataStringValue(block.metadata, "windowDayCount")) : null;
+    const inferredDayCount = Math.max(
+      ...days
+        .filter((day) => getVisibleDayBlocks(day, windowName).length > 0)
+        .map((day) => day.day_index),
+      1,
+    );
 
     next[windowName] = {
       preferredStartWeekday: block ? getPreferredStartWeekdayFromMetadata(block.metadata) : "",
+      dayCount: Number.isFinite(storedDayCount) && storedDayCount && storedDayCount > 0 ? storedDayCount : inferredDayCount,
     };
   }
 
@@ -682,6 +693,112 @@ export function ScheduleBuilder({
     }));
   };
 
+  const ensureDayRows = (days: BuilderDay[], totalCount: number, withDefaultSlots = false) => {
+    const sorted = [...days].sort((a, b) => a.day_index - b.day_index);
+    const byIndex = new Map(sorted.map((day) => [day.day_index, day]));
+    const next: BuilderDay[] = [];
+
+    for (let index = 1; index <= totalCount; index += 1) {
+      const existing = byIndex.get(index);
+      if (existing) {
+        next.push(existing);
+        continue;
+      }
+
+      next.push(
+        withDefaultSlots
+          ? createDefaultDay({ day_index: index, sort_order: index - 1 })
+          : createEmptyDay(index, { sort_order: index - 1 }),
+      );
+    }
+
+    return next;
+  };
+
+  const shiftWindowBlocksFromDay = (days: BuilderDay[], windowName: string, startDayIndex: number, offset: number) => {
+    if (!windowName || offset === 0) {
+      return days;
+    }
+
+    const moved = new Map<
+      number,
+      Array<{
+        slotKind: PlatformSlotKind;
+        label: string;
+        startTime: string;
+        block: BuilderBlock;
+      }>
+    >();
+
+    const stripped = days.map((day) => ({
+      ...day,
+      slots: day.slots.map((slot) => {
+        const keptBlocks: BuilderBlock[] = [];
+
+        for (const block of slot.blocks) {
+          if (day.day_index >= startDayIndex && getWindowNameFromMetadata(block.metadata) === windowName) {
+            const targetDayIndex = day.day_index + offset;
+            const bucket = moved.get(targetDayIndex) || [];
+            bucket.push({
+              slotKind: slot.slot_kind,
+              label: slot.label,
+              startTime: slot.start_time,
+              block,
+            });
+            moved.set(targetDayIndex, bucket);
+          } else {
+            keptBlocks.push(block);
+          }
+        }
+
+        return {
+          ...slot,
+          blocks: keptBlocks,
+        };
+      }),
+    }));
+
+    return stripped.map((day) => {
+      const incoming = moved.get(day.day_index);
+      if (!incoming || incoming.length === 0) {
+        return day;
+      }
+
+      const slots = [...day.slots];
+
+      for (const entry of incoming) {
+        const existingSlotIndex = slots.findIndex(
+          (slot) =>
+            slot.slot_kind === entry.slotKind &&
+            slot.label === entry.label &&
+            slot.start_time === entry.startTime,
+        );
+
+        if (existingSlotIndex === -1) {
+          slots.push(
+            createDefaultSlot(entry.slotKind, {
+              label: entry.label,
+              start_time: entry.startTime,
+              blocks: [entry.block],
+              sort_order: slots.length,
+            }),
+          );
+          continue;
+        }
+
+        slots[existingSlotIndex] = {
+          ...slots[existingSlotIndex],
+          blocks: [...slots[existingSlotIndex].blocks, entry.block],
+        };
+      }
+
+      return {
+        ...day,
+        slots,
+      };
+    });
+  };
+
   const updateBlocksForWindow = (
     windowName: string,
     updater: (block: BuilderBlock) => BuilderBlock,
@@ -723,17 +840,32 @@ export function ScheduleBuilder({
       metadata: {
         ...block.metadata,
         preferredStartWeekday: nextSettings.preferredStartWeekday || undefined,
+        windowDayCount: String(nextSettings.dayCount),
       },
     }));
   };
 
   const addDay = () => {
+    if (activeWindowName) {
+      const nextDayCount = activeWindowSettings.dayCount + 1;
+      updateWindowSettings(activeWindowName, { dayCount: nextDayCount });
+      updateDays((current) => ensureDayRows(current, Math.max(current.length, nextDayCount), true));
+      return;
+    }
+
     const nextDay = createDefaultDay({ day_index: nextDayIndex(draft.days) });
     updateDays((current) => [...current, nextDay]);
     setDayExpanded(nextDay.id, true);
   };
 
   const addEmptyDay = () => {
+    if (activeWindowName) {
+      const nextDayCount = activeWindowSettings.dayCount + 1;
+      updateWindowSettings(activeWindowName, { dayCount: nextDayCount });
+      updateDays((current) => ensureDayRows(current, Math.max(current.length, nextDayCount), false));
+      return;
+    }
+
     const nextDay = createEmptyDay(nextDayIndex(draft.days));
     updateDays((current) => [...current, nextDay]);
     setDayExpanded(nextDay.id, true);
@@ -741,6 +873,24 @@ export function ScheduleBuilder({
 
   const insertGapDaysAfter = (dayId: string, count: number) => {
     if (count <= 0) {
+      return;
+    }
+
+    if (activeWindowName) {
+      const sourceDay = draft.days.find((day) => day.id === dayId);
+      if (!sourceDay) {
+        return;
+      }
+      const nextDayCount = activeWindowSettings.dayCount + count;
+      updateWindowSettings(activeWindowName, { dayCount: nextDayCount });
+      updateDays((current) =>
+        shiftWindowBlocksFromDay(
+          ensureDayRows(current, Math.max(current.length, nextDayCount), false),
+          activeWindowName,
+          sourceDay.day_index + 1,
+          count,
+        ),
+      );
       return;
     }
 
@@ -773,6 +923,24 @@ export function ScheduleBuilder({
   };
 
   const insertWorkDayAfter = (dayId: string) => {
+    if (activeWindowName) {
+      const sourceDay = draft.days.find((day) => day.id === dayId);
+      if (!sourceDay) {
+        return;
+      }
+      const nextDayCount = activeWindowSettings.dayCount + 1;
+      updateWindowSettings(activeWindowName, { dayCount: nextDayCount });
+      updateDays((current) =>
+        shiftWindowBlocksFromDay(
+          ensureDayRows(current, Math.max(current.length, nextDayCount), true),
+          activeWindowName,
+          sourceDay.day_index + 1,
+          1,
+        ),
+      );
+      return;
+    }
+
     const insertedDayIds: string[] = [];
     updateDays((current) => {
       const dayIndex = current.findIndex((day) => day.id === dayId);
@@ -1217,6 +1385,16 @@ export function ScheduleBuilder({
     });
   };
 
+  const displayedDays = useMemo(() => {
+    if (!activeWindowName) {
+      return draft.days;
+    }
+
+    return ensureDayRows(draft.days, activeWindowSettings.dayCount, false).filter(
+      (day) => day.day_index <= activeWindowSettings.dayCount,
+    );
+  }, [activeWindowName, activeWindowSettings.dayCount, draft.days]);
+
   const calendarWeeks = useMemo(() => {
     const startIndex = Math.max(
       0,
@@ -1224,7 +1402,7 @@ export function ScheduleBuilder({
     );
     const weeks: Array<Array<BuilderDay | null>> = [];
 
-    for (const day of draft.days) {
+    for (const day of displayedDays) {
       const zeroBasedDay = Math.max(day.day_index - 1, 0);
       const absoluteIndex = startIndex + zeroBasedDay;
       const weekIndex = Math.floor(absoluteIndex / 7);
@@ -1236,11 +1414,11 @@ export function ScheduleBuilder({
     }
 
     return weeks.length > 0 ? weeks : [Array.from({ length: 7 }, () => null)];
-  }, [activeWindowSettings.preferredStartWeekday, draft.days]);
+  }, [activeWindowSettings.preferredStartWeekday, displayedDays]);
   const resolvedCalendarDayId =
-    draft.days.some((day) => day.id === selectedCalendarDayId) ? selectedCalendarDayId : (draft.days[0]?.id || "");
+    displayedDays.some((day) => day.id === selectedCalendarDayId) ? selectedCalendarDayId : (displayedDays[0]?.id || "");
   const selectedCalendarDay =
-    draft.days.find((day) => day.id === resolvedCalendarDayId) || draft.days[0] || null;
+    displayedDays.find((day) => day.id === resolvedCalendarDayId) || displayedDays[0] || null;
 
   const renderDayCard = (day: BuilderDay) => (
     <Card
@@ -1270,16 +1448,18 @@ export function ScheduleBuilder({
             <div className="min-w-0">
               <CardTitle className="text-base">Day {day.day_index}</CardTitle>
               <p className="truncate text-sm text-muted-foreground">
-                {getDaySummary(
-                  {
-                    ...day,
-                    slots: day.slots.map((slot) => ({
+              {getDaySummary(
+                {
+                  ...day,
+                  slots: day.slots
+                    .map((slot) => ({
                       ...slot,
                       blocks: slot.blocks.filter((block) => blockMatchesWindow(block, activeWindowName)),
-                    })),
-                  },
-                  templateTitleById,
-                )}
+                    }))
+                    .filter((slot) => !activeWindowName || slot.blocks.length > 0),
+                },
+                templateTitleById,
+              )}
               </p>
             </div>
             {expandedDays[day.id] ? (
@@ -1380,7 +1560,9 @@ export function ScheduleBuilder({
           </div>
 
           <div className="space-y-3">
-            {day.slots.map((slot) => {
+            {day.slots
+              .filter((slot) => !activeWindowName || getVisibleDayBlocks({ ...day, slots: [slot] }, activeWindowName).length > 0)
+              .map((slot) => {
               const slotDraft = slotDrafts[slot.id] ?? DEFAULT_SLOT_DRAFT;
               const visibleBlocks = slot.blocks.filter((block) => blockMatchesWindow(block, activeWindowName));
 
@@ -1873,7 +2055,7 @@ export function ScheduleBuilder({
           ) : null}
         </div>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-2">{draft.days.map((day) => renderDayCard(day))}</div>
+        <div className="grid gap-4 xl:grid-cols-2">{displayedDays.map((day) => renderDayCard(day))}</div>
       )}
     </div>
   );
