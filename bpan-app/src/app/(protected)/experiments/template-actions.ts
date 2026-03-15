@@ -67,10 +67,27 @@ function normalizeProtocolInputs(value: unknown): TemplateProtocolInput[] {
     return normalized;
   }
 
-  const explicitDefaultIndex = normalized.findIndex((item) => item.isDefault);
+  const deduped = normalized.reduce<TemplateProtocolInput[]>((list, item) => {
+    const existingIndex = list.findIndex((entry) => entry.protocolId === item.protocolId);
+    if (existingIndex === -1) {
+      list.push(item);
+      return list;
+    }
 
-  return normalized.map((item, index) => ({
+    const existing = list[existingIndex];
+    list[existingIndex] = {
+      ...existing,
+      isDefault: existing.isDefault || item.isDefault,
+      notes: existing.notes || item.notes,
+    };
+    return list;
+  }, []);
+
+  const explicitDefaultIndex = deduped.findIndex((item) => item.isDefault);
+
+  return deduped.map((item, index) => ({
     ...item,
+    sortOrder: index,
     isDefault: explicitDefaultIndex >= 0 ? index === explicitDefaultIndex : index === 0,
   }));
 }
