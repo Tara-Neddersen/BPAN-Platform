@@ -64,7 +64,6 @@ type DragPayload =
 type DayDraft = {
   customLabel: string;
   exactTime: string;
-  gapDays: string;
 };
 
 type SlotDraft = {
@@ -84,7 +83,6 @@ interface ScheduleBuilderProps {
 const DEFAULT_DAY_DRAFT: DayDraft = {
   customLabel: "",
   exactTime: "",
-  gapDays: "2",
 };
 
 const DEFAULT_SLOT_DRAFT: SlotDraft = {
@@ -431,7 +429,6 @@ export function ScheduleBuilder({
       shifted.splice(dayIndex + 1, 0, ...gapDays);
       return shifted;
     });
-    resetDayDraft(dayId, ["gapDays"]);
   };
 
   const deleteDay = (dayId: string) => {
@@ -446,12 +443,6 @@ export function ScheduleBuilder({
   const updateDayLabel = (dayId: string, label: string) => {
     updateDays((current) =>
       current.map((day) => (day.id === dayId ? { ...day, label } : day)),
-    );
-  };
-
-  const updateDayIndex = (dayId: string, dayIndex: number) => {
-    updateDays((current) =>
-      current.map((day) => (day.id === dayId ? { ...day, day_index: Math.max(1, dayIndex || 1) } : day)),
     );
   };
 
@@ -918,7 +909,7 @@ export function ScheduleBuilder({
         <div>
           <h2 className="text-lg font-semibold">Relative Schedule Builder</h2>
           <p className="text-sm text-muted-foreground">
-            Define real relative days here. If you need weekends or no-work days, insert empty days so later days keep their true day numbers.
+            Build the battery day by day. If you do not work on certain days, add empty days so the later experiments stay on the right relative day.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -958,7 +949,7 @@ export function ScheduleBuilder({
                   <div>
                     <CardTitle className="text-base">Day {day.day_index}</CardTitle>
                     <p className="text-xs text-muted-foreground">
-                      {day.slots.length === 0 ? "No-work day" : "Drag to reorder cards"}
+                      {day.slots.length === 0 ? "Empty day" : "Drag to reorder days"}
                     </p>
                   </div>
                 </div>
@@ -972,36 +963,15 @@ export function ScheduleBuilder({
               <Input
                 value={day.label}
                 onChange={(event) => updateDayLabel(day.id, event.target.value)}
-                placeholder="Optional label override (e.g. Baseline, Post-op Day 1)"
+                placeholder="Optional note for this day"
               />
-              <div className="grid gap-3 md:grid-cols-[140px_minmax(0,1fr)]">
-                <div className="space-y-2">
-                  <p className="text-sm font-medium">Actual Day Number</p>
-                  <Input
-                    type="number"
-                    min={1}
-                    value={day.day_index}
-                    onChange={(event) => updateDayIndex(day.id, Number(event.target.value) || 1)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium">Insert Empty Days After</p>
-                  <div className="flex gap-2">
-                    <Input
-                      type="number"
-                      min={1}
-                      value={dayDrafts[day.id]?.gapDays ?? DEFAULT_DAY_DRAFT.gapDays}
-                      onChange={(event) => updateDayDraft(day.id, { gapDays: event.target.value })}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => insertGapDaysAfter(day.id, Math.max(1, Number(dayDrafts[day.id]?.gapDays || DEFAULT_DAY_DRAFT.gapDays) || 1))}
-                    >
-                      Insert
-                    </Button>
-                  </div>
-                </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 1)}>
+                  Add Empty Day After
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 2)}>
+                  Add Weekend After
+                </Button>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1114,7 +1084,7 @@ export function ScheduleBuilder({
                           onChange={(event) => updateSlotDraft(slot.id, { blockTemplateId: event.target.value })}
                           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                         >
-                          <option value="">Select template block</option>
+                          <option value="">Choose experiment</option>
                           {experimentTemplates.map((template) => (
                             <option key={template.id} value={template.id}>
                               {template.title}
@@ -1124,7 +1094,7 @@ export function ScheduleBuilder({
                         <Input
                           value={slotDraft.titleOverride}
                           onChange={(event) => updateSlotDraft(slot.id, { titleOverride: event.target.value })}
-                          placeholder="Optional title override"
+                          placeholder="Optional custom name"
                         />
                         <Button
                           type="button"
@@ -1132,14 +1102,9 @@ export function ScheduleBuilder({
                           onClick={() => addBlock(day.id, slot.id)}
                           disabled={!slotDraft.blockTemplateId}
                         >
-                          Add Block
+                          Add
                         </Button>
                       </div>
-
-                      <p className="text-xs text-muted-foreground">
-                        Blocks now persist as `scheduled_blocks`, so each block must reference an existing
-                        experiment template. Repeats are stored as repeated rows with an optional `repeat_key`.
-                      </p>
 
                       <div
                         className={cn(
