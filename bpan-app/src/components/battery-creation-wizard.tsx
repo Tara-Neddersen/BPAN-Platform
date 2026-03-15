@@ -693,6 +693,8 @@ export function BatteryCreationWizard({
   const [timepointWindows, setTimepointWindows] = useState<TimepointWindowDraft[]>([createEmptyWindow()]);
   const [layoutItems, setLayoutItems] = useState<LayoutItemDraft[]>([]);
   const [selectedLayoutWindowId, setSelectedLayoutWindowId] = useState<string>("");
+  const [showCopyLayoutTargets, setShowCopyLayoutTargets] = useState(false);
+  const [copyLayoutTargetIds, setCopyLayoutTargetIds] = useState<string[]>([]);
   const [editingBattery, setEditingBattery] = useState<EditingBatteryState | null>(null);
   const [isPending, startTransition] = useTransition();
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -733,6 +735,10 @@ export function BatteryCreationWizard({
   const activeLayoutItems = useMemo(
     () => layoutItems.filter((item) => item.timepointWindowId === activeLayoutWindow?.id),
     [activeLayoutWindow?.id, layoutItems],
+  );
+  const availableCopyTargets = useMemo(
+    () => timepointWindows.filter((window) => window.id !== activeLayoutWindow?.id),
+    [activeLayoutWindow?.id, timepointWindows],
   );
 
   const canMoveNext =
@@ -972,6 +978,8 @@ export function BatteryCreationWizard({
     setTimepointWindows([createEmptyWindow()]);
     setLayoutItems([]);
     setSelectedLayoutWindowId("");
+    setShowCopyLayoutTargets(false);
+    setCopyLayoutTargetIds([]);
     setEditingBattery(null);
     setStepIndex(0);
   };
@@ -985,8 +993,37 @@ export function BatteryCreationWizard({
     setTimepointWindows(draft.timepointWindows);
     setLayoutItems(draft.layoutItems);
     setSelectedLayoutWindowId(draft.timepointWindows[0]?.id || "");
+    setShowCopyLayoutTargets(false);
+    setCopyLayoutTargetIds([]);
     setEditingBattery(draft.editingState);
     setStepIndex(1);
+  };
+
+  const cloneLayoutItemToWindow = (item: LayoutItemDraft, windowId: string): LayoutItemDraft => ({
+    ...item,
+    id: makeId("layout"),
+    timepointWindowId: windowId,
+  });
+
+  const applyLayoutToSelectedWindows = () => {
+    if (!activeLayoutWindow || copyLayoutTargetIds.length === 0) return;
+
+    setLayoutItems((current) => {
+      const sourceItems = current
+        .filter((item) => item.timepointWindowId === activeLayoutWindow.id)
+        .map((item) => ({ ...item }));
+
+      const withoutTargets = current.filter((item) => !copyLayoutTargetIds.includes(item.timepointWindowId));
+      const copiedItems = copyLayoutTargetIds.flatMap((windowId) =>
+        sourceItems.map((item) => cloneLayoutItemToWindow(item, windowId)),
+      );
+
+      return [...withoutTargets, ...copiedItems];
+    });
+
+    setShowCopyLayoutTargets(false);
+    setCopyLayoutTargetIds([]);
+    toast.success("Layout copied to selected timepoints.");
   };
 
   const saveBattery = () => {
@@ -1857,10 +1894,64 @@ export function BatteryCreationWizard({
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-sm font-semibold text-slate-900">{activeLayoutWindow?.name || "Select a timepoint window"}</p>
-                <p className="text-xs text-slate-600">
-                  Build the battery layout specifically for this timepoint window. Other windows can have a different schedule.
-                </p>
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{activeLayoutWindow?.name || "Select a timepoint window"}</p>
+                    <p className="text-xs text-slate-600">
+                      Build the battery layout specifically for this timepoint window. Other windows can have a different schedule.
+                    </p>
+                  </div>
+                  {availableCopyTargets.length > 0 ? (
+                    <div className="space-y-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowCopyLayoutTargets((current) => !current)}
+                      >
+                        {showCopyLayoutTargets ? "Cancel Copy" : "Apply To Other Timepoints"}
+                      </Button>
+                      {showCopyLayoutTargets ? (
+                        <div className="min-w-[260px] rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                          <p className="text-xs font-semibold text-slate-900">Copy this layout to:</p>
+                          <div className="mt-2 space-y-2">
+                            {availableCopyTargets.map((window) => {
+                              const selected = copyLayoutTargetIds.includes(window.id);
+                              return (
+                                <label key={window.id} className="flex items-center gap-2 text-sm text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    checked={selected}
+                                    onChange={() =>
+                                      setCopyLayoutTargetIds((current) =>
+                                        selected
+                                          ? current.filter((id) => id !== window.id)
+                                          : [...current, window.id],
+                                      )
+                                    }
+                                  />
+                                  <span>{window.name || "Untitled window"}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                          <p className="mt-2 text-[11px] text-slate-500">
+                            This replaces the current layout in the selected timepoints.
+                          </p>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="mt-3"
+                            onClick={applyLayoutToSelectedWindows}
+                            disabled={copyLayoutTargetIds.length === 0}
+                          >
+                            Copy Layout
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               {activeLayoutItems.length === 0 ? (
