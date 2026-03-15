@@ -64,6 +64,7 @@ type DragPayload =
 type DayDraft = {
   customLabel: string;
   exactTime: string;
+  gapDays: string;
 };
 
 type SlotDraft = {
@@ -83,6 +84,7 @@ interface ScheduleBuilderProps {
 const DEFAULT_DAY_DRAFT: DayDraft = {
   customLabel: "",
   exactTime: "",
+  gapDays: "2",
 };
 
 const DEFAULT_SLOT_DRAFT: SlotDraft = {
@@ -134,6 +136,17 @@ function createDefaultDay(overrides?: Partial<BuilderDay>): BuilderDay {
   };
 }
 
+function createEmptyDay(dayIndex: number, overrides?: Partial<BuilderDay>): BuilderDay {
+  return {
+    id: createLocalId("day"),
+    day_index: dayIndex,
+    label: "",
+    sort_order: 0,
+    slots: [],
+    ...overrides,
+  };
+}
+
 function reorder<T>(items: T[], fromIndex: number, toIndex: number) {
   if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
     return items;
@@ -148,7 +161,6 @@ function reorder<T>(items: T[], fromIndex: number, toIndex: number) {
 function normalizeDays(days: BuilderDay[]) {
   return days.map((day, dayIndex) => ({
     ...day,
-    day_index: dayIndex + 1,
     sort_order: dayIndex,
     slots: day.slots.map((slot, slotIndex) => ({
       ...slot,
@@ -270,6 +282,10 @@ function buildRepeatKey(templateId: string) {
   return `repeat-${templateId}-${createLocalId("group")}`;
 }
 
+function nextDayIndex(days: BuilderDay[]) {
+  return Math.max(...days.map((day) => day.day_index), 0) + 1;
+}
+
 export function ScheduleBuilder({
   experimentTemplates,
   scheduleTemplates,
@@ -385,7 +401,37 @@ export function ScheduleBuilder({
   };
 
   const addDay = () => {
-    updateDays((current) => [...current, createDefaultDay()]);
+    updateDays((current) => [...current, createDefaultDay({ day_index: nextDayIndex(current) })]);
+  };
+
+  const addEmptyDay = () => {
+    updateDays((current) => [...current, createEmptyDay(nextDayIndex(current))]);
+  };
+
+  const insertGapDaysAfter = (dayId: string, count: number) => {
+    if (count <= 0) {
+      return;
+    }
+
+    updateDays((current) => {
+      const dayIndex = current.findIndex((day) => day.id === dayId);
+      if (dayIndex === -1) {
+        return current;
+      }
+
+      const baseDayIndex = current[dayIndex].day_index;
+      const shifted = current.map((day) =>
+        day.day_index > baseDayIndex
+          ? { ...day, day_index: day.day_index + count }
+          : day,
+      );
+      const gapDays = Array.from({ length: count }, (_, offset) =>
+        createEmptyDay(baseDayIndex + offset + 1),
+      );
+      shifted.splice(dayIndex + 1, 0, ...gapDays);
+      return shifted;
+    });
+    resetDayDraft(dayId, ["gapDays"]);
   };
 
   const deleteDay = (dayId: string) => {
@@ -400,6 +446,12 @@ export function ScheduleBuilder({
   const updateDayLabel = (dayId: string, label: string) => {
     updateDays((current) =>
       current.map((day) => (day.id === dayId ? { ...day, label } : day)),
+    );
+  };
+
+  const updateDayIndex = (dayId: string, dayIndex: number) => {
+    updateDays((current) =>
+      current.map((day) => (day.id === dayId ? { ...day, day_index: Math.max(1, dayIndex || 1) } : day)),
     );
   };
 
@@ -431,7 +483,7 @@ export function ScheduleBuilder({
   const deleteSlot = (dayId: string, slotId: string) => {
     updateDays((current) =>
       current.map((day) => {
-        if (day.id !== dayId || day.slots.length === 1) {
+        if (day.id !== dayId) {
           return day;
         }
 
@@ -866,13 +918,19 @@ export function ScheduleBuilder({
         <div>
           <h2 className="text-lg font-semibold">Relative Schedule Builder</h2>
           <p className="text-sm text-muted-foreground">
-            Reorder days, slots, and blocks, then save the schedule against the selected template.
+            Define real relative days here. If you need weekends or no-work days, insert empty days so later days keep their true day numbers.
           </p>
         </div>
-        <Button onClick={addDay} className="gap-2">
-          <Plus className="h-4 w-4" />
-          Add Day
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={addDay} className="gap-2">
+            <Plus className="h-4 w-4" />
+            Add Work Day
+          </Button>
+          <Button type="button" variant="outline" onClick={addEmptyDay} className="gap-2">
+            <Plus className="h-4 w-4" />
+            Add Empty Day
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -899,7 +957,9 @@ export function ScheduleBuilder({
                   </div>
                   <div>
                     <CardTitle className="text-base">Day {day.day_index}</CardTitle>
-                    <p className="text-xs text-muted-foreground">Drag to reorder days</p>
+                    <p className="text-xs text-muted-foreground">
+                      {day.slots.length === 0 ? "No-work day" : "Drag to reorder cards"}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -914,8 +974,43 @@ export function ScheduleBuilder({
                 onChange={(event) => updateDayLabel(day.id, event.target.value)}
                 placeholder="Optional label override (e.g. Baseline, Post-op Day 1)"
               />
+              <div className="grid gap-3 md:grid-cols-[140px_minmax(0,1fr)]">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Actual Day Number</p>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={day.day_index}
+                    onChange={(event) => updateDayIndex(day.id, Number(event.target.value) || 1)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Insert Empty Days After</p>
+                  <div className="flex gap-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      value={dayDrafts[day.id]?.gapDays ?? DEFAULT_DAY_DRAFT.gapDays}
+                      onChange={(event) => updateDayDraft(day.id, { gapDays: event.target.value })}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => insertGapDaysAfter(day.id, Math.max(1, Number(dayDrafts[day.id]?.gapDays || DEFAULT_DAY_DRAFT.gapDays) || 1))}
+                    >
+                      Insert
+                    </Button>
+                  </div>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {day.slots.length === 0 ? (
+                <div className="rounded-lg border border-dashed bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
+                  This is an intentional empty day. Keep it to preserve calendar spacing, or add slots if work should happen here.
+                </div>
+              ) : null}
+
               <div className="flex flex-wrap gap-2 rounded-lg border bg-muted/20 p-3">
                 <Button type="button" variant="secondary" size="sm" onClick={() => addSlot(day.id, "am")}>
                   Add AM

@@ -209,6 +209,22 @@ function normalizeSlotLabelForKind(slotKind: PlatformSlotKind, value: string | n
   return null;
 }
 
+function snapToPreviousMonday(isoDate: string) {
+  if (!isoDate) {
+    return "";
+  }
+
+  const date = new Date(`${isoDate}T12:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return isoDate;
+  }
+
+  const weekday = date.getDay();
+  const offset = weekday === 0 ? 6 : weekday - 1;
+  date.setDate(date.getDate() - offset);
+  return date.toISOString().slice(0, 10);
+}
+
 export function RunExecutionBuilder({
   experimentTemplates,
   scheduleTemplates,
@@ -248,6 +264,7 @@ export function RunExecutionBuilder({
     selected_protocol_id: "",
     status: "planned" as PlatformRunStatus,
     start_anchor_date: "",
+    start_alignment: "exact" as "exact" | "previous_monday",
     assignment: {
       scope_type: "study" as PlatformAssignmentScope,
       study_id: "",
@@ -535,7 +552,12 @@ export function RunExecutionBuilder({
         fd.append("description", createDraft.description.trim());
         fd.append("selected_protocol_id", createDraft.selected_protocol_id);
         fd.append("status", createDraft.status);
-        fd.append("start_anchor_date", createDraft.start_anchor_date);
+        fd.append(
+          "start_anchor_date",
+          createDraft.start_alignment === "previous_monday"
+            ? snapToPreviousMonday(createDraft.start_anchor_date)
+            : createDraft.start_anchor_date,
+        );
         fd.append(
           "assignment",
           JSON.stringify({
@@ -557,6 +579,7 @@ export function RunExecutionBuilder({
           name: "",
           description: "",
           start_anchor_date: "",
+          start_alignment: "exact",
         }));
         toast.success(
           createDraft.schedule_template_id
@@ -1021,6 +1044,19 @@ export function RunExecutionBuilder({
               }
             />
             <select
+              value={createDraft.start_alignment}
+              onChange={(event) =>
+                setCreateDraft((current) => ({
+                  ...current,
+                  start_alignment: event.target.value as "exact" | "previous_monday",
+                }))
+              }
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="exact">Start on exact selected day</option>
+              <option value="previous_monday">Start on previous Monday</option>
+            </select>
+            <select
               value={createDraft.status}
               onChange={(event) =>
                 setCreateDraft((current) => ({ ...current, status: event.target.value as PlatformRunStatus }))
@@ -1034,6 +1070,10 @@ export function RunExecutionBuilder({
               ))}
             </select>
           </div>
+
+          <p className="text-xs text-muted-foreground">
+            The Monday option is optional. When selected, day 1 snaps back to the Monday of the chosen week, which is useful when you want batteries to start on a work week instead of the exact target-age day.
+          </p>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[180px_minmax(0,1fr)_auto]">
             <select

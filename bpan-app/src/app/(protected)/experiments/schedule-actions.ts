@@ -155,7 +155,7 @@ function normalizeDayInputs(value: unknown): ScheduleDayInput[] {
     .filter((item): item is ScheduleDayInput => Boolean(item))
     .map((item, index) => ({
       ...item,
-      day_index: index + 1,
+      day_index: item.day_index > 0 ? item.day_index : index + 1,
       sort_order: index,
       slots: item.slots.map((slot, slotIndex) => ({
         ...slot,
