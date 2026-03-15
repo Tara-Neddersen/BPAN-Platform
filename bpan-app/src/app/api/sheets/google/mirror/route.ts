@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createManagedGoogleSheetMirrorForUser } from "@/lib/google-sheet-mirror";
+import { getGoogleSheetsAuthUrl, getGoogleSheetsReconnectMessage } from "@/lib/google-sheets";
 
 export async function POST(req: Request) {
   try {
@@ -21,8 +22,24 @@ export async function POST(req: Request) {
       spreadsheetUrl: created.spreadsheetUrl,
     });
   } catch (err) {
+    const reconnectMessage = getGoogleSheetsReconnectMessage();
+    const message = err instanceof Error ? err.message : "Failed to create live sync sheet";
+    if (message === reconnectMessage) {
+      const supabase = await createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      return NextResponse.json(
+        {
+          error: reconnectMessage,
+          needsReconnect: true,
+          authUrl: user ? getGoogleSheetsAuthUrl(user.id) : null,
+        },
+        { status: 409 }
+      );
+    }
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to create live sync sheet" },
+      { error: message },
       { status: 500 }
     );
   }

@@ -769,6 +769,11 @@ export function ColonyResultsTab({
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (json.needsReconnect && json.authUrl) {
+          toast.error("Google Sheets needs to be reconnected. Opening Google authorization again.");
+          window.location.href = String(json.authUrl);
+          return;
+        }
         toast.error(json.error || "Failed to create live sync Google Sheet.");
         return;
       }

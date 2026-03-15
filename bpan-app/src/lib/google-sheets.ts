@@ -1,7 +1,14 @@
-const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+import type { createClient as createSupabaseClient } from "@/lib/supabase/server";
+
+const SHEETS_SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/drive.file",
+];
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_SHEETS_RECONNECT_MESSAGE = "Google Sheets needs to be reconnected. Please connect Google Sheets again.";
+
+type GoogleSheetsSupabaseLike = Awaited<ReturnType<typeof createSupabaseClient>>;
 
 function getBaseUrl() {
   return process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
@@ -21,7 +28,7 @@ export function getGoogleSheetsAuthUrl(state: string) {
     client_id: process.env.GOOGLE_CLIENT_ID,
     redirect_uri: getGoogleSheetsRedirectUri(),
     response_type: "code",
-    scope: SHEETS_SCOPE,
+    scope: SHEETS_SCOPES.join(" "),
     access_type: "offline",
     prompt: "consent",
     state,
@@ -79,7 +86,7 @@ export function getGoogleSheetsReconnectMessage() {
   return GOOGLE_SHEETS_RECONNECT_MESSAGE;
 }
 
-async function invalidateGoogleSheetsToken(supabase: any, userId: string) {
+async function invalidateGoogleSheetsToken(supabase: GoogleSheetsSupabaseLike, userId: string) {
   try {
     await supabase.from("google_sheets_tokens").delete().eq("user_id", userId);
   } catch {
@@ -106,7 +113,7 @@ export async function validateGoogleSheetsAccess(accessToken: string) {
 }
 
 export async function getUsableGoogleSheetsAccessToken(
-  supabase: any,
+  supabase: GoogleSheetsSupabaseLike,
   userId: string
 ) {
   const { data: tokenRow, error: tokenErr } = await supabase
@@ -312,7 +319,11 @@ export async function createGoogleSpreadsheet(
   });
 
   if (!res.ok) {
-    throw new Error(`Failed to create spreadsheet: ${await res.text()}`);
+    const text = await res.text();
+    if (shouldReconnectGoogleSheets(text) || /PERMISSION_DENIED|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(text)) {
+      throw new Error(GOOGLE_SHEETS_RECONNECT_MESSAGE);
+    }
+    throw new Error(`Failed to create spreadsheet: ${text}`);
   }
 
   const payload = (await res.json()) as { spreadsheetId: string; spreadsheetUrl?: string | null };
