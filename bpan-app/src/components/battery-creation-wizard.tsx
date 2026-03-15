@@ -646,6 +646,7 @@ export function BatteryCreationWizard({
   const [editingBattery, setEditingBattery] = useState<EditingBatteryState | null>(null);
   const [isPending, startTransition] = useTransition();
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [openChoiceEditors, setOpenChoiceEditors] = useState<Record<string, boolean>>({});
 
   const currentStep = WIZARD_STEPS[stepIndex];
   const selectedExperiment =
@@ -694,6 +695,13 @@ export function BatteryCreationWizard({
     setExperimentDrafts((current) =>
       current.map((experiment) => (experiment.id === experimentId ? { ...experiment, ...patch } : experiment)),
     );
+  };
+
+  const setChoiceEditorOpen = (editorKey: string, isOpen: boolean) => {
+    setOpenChoiceEditors((current) => ({
+      ...current,
+      [editorKey]: isOpen,
+    }));
   };
 
   const addProtocolLink = (experimentId: string, protocolId: string) => {
@@ -1472,6 +1480,9 @@ export function BatteryCreationWizard({
                                                     column: {
                                                       ...column.column,
                                                       columnType: event.target.value as ColumnType,
+                                                      options: isChoiceColumnType(event.target.value as ColumnType)
+                                                        ? column.column.options
+                                                        : [],
                                                     },
                                                   }
                                                 : column,
@@ -1485,32 +1496,51 @@ export function BatteryCreationWizard({
                                         ))}
                                       </select>
                                     </div>
-                                    <div className="space-y-2">
-                                      <Label>Options</Label>
-                                      <Input
-                                        value={entry.column.options.join(", ")}
-                                        onChange={(event) =>
-                                          updateExperimentDraft(selectedExperiment.id, {
-                                            extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
-                                              columnIndex === index
-                                                ? {
-                                                    ...column,
-                                                    column: {
-                                                      ...column.column,
-                                                      options: event.target.value
-                                                        .split(",")
-                                                        .map((item) => item.trim())
-                                                        .filter(Boolean),
-                                                    },
-                                                  }
-                                                : column,
-                                            ),
-                                          })
-                                        }
-                                        placeholder={isChoiceColumnType(entry.column.columnType) ? "Comma-separated choices" : "Used for select / multi select"}
-                                        disabled={!isChoiceColumnType(entry.column.columnType)}
-                                      />
-                                    </div>
+                                    {isChoiceColumnType(entry.column.columnType) ? (() => {
+                                      const editorKey = `extract:${selectedExperiment.id}:${entry.id}`;
+                                      const editorState = openChoiceEditors[editorKey];
+                                      const isOpen = editorState ?? entry.column.options.length > 0;
+                                      return (
+                                        <div className="space-y-2">
+                                          <Label>Choices</Label>
+                                          {isOpen ? (
+                                            <>
+                                              <Input
+                                                value={entry.column.options.join(", ")}
+                                                onChange={(event) =>
+                                                  updateExperimentDraft(selectedExperiment.id, {
+                                                    extractedColumns: selectedExperiment.extractedColumns.map((column, columnIndex) =>
+                                                      columnIndex === index
+                                                        ? {
+                                                            ...column,
+                                                            column: {
+                                                              ...column.column,
+                                                              options: event.target.value
+                                                                .split(",")
+                                                                .map((item) => item.trim())
+                                                                .filter(Boolean),
+                                                            },
+                                                          }
+                                                        : column,
+                                                    ),
+                                                  })
+                                                }
+                                                placeholder="Comma-separated choices"
+                                              />
+                                              <div className="flex gap-2">
+                                                <Button type="button" variant="outline" size="sm" onClick={() => setChoiceEditorOpen(editorKey, false)}>
+                                                  Hide choices
+                                                </Button>
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <Button type="button" variant="outline" size="sm" onClick={() => setChoiceEditorOpen(editorKey, true)}>
+                                              Add choices
+                                            </Button>
+                                          )}
+                                        </div>
+                                      );
+                                    })() : null}
                                   </div>
                                 </div>
                                 {entry.column.averageSourceKeys.length > 0 || entry.column.groupKey === "derived" ? (
@@ -1579,7 +1609,12 @@ export function BatteryCreationWizard({
                                   <Label>Type</Label>
                                   <select
                                     value={column.columnType}
-                                    onChange={(event) => updateManualColumn(selectedExperiment.id, index, { columnType: event.target.value as ColumnType })}
+                                    onChange={(event) =>
+                                      updateManualColumn(selectedExperiment.id, index, {
+                                        columnType: event.target.value as ColumnType,
+                                        options: isChoiceColumnType(event.target.value as ColumnType) ? column.options : [],
+                                      })
+                                    }
                                     className="flex h-10 w-full rounded-md border border-input bg-white px-3 py-2 text-sm shadow-xs outline-none"
                                   >
                                     {COLUMN_TYPE_OPTIONS.map((option) => (
@@ -1593,24 +1628,43 @@ export function BatteryCreationWizard({
                                   </Button>
                                 </div>
                               </div>
-                              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                                <div className="space-y-2">
-                                  <Label>Options</Label>
-                                  <Input
-                                    value={column.options.join(", ")}
-                                    onChange={(event) =>
-                                      updateManualColumn(selectedExperiment.id, index, {
-                                        options: event.target.value
-                                          .split(",")
-                                          .map((item) => item.trim())
-                                          .filter(Boolean),
-                                      })
-                                    }
-                                    placeholder={isChoiceColumnType(column.columnType) ? "Comma-separated choices" : "Used for select / multi select"}
-                                    disabled={!isChoiceColumnType(column.columnType)}
-                                  />
-                                </div>
-                              </div>
+                              {isChoiceColumnType(column.columnType) ? (() => {
+                                const editorKey = `manual:${selectedExperiment.id}:${column.key}:${index}`;
+                                const editorState = openChoiceEditors[editorKey];
+                                const isOpen = editorState ?? column.options.length > 0;
+                                return (
+                                  <div className="mt-3">
+                                    <div className="space-y-2">
+                                      <Label>Choices</Label>
+                                      {isOpen ? (
+                                        <>
+                                          <Input
+                                            value={column.options.join(", ")}
+                                            onChange={(event) =>
+                                              updateManualColumn(selectedExperiment.id, index, {
+                                                options: event.target.value
+                                                  .split(",")
+                                                  .map((item) => item.trim())
+                                                  .filter(Boolean),
+                                              })
+                                            }
+                                            placeholder="Comma-separated choices"
+                                          />
+                                          <div className="flex gap-2">
+                                            <Button type="button" variant="outline" size="sm" onClick={() => setChoiceEditorOpen(editorKey, false)}>
+                                              Hide choices
+                                            </Button>
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <Button type="button" variant="outline" size="sm" onClick={() => setChoiceEditorOpen(editorKey, true)}>
+                                          Add choices
+                                        </Button>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })() : null}
                               {column.averageSourceKeys.length > 0 || column.groupKey === "derived" ? (
                                 <div className="mt-3 space-y-2">
                                   <Label>Average these numeric fields</Label>

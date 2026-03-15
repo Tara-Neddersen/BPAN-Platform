@@ -23,6 +23,7 @@ import type { ExperimentTemplateRecord } from "@/components/experiment-template-
 import {
   cloneExperimentRun,
   createExperimentRunFromTemplate,
+  generateCohortScheduleFromRun,
   resetRunToTemplateSchedule,
   saveRunAssignment,
   saveRunScheduleBlocks,
@@ -33,6 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
   AlertTriangle,
@@ -260,6 +262,7 @@ export function RunExecutionBuilder({
     | "reset"
     | "clone"
     | "save_notes"
+    | "generate_schedule"
     | null
   >(null);
 
@@ -278,6 +281,7 @@ export function RunExecutionBuilder({
       cohort_id: "",
       animal_id: "",
     },
+    generate_cohort_schedule: true,
   });
 
   const [selectedRunId, setSelectedRunId] = useState<string>(runs[0]?.id || "");
@@ -376,7 +380,14 @@ export function RunExecutionBuilder({
   const persistedSelectedAssignment = getAssignmentDraft(
     runAssignments.find((assignment) => assignment.experiment_run_id === selectedRunId),
   );
+  const assignmentDirty =
+    JSON.stringify(selectedAssignment) !== JSON.stringify(persistedSelectedAssignment);
   const selectedRunNotes = notesDraftByRunId[selectedRunId] ?? selectedRun?.notes ?? "";
+  const isCreateCohortAssignment = createDraft.assignment.scope_type === "cohort" && Boolean(createDraft.assignment.cohort_id);
+  const canGenerateScheduleFromSelectedRun =
+    !assignmentDirty &&
+    selectedAssignment.scope_type === "cohort" &&
+    Boolean(selectedAssignment.cohort_id);
 
   const filteredSchedules = scheduleTemplates.filter(
     (schedule) => schedule.template_id === createDraft.template_id,
@@ -521,8 +532,6 @@ export function RunExecutionBuilder({
 
   const timelineDirty =
     JSON.stringify(serializeBlocks(selectedRunBlocks)) !== JSON.stringify(serializeBlocks(persistedSelectedRunBlocks));
-  const assignmentDirty =
-    JSON.stringify(selectedAssignment) !== JSON.stringify(persistedSelectedAssignment);
 
   const discardUnsavedEdits = () => {
     if (!selectedRunId) return;
@@ -574,6 +583,7 @@ export function RunExecutionBuilder({
             animal_id: createDraft.assignment.scope_type === "animal" ? createDraft.assignment.animal_id || null : null,
           }),
         );
+        fd.append("generate_cohort_schedule", createDraft.generate_cohort_schedule ? "true" : "false");
 
         const result = await createExperimentRunFromTemplate(fd);
         if (!result?.run_id || !result?.run) {
@@ -588,15 +598,41 @@ export function RunExecutionBuilder({
           start_anchor_date: "",
           start_alignment: "exact",
         }));
-        toast.success(
-          createDraft.schedule_template_id
-            ? `Run created from template schedule (ID: ${result.run_id}).`
-            : `Run created without a linked schedule (ID: ${result.run_id}).`,
-        );
+        const baseMessage = createDraft.schedule_template_id
+          ? `Run created from template schedule (ID: ${result.run_id}).`
+          : `Run created without a linked schedule (ID: ${result.run_id}).`;
+        const scheduleMessage =
+          result.schedule_generation?.attempted && result.schedule_generation.message
+            ? ` ${result.schedule_generation.message}`
+            : "";
+        toast.success(`${baseMessage}${scheduleMessage}`);
         router.refresh();
       } catch (error) {
         const message = error instanceof Error && error.message ? error.message : "Unknown error.";
         toast.error(`Create run failed: ${message}`);
+      } finally {
+        setPendingAction(null);
+      }
+    });
+  };
+
+  const generateScheduleForSelectedRun = () => {
+    if (!selectedRunId) return;
+    if (assignmentDirty) {
+      toast.error("Save the cohort assignment first, then generate the schedule from the run.");
+      return;
+    }
+
+    setPendingAction("generate_schedule");
+    startTransition(async () => {
+      try {
+        const result = await generateCohortScheduleFromRun(selectedRunId);
+        toast.success(
+          `Generated ${result.total_items} cohort schedule item${result.total_items === 1 ? "" : "s"} across ${result.scheduled_animals} animal${result.scheduled_animals === 1 ? "" : "s"}.`,
+        );
+        router.refresh();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to generate cohort schedule.");
       } finally {
         setPendingAction(null);
       }
@@ -1157,6 +1193,28 @@ export function RunExecutionBuilder({
               {pendingAction === "create" ? "Creating Run..." : "Create Run"}
             </Button>
           </div>
+          <div className="flex flex-col gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <p className="font-medium">Run to cohort handoff</p>
+              <p>
+                {isCreateCohortAssignment
+                  ? "When enabled, creating this cohort-assigned run will also generate the underlying per-animal cohort schedule."
+                  : "Assign this run to a cohort to optionally generate the per-animal cohort schedule during creation."}
+              </p>
+            </div>
+            <label className="flex items-center gap-2">
+              <Switch
+                checked={createDraft.generate_cohort_schedule}
+                onCheckedChange={(checked) =>
+                  setCreateDraft((current) => ({ ...current, generate_cohort_schedule: Boolean(checked) }))
+                }
+                disabled={!isCreateCohortAssignment}
+              />
+              <span className={cn("text-sm", !isCreateCohortAssignment && "text-muted-foreground")}>
+                Generate cohort schedule
+              </span>
+            </label>
+          </div>
           <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
             <span className="font-medium">Template/Schedule handoff:</span>{" "}
             {!createDraft.template_id
@@ -1230,6 +1288,16 @@ export function RunExecutionBuilder({
                   <BarChart3 className="h-4 w-4" />
                   Create Dataset from Run
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={generateScheduleForSelectedRun}
+                  disabled={!selectedRunId || isPending || !canGenerateScheduleFromSelectedRun}
+                  className="w-full gap-2 sm:w-auto"
+                >
+                  <Play className="h-4 w-4" />
+                  {pendingAction === "generate_schedule" ? "Generating Cohort Schedule..." : "Generate Cohort Schedule"}
+                </Button>
                 <Button size="sm" variant="outline" onClick={saveAssignmentForRun} disabled={!selectedRunId || isPending || !assignmentDirty} className="w-full sm:w-auto">
                   {pendingAction === "save_assignment" ? "Saving Assignment..." : "Save Assignment"}
                 </Button>
@@ -1284,6 +1352,13 @@ export function RunExecutionBuilder({
                 ) : null}
                 <p className="mt-2 text-xs text-muted-foreground">
                   Duplicate and drag actions are local until you save timeline. Use discard to undo local edits quickly.
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {selectedAssignment.scope_type === "cohort" && selectedAssignment.cohort_id
+                    ? assignmentDirty
+                      ? "Save assignment changes before generating the cohort schedule from this run."
+                      : "Use Generate Cohort Schedule to create or refresh the per-animal task list for this cohort."
+                    : "Assign this run to a cohort if you want the run workflow to generate the underlying animal schedule."}
                 </p>
               </div>
             ) : null}
