@@ -18,6 +18,26 @@
 const SCOPES = "https://www.googleapis.com/auth/drive.file";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_FETCH_TIMEOUT_MS = 30_000;
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = GOOGLE_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Google Drive request timed out");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 export function getRedirectUri() {
   const base = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
@@ -42,7 +62,7 @@ export function getAuthUrl(state: string) {
 }
 
 export async function exchangeCode(code: string) {
-  const res = await fetch(TOKEN_URL, {
+  const res = await fetchWithTimeout(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -68,7 +88,7 @@ export async function exchangeCode(code: string) {
 }
 
 export async function refreshAccessToken(refreshToken: string) {
-  const res = await fetch(TOKEN_URL, {
+  const res = await fetchWithTimeout(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -92,7 +112,7 @@ export async function refreshAccessToken(refreshToken: string) {
 
 export async function getGoogleEmail(accessToken: string): Promise<string | null> {
   try {
-    const res = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+    const res = await fetchWithTimeout("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) return null;
@@ -113,7 +133,7 @@ export async function findOrCreateFolder(
   let query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
   if (parentId) query += ` and '${parentId}' in parents`;
 
-  const searchRes = await fetch(
+  const searchRes = await fetchWithTimeout(
     `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -132,7 +152,7 @@ export async function findOrCreateFolder(
   };
   if (parentId) metadata.parents = [parentId];
 
-  const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+  const createRes = await fetchWithTimeout("https://www.googleapis.com/drive/v3/files", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -177,7 +197,7 @@ export async function uploadFile(
     Buffer.from(closeDelim, "utf-8"),
   ]);
 
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink",
     {
       method: "POST",
@@ -203,7 +223,7 @@ export async function uploadFile(
 
 /** Make a Drive file publicly readable (anyone with link). */
 export async function makeFilePublic(accessToken: string, fileId: string): Promise<void> {
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+  const res = await fetchWithTimeout(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,

@@ -2517,6 +2517,7 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
   const [protocolUploadBusy, setProtocolUploadBusy] = useState(false);
   const protocolFigureUploadInputRef = useRef<HTMLInputElement | null>(null);
   const protocolUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const protocolUploadTimeoutMs = 30_000;
 
   function startNew() {
     setEditing(null);
@@ -2592,10 +2593,13 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
       fd.append("animal_identifier", "Protocol Figures");
       fd.append("experiment_type", "protocol_figure");
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), protocolUploadTimeoutMs);
       const res = await fetch("/api/gdrive/upload", {
         method: "POST",
         body: fd,
-      });
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timeoutId));
       const data = await res.json();
       if (!res.ok || data.error) {
         toast.error(data.error || "Upload failed — is Google Drive connected?");
@@ -2604,7 +2608,11 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
       const url = String(data.url || "");
       setProtocolFigureLinksText((prev) => (prev.trim() ? `${prev.trim()}\n${url}` : url));
       toast.success("Figure uploaded and linked");
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        toast.error("Figure upload timed out. Please try again.");
+        return;
+      }
       toast.error("Figure upload failed");
     } finally {
       setProtocolFigureUploadBusy(false);
@@ -2621,10 +2629,13 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
       fd.append("animal_identifier", "Protocol Templates");
       fd.append("experiment_type", "protocol");
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), protocolUploadTimeoutMs);
       const res = await fetch("/api/gdrive/upload", {
         method: "POST",
         body: fd,
-      });
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timeoutId));
       const data = await res.json();
       if (!res.ok || data.error) {
         toast.error(data.error || "Upload failed — is Google Drive connected?");
@@ -2633,7 +2644,11 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
       const url = String(data.url || "");
       setProtocolFileLinksText((prev) => (prev.trim() ? `${prev.trim()}\n${url}` : url));
       toast.success("Uploaded to Google Drive and linked");
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        toast.error("Upload timed out. Please try again.");
+        return;
+      }
       toast.error("Upload failed");
     } finally {
       setProtocolUploadBusy(false);
