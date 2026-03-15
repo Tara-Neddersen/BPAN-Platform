@@ -427,9 +427,38 @@ export function ResultsClient({
     }
   }, []);
 
+  const ensureGoogleSheetsReady = useCallback(async () => {
+    const statusRes = await fetch("/api/sheets/google/status", { cache: "no-store" });
+    const statusJson = await statusRes.json().catch(() => ({}));
+
+    if (!statusRes.ok) {
+      throw new Error(statusJson.error || "Failed to check Google Sheets connection.");
+    }
+
+    if (statusJson.configured === false) {
+      throw new Error("Google Sheets is not configured on this deployment yet.");
+    }
+
+    if (statusJson.connected) {
+      return true;
+    }
+
+    const authRes = await fetch("/api/sheets/google/auth");
+    const authJson = await authRes.json().catch(() => ({}));
+    if (!authRes.ok || !authJson.url) {
+      throw new Error(authJson.error || "Connect Google Sheets first.");
+    }
+
+    toast.message("Connect Google Sheets to continue.");
+    window.location.href = String(authJson.url);
+    return false;
+  }, []);
+
   const createResultsLiveSyncGoogleSheet = useCallback(async () => {
     setCreatingLiveSyncSheet(true);
     try {
+      const ready = await ensureGoogleSheetsReady();
+      if (!ready) return;
       const res = await fetch("/api/sheets/google/mirror", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -444,10 +473,12 @@ export function ResultsClient({
         window.open(String(json.spreadsheetUrl), "_blank", "noopener,noreferrer");
       }
       toast.success("Live sync Google Sheet created.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create live sync Google Sheet.");
     } finally {
       setCreatingLiveSyncSheet(false);
     }
-  }, []);
+  }, [ensureGoogleSheetsReady]);
 
   useEffect(() => {
     if (!selectedDatasetId) return;

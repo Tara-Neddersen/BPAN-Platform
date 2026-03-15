@@ -2767,10 +2767,10 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                     onClick={() => protocolFigureUploadInputRef.current?.click()}
                   >
                     {protocolFigureUploadBusy ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1" />}
-                    Upload figure
+                    Upload to Google Drive
                   </Button>
                   <span className="text-[11px] text-muted-foreground">
-                    These render as large, scrollable protocol figures by default.
+                    These render as large, scrollable protocol figures by default and require a connected Google Drive account.
                   </span>
                 </div>
               </div>
