@@ -212,7 +212,30 @@ function normalizeSlotLabelForKind(slotKind: PlatformSlotKind, value: string | n
   return null;
 }
 
-function snapToNearestMonday(isoDate: string) {
+const START_ALIGNMENT_OPTIONS = [
+  { value: "exact", label: "Start on exact selected day" },
+  { value: "monday", label: "Snap day 1 to nearest Monday" },
+  { value: "tuesday", label: "Snap day 1 to nearest Tuesday" },
+  { value: "wednesday", label: "Snap day 1 to nearest Wednesday" },
+  { value: "thursday", label: "Snap day 1 to nearest Thursday" },
+  { value: "friday", label: "Snap day 1 to nearest Friday" },
+  { value: "saturday", label: "Snap day 1 to nearest Saturday" },
+  { value: "sunday", label: "Snap day 1 to nearest Sunday" },
+] as const;
+
+type StartAlignment = (typeof START_ALIGNMENT_OPTIONS)[number]["value"];
+
+const START_ALIGNMENT_WEEKDAY_INDEX: Record<Exclude<StartAlignment, "exact">, number> = {
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+  sunday: 0,
+};
+
+function snapToNearestWeekday(isoDate: string, alignment: StartAlignment) {
   if (!isoDate) {
     return "";
   }
@@ -222,14 +245,19 @@ function snapToNearestMonday(isoDate: string) {
     return isoDate;
   }
 
-  const weekday = date.getDay();
-  const daysSinceMonday = weekday === 0 ? 6 : weekday - 1;
-  const daysUntilMonday = weekday === 0 ? 1 : 8 - weekday;
+  if (alignment === "exact") {
+    return isoDate;
+  }
 
-  if (daysSinceMonday <= daysUntilMonday) {
-    date.setDate(date.getDate() - daysSinceMonday);
+  const weekday = date.getDay();
+  const targetWeekday = START_ALIGNMENT_WEEKDAY_INDEX[alignment];
+  const daysSinceTarget = (weekday - targetWeekday + 7) % 7;
+  const daysUntilTarget = (targetWeekday - weekday + 7) % 7;
+
+  if (daysSinceTarget <= daysUntilTarget) {
+    date.setDate(date.getDate() - daysSinceTarget);
   } else {
-    date.setDate(date.getDate() + daysUntilMonday);
+    date.setDate(date.getDate() + daysUntilTarget);
   }
 
   return date.toISOString().slice(0, 10);
@@ -275,7 +303,7 @@ export function RunExecutionBuilder({
     selected_protocol_id: "",
     status: "planned" as PlatformRunStatus,
     start_anchor_date: "",
-    start_alignment: "exact" as "exact" | "nearest_monday",
+    start_alignment: "exact" as StartAlignment,
     assignment: {
       scope_type: "study" as PlatformAssignmentScope,
       study_id: "",
@@ -571,9 +599,7 @@ export function RunExecutionBuilder({
         fd.append("status", createDraft.status);
         fd.append(
           "start_anchor_date",
-          createDraft.start_alignment === "nearest_monday"
-            ? snapToNearestMonday(createDraft.start_anchor_date)
-            : createDraft.start_anchor_date,
+          snapToNearestWeekday(createDraft.start_anchor_date, createDraft.start_alignment),
         );
         fd.append(
           "assignment",
@@ -1103,13 +1129,16 @@ export function RunExecutionBuilder({
               onChange={(event) =>
                 setCreateDraft((current) => ({
                   ...current,
-                  start_alignment: event.target.value as "exact" | "nearest_monday",
+                  start_alignment: event.target.value as StartAlignment,
                 }))
               }
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             >
-              <option value="exact">Start on exact selected day</option>
-              <option value="nearest_monday">Snap day 1 to nearest Monday</option>
+              {START_ALIGNMENT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
             <select
               value={createDraft.status}
@@ -1127,7 +1156,7 @@ export function RunExecutionBuilder({
           </div>
 
           <p className="text-xs text-muted-foreground">
-            The Monday option is optional. When selected, day 1 moves to the closer Monday before or after the target-age date, so the battery stays close to the intended age while fitting a work week.
+            Choose the nearest weekday you want day 1 to land on. This keeps the run close to the target age while matching the work-week preference from the battery layout.
           </p>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[180px_minmax(0,1fr)_auto]">
