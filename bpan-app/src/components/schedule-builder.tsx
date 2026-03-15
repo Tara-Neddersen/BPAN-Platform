@@ -173,6 +173,7 @@ function reorder<T>(items: T[], fromIndex: number, toIndex: number) {
 function normalizeDays(days: BuilderDay[]) {
   return days.map((day, dayIndex) => ({
     ...day,
+    day_index: dayIndex + 1,
     sort_order: dayIndex,
     slots: day.slots.map((slot, slotIndex) => ({
       ...slot,
@@ -605,6 +606,34 @@ export function ScheduleBuilder({
       shifted.splice(dayIndex + 1, 0, ...gapDays);
       return shifted;
     });
+    if (insertedDayIds.length > 0) {
+      setExpandedDays((current) => ({
+        ...current,
+        ...Object.fromEntries(insertedDayIds.map((id) => [id, true])),
+      }));
+    }
+  };
+
+  const insertWorkDayAfter = (dayId: string) => {
+    const insertedDayIds: string[] = [];
+    updateDays((current) => {
+      const dayIndex = current.findIndex((day) => day.id === dayId);
+      if (dayIndex === -1) {
+        return current;
+      }
+
+      const baseDayIndex = current[dayIndex].day_index;
+      const shifted = current.map((day) =>
+        day.day_index > baseDayIndex
+          ? { ...day, day_index: day.day_index + 1 }
+          : day,
+      );
+      const nextDay = createDefaultDay({ day_index: baseDayIndex + 1 });
+      insertedDayIds.push(nextDay.id);
+      shifted.splice(dayIndex + 1, 0, nextDay);
+      return shifted;
+    });
+
     if (insertedDayIds.length > 0) {
       setExpandedDays((current) => ({
         ...current,
@@ -1219,6 +1248,9 @@ export function ScheduleBuilder({
                   placeholder="Optional note for this day"
                 />
                 <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => insertWorkDayAfter(day.id)}>
+                    Insert Work Day
+                  </Button>
                   <Button type="button" variant="outline" size="sm" onClick={() => insertGapDaysAfter(day.id, 1)}>
                     Insert 1 No-Work Day
                   </Button>
