@@ -1263,14 +1263,51 @@ function RunCapturePanel({
         ];
   }, [activeDay, run.id, run.name, run.status, runBlocks]);
   const [activeBlockId, setActiveBlockId] = useState<string>(dayBlocks[0]?.id || "__default__");
-  const runImportDestinations = useMemo(
-    () => buildRunImportDestinations(run, runScheduleBlocks, runTimepoints, runTimepointExperiments),
-    [run, runScheduleBlocks, runTimepointExperiments, runTimepoints]
-  );
-  const selectedDestination = useMemo(
-    () => runImportDestinations.find((destination) => destination.blockId === activeBlockId) || null,
-    [activeBlockId, runImportDestinations]
-  );
+  const selectedBlock = dayBlocks.find((block) => block.id === activeBlockId) || dayBlocks[0];
+  const selectedDestination = useMemo(() => {
+    if (!selectedBlock) return null;
+
+    const metadata = getRunBlockMetadata(selectedBlock);
+    if (!metadata.experimentType) return null;
+
+    const matchingTimepoint =
+      runTimepoints.find((timepoint) =>
+        timepoint.experiment_run_id === run.id &&
+        (
+          (metadata.timepointWindowName && timepoint.key === metadata.timepointWindowName) ||
+          (metadata.timepointWindowName && timepoint.label === metadata.timepointWindowName) ||
+          (metadata.timepointAgeDays > 0 && timepoint.target_age_days === metadata.timepointAgeDays)
+        )
+      ) || null;
+
+    const matchingExperiment =
+      runTimepointExperiments.find((experiment) =>
+        experiment.run_timepoint_id === matchingTimepoint?.id &&
+        experiment.experiment_key === metadata.experimentType
+      ) || null;
+
+    return {
+      blockId: selectedBlock.id,
+      blockTitle: selectedBlock.title || matchingExperiment?.label || prettifyExperimentLabel(metadata.experimentType),
+      dayIndex: selectedBlock.day_index,
+      experimentKey: metadata.experimentType,
+      experimentLabel: matchingExperiment?.label || prettifyExperimentLabel(metadata.experimentType),
+      timepointKey:
+        matchingTimepoint?.key ||
+        metadata.timepointWindowName ||
+        (metadata.timepointAgeDays > 0 ? String(metadata.timepointAgeDays) : "general"),
+      timepointLabel:
+        matchingTimepoint?.label ||
+        metadata.timepointWindowName ||
+        (metadata.timepointAgeDays > 0 ? `Day ${metadata.timepointAgeDays}` : "General"),
+      timepointAgeDays: matchingTimepoint?.target_age_days || metadata.timepointAgeDays || 0,
+      resultSchemaId: matchingExperiment?.result_schema_id || run.result_schema_id || null,
+      schemaSnapshot:
+        matchingExperiment?.schema_snapshot && matchingExperiment.schema_snapshot.length > 0
+          ? matchingExperiment.schema_snapshot
+          : run.schema_snapshot,
+    } satisfies RunImportDestination;
+  }, [run, runTimepointExperiments, runTimepoints, selectedBlock]);
   const schemaFields = useMemo<RunCaptureField[]>(
     () =>
       normalizeSchemaSnapshot(selectedDestination?.schemaSnapshot || run.schema_snapshot)
@@ -1297,8 +1334,6 @@ function RunCapturePanel({
       setActiveBlockId(dayBlocks[0]?.id || "__default__");
     }
   }, [activeBlockId, dayBlocks]);
-
-  const selectedBlock = dayBlocks.find((block) => block.id === activeBlockId) || dayBlocks[0];
   const datasetTagForBlock = useCallback(
     (blockId: string) => `run_capture:${run.id}:${blockId}`,
     [run.id]
@@ -3215,9 +3250,7 @@ function ImportDialog({
   );
   const selectedImportDestination = useMemo(
     () =>
-      experimentOptions.find((destination) => destination.experimentKey === selectedExperimentKey) ||
-      experimentOptions[0] ||
-      null,
+      experimentOptions.find((destination) => destination.experimentKey === selectedExperimentKey) || null,
     [experimentOptions, selectedExperimentKey]
   );
   const missingPrefillRun = Boolean(prefillRunId) && !selectedRun && runId === prefillRunId;
@@ -3231,10 +3264,12 @@ function ImportDialog({
     }
     if (lastConfiguredRunRef.current !== selectedRun.id) {
       setSyncIntoRunCapture(true);
+      setSelectedTimepointKey("");
+      setSelectedExperimentKey("");
       lastConfiguredRunRef.current = selectedRun.id;
     }
-    if (!selectedTimepointKey || !runImportDestinations.some((destination) => destination.timepointKey === selectedTimepointKey)) {
-      setSelectedTimepointKey(runImportDestinations[0]?.timepointKey || "");
+    if (selectedTimepointKey && !runImportDestinations.some((destination) => destination.timepointKey === selectedTimepointKey)) {
+      setSelectedTimepointKey("");
     }
   }, [runImportDestinations, selectedRun, selectedTimepointKey]);
   useEffect(() => {
@@ -3242,8 +3277,8 @@ function ImportDialog({
       setSelectedExperimentKey("");
       return;
     }
-    if (!selectedExperimentKey || !experimentOptions.some((destination) => destination.experimentKey === selectedExperimentKey)) {
-      setSelectedExperimentKey(experimentOptions[0]?.experimentKey || "");
+    if (selectedExperimentKey && !experimentOptions.some((destination) => destination.experimentKey === selectedExperimentKey)) {
+      setSelectedExperimentKey("");
     }
   }, [experimentOptions, selectedExperimentKey]);
   const activeSchemaSnapshot = syncIntoRunCapture && selectedImportDestination
@@ -3478,9 +3513,15 @@ function ImportDialog({
         updated_at: new Date().toISOString(),
       });
       if (syncSummary && selectedImportDestination) {
-        toast.success(
-          `Imported dataset and synced ${syncSummary.matchedAnimals}/${syncSummary.totalAnimals} animals into ${selectedImportDestination.experimentLabel} at ${selectedImportDestination.timepointLabel}.`
-        );
+        if (syncSummary.matchedAnimals === 0) {
+          toast.error(
+            `Imported the dataset, but none of the rows matched animals for ${selectedImportDestination.experimentLabel} at ${selectedImportDestination.timepointLabel}. Check the Animal / ID column in the file.`
+          );
+        } else {
+          toast.success(
+            `Imported dataset and synced ${syncSummary.matchedAnimals}/${syncSummary.totalAnimals} animals into ${selectedImportDestination.experimentLabel} at ${selectedImportDestination.timepointLabel}.`
+          );
+        }
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : "Import failed");
