@@ -484,6 +484,7 @@ export function ResultsClient({
     initialDatasets.find((d) => d.id === initialDatasetId)?.id || initialDatasets[0]?.id || null
   );
   const [showImport, setShowImport] = useState(initialOpenImport);
+  const [importPrefillBlockId, setImportPrefillBlockId] = useState<string | null>(null);
   const [showPaste, setShowPaste] = useState(false);
   const [showManualBuilder, setShowManualBuilder] = useState(false);
   const [showSheets, setShowSheets] = useState(false);
@@ -759,7 +760,13 @@ export function ResultsClient({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-            <Button onClick={() => setShowImport(true)} className="touch-target gap-2">
+            <Button
+              onClick={() => {
+                setImportPrefillBlockId(null);
+                setShowImport(true);
+              }}
+              className="touch-target gap-2"
+            >
               <Upload className="h-4 w-4" /> Import file
             </Button>
             <Button variant="outline" onClick={() => setShowManualBuilder(true)} className="touch-target gap-2">
@@ -1011,7 +1018,10 @@ export function ResultsClient({
           runTimepointExperiments={runTimepointExperiments}
           runScheduleBlocks={runScheduleBlocks}
           datasets={datasets}
-          onImport={() => setShowImport(true)}
+          onImport={(blockId) => {
+            setImportPrefillBlockId(blockId || null);
+            setShowImport(true);
+          }}
         />
       ) : !selectedDataset ? (
         <div className="rounded-2xl border border-dashed bg-gradient-to-b from-white to-slate-50/80 p-8 text-center sm:p-12">
@@ -1052,7 +1062,14 @@ export function ResultsClient({
               <Plus className="h-4 w-4" />
               {selectedScopeRun ? "Create dataset for this run" : "Create table manually"}
             </Button>
-            <Button variant="outline" onClick={() => setShowImport(true)} className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setImportPrefillBlockId(null);
+                setShowImport(true);
+              }}
+              className="gap-2"
+            >
               <Upload className="h-4 w-4" />
               Import file
             </Button>
@@ -1104,10 +1121,14 @@ export function ResultsClient({
           runTimepoints={runTimepoints}
           runTimepointExperiments={runTimepointExperiments}
           prefillRunId={selectedScopeRun?.id || initialPrefillRunId}
+          prefillBlockId={importPrefillBlockId}
           prefillDatasetName={initialPrefillDatasetName}
           prefillDatasetDescription={initialPrefillDatasetDescription}
           prefillExperimentId={selectedScopeRun?.legacy_experiment_id || initialPrefillExperimentId}
-          onClose={() => setShowImport(false)}
+          onClose={() => {
+            setShowImport(false);
+            setImportPrefillBlockId(null);
+          }}
           onImported={(ds) => {
             setDatasets((prev) => [ds, ...prev]);
             if (ds.experiment_run_id) {
@@ -1115,6 +1136,7 @@ export function ResultsClient({
             }
             setSelectedDatasetId(ds.id);
             if (initialPrefillStarterAnalyses) router.push("/colony/analysis");
+            setImportPrefillBlockId(null);
             setShowImport(false);
           }}
         />
@@ -1211,7 +1233,7 @@ function RunCapturePanel({
   runTimepointExperiments: RunTimepointExperiment[];
   runScheduleBlocks: RunScheduleBlock[];
   datasets: ResultsDatasetRecord[];
-  onImport: () => void;
+  onImport: (blockId?: string | null) => void;
 }) {
   const router = useRouter();
   const runAssignment = useMemo(
@@ -1530,7 +1552,12 @@ function RunCapturePanel({
               ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" className="gap-2" onClick={onImport}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => onImport(selectedBlock?.id || null)}
+              >
                 <Upload className="h-4 w-4" />
                 Import Data
               </Button>
@@ -3190,6 +3217,7 @@ function ImportDialog({
   runTimepoints,
   runTimepointExperiments,
   prefillRunId,
+  prefillBlockId,
   prefillDatasetName,
   prefillDatasetDescription,
   prefillExperimentId,
@@ -3202,6 +3230,7 @@ function ImportDialog({
   runTimepoints: RunTimepoint[];
   runTimepointExperiments: RunTimepointExperiment[];
   prefillRunId?: string | null;
+  prefillBlockId?: string | null;
   prefillDatasetName?: string | null;
   prefillDatasetDescription?: string | null;
   prefillExperimentId?: string | null;
@@ -3216,6 +3245,7 @@ function ImportDialog({
   const [syncIntoRunCapture, setSyncIntoRunCapture] = useState(Boolean(prefillRunId));
   const [selectedTimepointKey, setSelectedTimepointKey] = useState("");
   const [selectedExperimentKey, setSelectedExperimentKey] = useState("");
+  const [selectedBlockId, setSelectedBlockId] = useState(prefillBlockId || "");
   const [loading, setLoading] = useState(false);
   const [isParsingFile, setIsParsingFile] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -3245,13 +3275,27 @@ function ImportDialog({
   );
   const experimentOptions = useMemo(
     () =>
-      runImportDestinations.filter((destination) => destination.timepointKey === selectedTimepointKey),
+      runImportDestinations
+        .filter((destination) => destination.timepointKey === selectedTimepointKey)
+        .reduce<RunImportDestination[]>((acc, destination) => {
+          if (acc.some((entry) => entry.experimentKey === destination.experimentKey)) {
+            return acc;
+          }
+          acc.push(destination);
+          return acc;
+        }, []),
     [runImportDestinations, selectedTimepointKey]
+  );
+  const sectionOptions = useMemo(
+    () =>
+      experimentOptions.filter((destination) => destination.experimentKey === selectedExperimentKey),
+    [experimentOptions, selectedExperimentKey]
   );
   const selectedImportDestination = useMemo(
     () =>
-      experimentOptions.find((destination) => destination.experimentKey === selectedExperimentKey) || null,
-    [experimentOptions, selectedExperimentKey]
+      sectionOptions.find((destination) => destination.blockId === selectedBlockId) ||
+      (sectionOptions.length === 1 ? sectionOptions[0] : null),
+    [sectionOptions, selectedBlockId]
   );
   const missingPrefillRun = Boolean(prefillRunId) && !selectedRun && runId === prefillRunId;
   useEffect(() => {
@@ -3259,19 +3303,25 @@ function ImportDialog({
       setSyncIntoRunCapture(false);
       setSelectedTimepointKey("");
       setSelectedExperimentKey("");
+      setSelectedBlockId("");
       lastConfiguredRunRef.current = "";
       return;
     }
+    const prefilledDestination =
+      (prefillBlockId
+        ? runImportDestinations.find((destination) => destination.blockId === prefillBlockId)
+        : null) || null;
     if (lastConfiguredRunRef.current !== selectedRun.id) {
       setSyncIntoRunCapture(true);
-      setSelectedTimepointKey("");
-      setSelectedExperimentKey("");
+      setSelectedTimepointKey(prefilledDestination?.timepointKey || "");
+      setSelectedExperimentKey(prefilledDestination?.experimentKey || "");
+      setSelectedBlockId(prefilledDestination?.blockId || "");
       lastConfiguredRunRef.current = selectedRun.id;
     }
     if (selectedTimepointKey && !runImportDestinations.some((destination) => destination.timepointKey === selectedTimepointKey)) {
       setSelectedTimepointKey("");
     }
-  }, [runImportDestinations, selectedRun, selectedTimepointKey]);
+  }, [prefillBlockId, runImportDestinations, selectedRun, selectedTimepointKey]);
   useEffect(() => {
     if (experimentOptions.length === 0) {
       setSelectedExperimentKey("");
@@ -3281,6 +3331,19 @@ function ImportDialog({
       setSelectedExperimentKey("");
     }
   }, [experimentOptions, selectedExperimentKey]);
+  useEffect(() => {
+    if (sectionOptions.length === 0) {
+      setSelectedBlockId("");
+      return;
+    }
+    if (selectedBlockId && !sectionOptions.some((destination) => destination.blockId === selectedBlockId)) {
+      setSelectedBlockId("");
+      return;
+    }
+    if (!selectedBlockId && sectionOptions.length === 1) {
+      setSelectedBlockId(sectionOptions[0].blockId);
+    }
+  }, [sectionOptions, selectedBlockId]);
   const activeSchemaSnapshot = syncIntoRunCapture && selectedImportDestination
     ? selectedImportDestination.schemaSnapshot
     : selectedRun?.schema_snapshot;
@@ -3515,11 +3578,11 @@ function ImportDialog({
       if (syncSummary && selectedImportDestination) {
         if (syncSummary.matchedAnimals === 0) {
           toast.error(
-            `Imported the dataset, but none of the rows matched animals for ${selectedImportDestination.experimentLabel} at ${selectedImportDestination.timepointLabel}. Check the Animal / ID column in the file.`
+            `Imported the dataset, but none of the rows matched animals for ${selectedImportDestination.blockTitle} on Day ${selectedImportDestination.dayIndex}. Check the Animal / ID column in the file.`
           );
         } else {
           toast.success(
-            `Imported dataset and synced ${syncSummary.matchedAnimals}/${syncSummary.totalAnimals} animals into ${selectedImportDestination.experimentLabel} at ${selectedImportDestination.timepointLabel}.`
+            `Imported dataset and synced ${syncSummary.matchedAnimals}/${syncSummary.totalAnimals} animals into ${selectedImportDestination.blockTitle} on Day ${selectedImportDestination.dayIndex}.`
           );
         }
       }
@@ -3661,8 +3724,32 @@ function ImportDialog({
                       </SelectTrigger>
                       <SelectContent>
                         {experimentOptions.map((destination) => (
-                          <SelectItem key={destination.blockId} value={destination.experimentKey}>
+                          <SelectItem key={destination.experimentKey} value={destination.experimentKey}>
                             {destination.experimentLabel}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="min-w-0 md:col-span-2">
+                    <Label className="mb-1 block text-xs">
+                      Run Section
+                      {sectionOptions.length > 1 ? " *" : ""}
+                    </Label>
+                    <Select value={selectedBlockId} onValueChange={setSelectedBlockId}>
+                      <SelectTrigger className="w-full min-w-0">
+                        <SelectValue
+                          placeholder={
+                            sectionOptions.length > 1
+                              ? "Choose exact run section"
+                              : "Section will be selected automatically"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {sectionOptions.map((destination) => (
+                          <SelectItem key={destination.blockId} value={destination.blockId}>
+                            {destination.blockTitle} • Day {destination.dayIndex}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -3673,10 +3760,11 @@ function ImportDialog({
                       <>
                         This import will also fill <span className="font-medium text-slate-900">{selectedImportDestination.blockTitle}</span>
                         {" "}for <span className="font-medium text-slate-900">{selectedImportDestination.experimentLabel}</span>
-                        {" "}at <span className="font-medium text-slate-900">{selectedImportDestination.timepointLabel}</span>.
+                        {" "}at <span className="font-medium text-slate-900">{selectedImportDestination.timepointLabel}</span>
+                        {" "}on <span className="font-medium text-slate-900">Day {selectedImportDestination.dayIndex}</span>.
                       </>
                     ) : (
-                      "Choose a destination timepoint and experiment section to sync this file into the run table."
+                      "Choose the timepoint, experiment, and exact run section to sync this file into the visible run table."
                     )}
                   </div>
                 </div>
