@@ -39,22 +39,57 @@ function isAnimalIdentityColumn(columnName: string) {
     "__animalid",
     "animal",
     "animalid",
+    "animalnumber",
+    "animalno",
     "animalidentifier",
+    "bpananimalnumber",
     "identifier",
     "mouse",
     "mouseid",
+    "mousenumber",
     "eartag",
   ].includes(key);
 }
 
+function isCohortIdentityColumn(columnName: string) {
+  const key = normalizeLooseKey(columnName);
+  return [
+    "cohort",
+    "cohortid",
+    "cohortname",
+    "cohortnumber",
+    "bpancohort",
+    "bpancohortnumber",
+  ].includes(key);
+}
+
+function extractNumericTokens(value: string) {
+  const matches = value.match(/\d+/g) || [];
+  return matches.map((entry) => entry.trim()).filter(Boolean);
+}
+
 function getImportedRowIdentityValues(row: Record<string, unknown>) {
-  const values: string[] = [];
+  const animalValues: string[] = [];
+  const cohortValues: string[] = [];
   for (const [key, value] of Object.entries(row)) {
-    if (!isAnimalIdentityColumn(key)) continue;
     const serialized = serializeDatasetCellValue(value).trim();
-    if (serialized) values.push(serialized);
+    if (!serialized) continue;
+    if (isAnimalIdentityColumn(key)) animalValues.push(serialized);
+    if (isCohortIdentityColumn(key)) cohortValues.push(serialized);
   }
-  return values;
+  return { animalValues, cohortValues };
+}
+
+function buildLookupTokens(values: Array<string | null | undefined>) {
+  const tokens = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    const serialized = String(value).trim();
+    if (!serialized) continue;
+    tokens.add(normalizeLooseKey(serialized));
+    extractNumericTokens(serialized).forEach((token) => tokens.add(normalizeLooseKey(token)));
+  }
+  return tokens;
 }
 
 type SyncableRunField = {
@@ -450,14 +485,14 @@ export async function syncImportedDatasetToRunCapture(payload: {
     []
   );
 
-  const importedRowsByIdentity = new Map<string, Record<string, unknown>>();
-  for (const row of payload.data) {
-    for (const identityValue of getImportedRowIdentityValues(row)) {
-      const normalized = normalizeLooseKey(identityValue);
-      if (!normalized || importedRowsByIdentity.has(normalized)) continue;
-      importedRowsByIdentity.set(normalized, row);
-    }
-  }
+  const importedRowsWithIdentity = payload.data.map((row) => {
+    const identities = getImportedRowIdentityValues(row);
+    return {
+      row,
+      animalTokens: buildLookupTokens(identities.animalValues),
+      cohortTokens: buildLookupTokens(identities.cohortValues),
+    };
+  });
 
   const importedColumnByAlias = new Map<string, string>();
   for (const column of payload.columns) {
@@ -474,11 +509,16 @@ export async function syncImportedDatasetToRunCapture(payload: {
   let matchedAnimals = 0;
   const mergedData = assignedAnimals.map((animal) => {
     const existingRow = existingRowsByAnimalId.get(animal.id) || null;
-    const importedRow =
-      importedRowsByIdentity.get(normalizeLooseKey(animal.id)) ||
-      importedRowsByIdentity.get(normalizeLooseKey(animal.identifier || "")) ||
-      importedRowsByIdentity.get(normalizeLooseKey(animal.ear_tag || "")) ||
-      null;
+    const cohortName = animal.cohort_id ? cohortsById.get(animal.cohort_id) || "" : "";
+    const animalTokens = buildLookupTokens([animal.id, animal.identifier, animal.ear_tag]);
+    const cohortTokens = buildLookupTokens([cohortName]);
+    const importedMatch = importedRowsWithIdentity.find((entry) => {
+      const animalMatch = Array.from(animalTokens).some((token) => entry.animalTokens.has(token));
+      if (!animalMatch) return false;
+      if (entry.cohortTokens.size === 0) return true;
+      return Array.from(cohortTokens).some((token) => entry.cohortTokens.has(token));
+    });
+    const importedRow = importedMatch?.row || null;
 
     if (importedRow) matchedAnimals += 1;
 
