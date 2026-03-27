@@ -12,7 +12,19 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
-import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
+import type {
+  Animal,
+  Cohort,
+  ColonyTimepoint,
+  ColonyResult,
+  ExperimentRun,
+  ResultSchemaColumnSnapshot,
+  RunAssignment,
+  RunExperimentScheduleStep,
+  RunScheduleBlock,
+  RunTimepoint,
+  RunTimepointExperiment,
+} from "@/types";
 import { MiniEarTag } from "@/components/ear-tag-selector";
 import { BehaviorImportDialog } from "@/components/behavior-import-dialog";
 import { exportColonyResultsMigrationWorkbook, exportColonyResultsWorkbook } from "@/lib/results-export";
@@ -23,10 +35,95 @@ export interface MeasureField {
   key: string;
   label: string;
   unit?: string;
-  type?: "number" | "text";
+  type?: "number" | "text" | "boolean";
 }
 
-type MeasureValue = string | number | null | string[];
+const HIDDEN_SCHEMA_FIELD_KEYS = new Set([
+  "animal_id",
+  "timepoint_window",
+  "notes",
+  "attachment_link",
+  "reference_url",
+]);
+
+const HIDDEN_SCHEMA_FIELD_TYPES = new Set([
+  "animal_ref",
+  "cohort_ref",
+  "file",
+  "url",
+]);
+
+function isVisibleSchemaColumn(column: ResultSchemaColumnSnapshot) {
+  if (column.is_enabled === false) return false;
+  if (HIDDEN_SCHEMA_FIELD_KEYS.has(column.key)) return false;
+  if (HIDDEN_SCHEMA_FIELD_TYPES.has(column.column_type)) return false;
+  return true;
+}
+
+function isVisibleMeasureKey(key: string) {
+  if (!key || key.startsWith("__")) return false;
+  return !HIDDEN_SCHEMA_FIELD_KEYS.has(key);
+}
+
+function getRunMetadataString(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getRunMetadataNumber(metadata: Record<string, unknown>, key: string) {
+  const raw = metadata[key];
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function inferExperimentTypeFromRunBlockTitle(title: string) {
+  const normalized = title.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes("eeg surgery") || normalized.includes("implant")) return "eeg_implant";
+  if (normalized.includes("eeg recording")) return "eeg_recording";
+  if (normalized.includes("y-maze") || normalized.includes("y maze")) return "y_maze";
+  if (normalized.includes("light-dark") || normalized.includes("light dark")) return "ldb";
+  if (normalized === "ldb") return "ldb";
+  if (normalized.includes("marble")) return "marble";
+  if (normalized.includes("nest")) return "nesting";
+  if (normalized.includes("catwalk")) return "catwalk";
+  if (normalized.includes("rr hab")) return "rotarod_hab";
+  if (normalized.includes("rr 1")) return "rotarod_test1";
+  if (normalized.includes("rr 2")) return "rotarod_test2";
+  if (normalized.includes("rr stamina")) return "stamina";
+  if (normalized === "plasma") return "blood_draw";
+  if (normalized === "si" || normalized.includes("social interaction")) return "social_interaction";
+  if (normalized.includes("habituation")) return "rotarod_hab";
+  if (normalized.includes("rotarod test 1")) return "rotarod_test1";
+  if (normalized.includes("rotarod test 2")) return "rotarod_test2";
+  if (normalized.includes("rotarod")) return "rotarod";
+  if (normalized.includes("stamina")) return "stamina";
+  if (normalized.includes("plasma") || normalized.includes("blood")) return "blood_draw";
+  return null;
+}
+
+function schemaSnapshotToFields(schemaSnapshot: ResultSchemaColumnSnapshot[] | null | undefined): MeasureField[] {
+  return (schemaSnapshot || [])
+    .filter(isVisibleSchemaColumn)
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((column) => ({
+      key: column.key,
+      label: column.label,
+      unit: column.unit || undefined,
+      type:
+        column.column_type === "number" || column.column_type === "integer"
+          ? "number"
+          : column.column_type === "boolean"
+            ? "boolean"
+            : "text",
+    }));
+}
+
+type MeasureValue = string | number | boolean | null | string[];
 type MeasureMap = Record<string, MeasureValue>;
 
 const ROTAROD_AVG_LATENCY_KEY = "latency_to_fall_sec";
@@ -153,6 +250,11 @@ const DEFAULT_MEASURES: Record<string, MeasureField[]> = {
     { key: "nest_score", label: "Nest Score (1–5)", type: "number" },
     { key: "shredded_pct", label: "Material Shredded", unit: "%", type: "number" },
   ],
+  social_interaction: [
+    { key: "interaction_time_sec", label: "Interaction Time", unit: "sec", type: "number" },
+    { key: "chamber_entries", label: "Chamber Entries", type: "number" },
+    { key: "novel_preference_ratio", label: "Novel Preference Ratio", type: "number" },
+  ],
   catwalk: [
     { key: "stride_length_cm", label: "Stride Length", unit: "cm", type: "number" },
     { key: "print_area_cm2", label: "Print Area", unit: "cm²", type: "number" },
@@ -216,6 +318,7 @@ const RESULT_EXPERIMENT_TYPES = [
   "ldb",
   "marble",
   "nesting",
+  "social_interaction",
   "catwalk",
   "rotarod_hab",
   "rotarod_test1",
@@ -231,6 +334,7 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   ldb: "Light-Dark Box",
   marble: "Marble Burying",
   nesting: "Overnight Nesting",
+  social_interaction: "Social Interaction",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Habituation",
   rotarod_test1: "Rotarod Test 1",
@@ -249,6 +353,7 @@ const GENOTYPE_LABELS: Record<string, string> = {
 
 // Experiments that use cage image uploads vs raw data URL links
 const IMAGE_EXPERIMENTS = new Set(["nesting", "marble"]);
+const RUN_SCHEDULE_ONLY_EXPERIMENTS = new Set(["handling", "data_collection", "core_acclimation", "eeg_implant"]);
 
 // ─── Props ───────────────────────────────────────────────────────────
 
@@ -257,6 +362,12 @@ interface ColonyResultsTabProps {
   cohorts: Cohort[];
   timepoints: ColonyTimepoint[];
   colonyResults: ColonyResult[];
+  experimentRuns?: ExperimentRun[];
+  runAssignments?: RunAssignment[];
+  runTimepoints?: RunTimepoint[];
+  runTimepointExperiments?: RunTimepointExperiment[];
+  runExperimentScheduleSteps?: RunExperimentScheduleStep[];
+  runScheduleBlocks?: RunScheduleBlock[];
   batchUpsertColonyResults: (
     timepointAgeDays: number,
     experimentType: string,
@@ -265,13 +376,23 @@ interface ColonyResultsTabProps {
       measures: MeasureMap;
       notes?: string;
     }[],
-    options?: { emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave" }
+    options?: {
+      emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave";
+      experimentRunId?: string | null;
+      runTimepointId?: string | null;
+      runTimepointExperimentId?: string | null;
+    }
   ) => Promise<{ success?: boolean; error?: string; saved?: number; errors?: string[] }>;
   reconcileTrackerFromExistingColonyResults: () => Promise<{ success?: boolean; error?: string; completed?: number; ignored?: number }>;
   deleteColonyResultMeasureColumn: (
     timepointAgeDays: number,
     experimentType: string,
-    fieldKey: string
+    fieldKey: string,
+    options?: {
+      experimentRunId?: string | null;
+      runTimepointId?: string | null;
+      runTimepointExperimentId?: string | null;
+    }
   ) => Promise<{ success?: boolean; error?: string; updated?: number }>;
 }
 
@@ -282,6 +403,12 @@ export function ColonyResultsTab({
   cohorts,
   timepoints,
   colonyResults,
+  experimentRuns = [],
+  runAssignments = [],
+  runTimepoints: runTimepointRows = [],
+  runTimepointExperiments: runTimepointExperimentRows = [],
+  runExperimentScheduleSteps = [],
+  runScheduleBlocks = [],
   batchUpsertColonyResults,
   reconcileTrackerFromExistingColonyResults,
   deleteColonyResultMeasureColumn,
@@ -307,6 +434,7 @@ export function ColonyResultsTab({
   const [pendingSaveEntries, setPendingSaveEntries] = useState<SaveEntry[] | null>(null);
   const [pendingClearedRowsCount, setPendingClearedRowsCount] = useState(0);
   const [emptyStatusChoice, setEmptyStatusChoice] = useState<"skipped" | "pending" | "scheduled" | "leave">("skipped");
+  const [activeRunId, setActiveRunId] = useState<string>(experimentRuns[0]?.id || "__legacy__");
   const [activeTimepoint, setActiveTimepoint] = useState<string>(
     timepoints.length > 0 ? String(timepoints[0].age_days) : "30"
   );
@@ -344,6 +472,7 @@ export function ColonyResultsTab({
   const [newFieldKey, setNewFieldKey] = useState("");
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [newFieldUnit, setNewFieldUnit] = useState("");
+  const [lastRunIdForDefaults, setLastRunIdForDefaults] = useState<string | null>(null);
 
   // Persist hidden fields to localStorage
   useEffect(() => {
@@ -381,11 +510,19 @@ export function ColonyResultsTab({
     if (!res.ok) {
       throw new Error(json.error || "Failed to load Google Sheets status.");
     }
-    setGoogleSheetsStatus({
-      configured: !!json.configured,
-      connected: !!json.connected,
-      needsReconnect: !!json.needsReconnect,
-      email: json.email || null,
+    setGoogleSheetsStatus((prev) => {
+      const next = {
+        configured: !!json.configured,
+        connected: !!json.connected,
+        needsReconnect: !!json.needsReconnect,
+        email: json.email || null,
+      };
+      return prev.configured === next.configured &&
+        prev.connected === next.connected &&
+        prev.needsReconnect === next.needsReconnect &&
+        prev.email === next.email
+        ? prev
+        : next;
     });
   }, []);
 
@@ -433,14 +570,170 @@ export function ColonyResultsTab({
   );
 
   // Default timepoints if none configured
+  const visibleRuns = useMemo(
+    () => experimentRuns.filter((run) => run.status !== "cancelled"),
+    [experimentRuns]
+  );
+  const selectedRun = useMemo(
+    () => visibleRuns.find((run) => run.id === activeRunId) || null,
+    [activeRunId, visibleRuns]
+  );
+  const selectedRunAssignment = useMemo(
+    () => runAssignments.find((assignment) => assignment.experiment_run_id === activeRunId) || null,
+    [activeRunId, runAssignments]
+  );
+  const selectedRunTimepointRows = useMemo(
+    () => runTimepointRows.filter((timepoint) => timepoint.experiment_run_id === activeRunId),
+    [activeRunId, runTimepointRows]
+  );
+  const selectedRunTimepointIds = useMemo(
+    () => selectedRunTimepointRows.map((timepoint) => timepoint.id),
+    [selectedRunTimepointRows]
+  );
+  const selectedRunTimepointExperimentRows = useMemo(
+    () => runTimepointExperimentRows.filter((experiment) => selectedRunTimepointIds.includes(experiment.run_timepoint_id)),
+    [runTimepointExperimentRows, selectedRunTimepointIds]
+  );
+  const selectedRunBlocks = useMemo(
+    () => runScheduleBlocks.filter((block) => block.experiment_run_id === activeRunId),
+    [activeRunId, runScheduleBlocks]
+  );
+  const fallbackRunTimepoints = useMemo(() => {
+    const groups = new Map<string, { key: string; age: number; label: string; experiments: string[] }>();
+    for (const block of selectedRunBlocks) {
+      const metadata =
+        block.metadata && typeof block.metadata === "object" && !Array.isArray(block.metadata)
+          ? block.metadata
+          : {};
+      const experimentType =
+        getRunMetadataString(metadata, "experimentType") ||
+        inferExperimentTypeFromRunBlockTitle(block.title || "") ||
+        "";
+
+      if (!experimentType || RUN_SCHEDULE_ONLY_EXPERIMENTS.has(experimentType)) continue;
+
+      const windowNamesRaw = Array.isArray(metadata.timepointWindowNames)
+        ? metadata.timepointWindowNames.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        : [];
+      const singleWindowName = getRunMetadataString(metadata, "timepointWindowName");
+      const windowNames = windowNamesRaw.length > 0 ? windowNamesRaw : singleWindowName ? [singleWindowName] : [];
+      const targetAgeDays =
+        getRunMetadataNumber(metadata, "targetAgeDays") ??
+        getRunMetadataNumber(metadata, "minAgeDays");
+
+      const normalizedWindows = windowNames.length > 0
+        ? windowNames.map((windowName) => {
+            const numericAge = Number(windowName);
+            return {
+              key: windowName,
+              age: Number.isFinite(numericAge) ? numericAge : (targetAgeDays ?? 0),
+              label: Number.isFinite(numericAge) ? `${numericAge} Day` : windowName,
+            };
+          })
+        : [{
+            key: targetAgeDays != null ? String(targetAgeDays) : "general",
+            age: targetAgeDays ?? 0,
+            label: targetAgeDays != null ? `${targetAgeDays} Day` : "General",
+          }];
+
+      for (const windowInfo of normalizedWindows) {
+        const key = windowInfo.age > 0 ? String(windowInfo.age) : windowInfo.key.toLowerCase();
+        const existing = groups.get(key) || { key, age: windowInfo.age, label: windowInfo.label, experiments: [] };
+        if (!existing.experiments.includes(experimentType)) {
+          existing.experiments.push(experimentType);
+        }
+        groups.set(key, existing);
+      }
+    }
+
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.age > 0 && b.age > 0) return a.age - b.age;
+      if (a.age > 0) return -1;
+      if (b.age > 0) return 1;
+      return a.label.localeCompare(b.label);
+    });
+  }, [selectedRunBlocks]);
+  const runTimepoints = useMemo(() => {
+    if (selectedRunTimepointRows.length === 0) return fallbackRunTimepoints;
+
+    return [...selectedRunTimepointRows]
+      .sort((a, b) => a.sort_order - b.sort_order || a.target_age_days - b.target_age_days)
+      .map((timepoint) => {
+        const experiments = selectedRunTimepointExperimentRows
+          .filter((experiment) => experiment.run_timepoint_id === timepoint.id)
+          .sort((a, b) => a.sort_order - b.sort_order)
+          .map((experiment) => experiment.experiment_key);
+
+        return {
+          id: timepoint.id,
+          key: timepoint.key,
+          age: timepoint.target_age_days,
+          label: timepoint.label,
+          experiments,
+        };
+      });
+  }, [fallbackRunTimepoints, selectedRunTimepointExperimentRows, selectedRunTimepointRows]);
   const timepointOptions = useMemo(() => {
+    if (selectedRun) return runTimepoints.map((timepoint) => timepoint.key);
     if (sortedTimepoints.length > 0) return sortedTimepoints.map((tp) => tp.age_days);
     return [60, 120, 180];
-  }, [sortedTimepoints]);
+  }, [runTimepoints, selectedRun, sortedTimepoints]);
+  const selectedRunTimepoint = useMemo(
+    () => runTimepoints.find((timepoint) => timepoint.key === activeTimepoint) || null,
+    [activeTimepoint, runTimepoints]
+  );
+  const selectedRunTimepointRow = useMemo(
+    () => selectedRunTimepointRows.find((timepoint) => timepoint.key === activeTimepoint) || null,
+    [activeTimepoint, selectedRunTimepointRows]
+  );
+  const selectedRunExperimentRows = useMemo(
+    () => selectedRunTimepointRow
+      ? selectedRunTimepointExperimentRows
+          .filter((experiment) => experiment.run_timepoint_id === selectedRunTimepointRow.id)
+          .sort((a, b) => {
+            const stepA = runExperimentScheduleSteps
+              .filter((step) => step.run_timepoint_experiment_id === a.id)
+              .sort((left, right) => left.relative_day - right.relative_day || left.sort_order - right.sort_order)[0];
+            const stepB = runExperimentScheduleSteps
+              .filter((step) => step.run_timepoint_experiment_id === b.id)
+              .sort((left, right) => left.relative_day - right.relative_day || left.sort_order - right.sort_order)[0];
+
+            const scheduleOrder =
+              (stepA?.relative_day ?? Number.MAX_SAFE_INTEGER) - (stepB?.relative_day ?? Number.MAX_SAFE_INTEGER) ||
+              (stepA?.sort_order ?? Number.MAX_SAFE_INTEGER) - (stepB?.sort_order ?? Number.MAX_SAFE_INTEGER);
+
+            return scheduleOrder || a.sort_order - b.sort_order;
+          })
+      : [],
+    [runExperimentScheduleSteps, selectedRunTimepointExperimentRows, selectedRunTimepointRow]
+  );
+  const selectedRunExperimentRow = useMemo(
+    () => selectedRunExperimentRows.find((experiment) => experiment.experiment_key === activeExperiment) || null,
+    [activeExperiment, selectedRunExperimentRows]
+  );
+  const getRunExperimentRowForTab = useCallback(
+    (timepointKey: string, experimentKey: string) => {
+      const timepointRow = selectedRunTimepointRows.find((timepoint) => timepoint.key === timepointKey);
+      if (!timepointRow) return null;
+      return (
+        selectedRunTimepointExperimentRows.find(
+          (experiment) =>
+            experiment.run_timepoint_id === timepointRow.id &&
+            experiment.experiment_key === experimentKey
+        ) || null
+      );
+    },
+    [selectedRunTimepointExperimentRows, selectedRunTimepointRows]
+  );
 
   // Active animals sorted by cohort → sex → genotype
   const activeAnimals = useMemo(() => {
-    return animals
+    const scopedAnimals = selectedRunAssignment?.scope_type === "animal" && selectedRunAssignment.animal_id
+      ? animals.filter((animal) => animal.id === selectedRunAssignment.animal_id)
+      : selectedRunAssignment?.scope_type === "cohort" && selectedRunAssignment.cohort_id
+        ? animals.filter((animal) => animal.cohort_id === selectedRunAssignment.cohort_id)
+        : animals;
+    return scopedAnimals
       .filter((a) => a.status === "active")
       .sort((a, b) => {
         // Sort by cohort name
@@ -453,11 +746,29 @@ export function ColonyResultsTab({
         const gSort: Record<string, number> = { hemi: 0, het: 1, wt: 2 };
         return (gSort[a.genotype] || 0) - (gSort[b.genotype] || 0);
       });
-  }, [animals, cohorts]);
+  }, [animals, cohorts, selectedRunAssignment]);
 
   // Get existing result for an animal + timepoint + experiment
   const getExistingResult = useCallback(
     (animalId: string, tp: number, exp: string): ColonyResult | undefined => {
+      if (selectedRun && selectedRunTimepointRow) {
+        const matchingExperimentRow = selectedRunTimepointExperimentRows.find(
+          (experiment) =>
+            experiment.run_timepoint_id === selectedRunTimepointRow.id &&
+            experiment.experiment_key === exp
+        );
+
+        if (matchingExperimentRow) {
+          const runLinkedResult = colonyResults.find(
+            (result) =>
+              result.animal_id === animalId &&
+              result.experiment_run_id === selectedRun.id &&
+              result.run_timepoint_experiment_id === matchingExperimentRow.id
+          );
+          if (runLinkedResult) return runLinkedResult;
+        }
+      }
+
       return colonyResults.find(
         (r) =>
           r.animal_id === animalId &&
@@ -465,7 +776,7 @@ export function ColonyResultsTab({
           r.experiment_type === exp
       );
     },
-    [colonyResults]
+    [colonyResults, selectedRun, selectedRunTimepointExperimentRows, selectedRunTimepointRow]
   );
 
   // Get the data for an animal row (from edits, then from existing, then empty)
@@ -500,7 +811,7 @@ export function ColonyResultsTab({
 
       const measures = result.measures as Record<string, unknown>;
       for (const key of Object.keys(measures)) {
-        if (key.startsWith("__")) continue; // Skip internal fields (__cage_image, __raw_data_url)
+        if (!isVisibleMeasureKey(key)) continue;
         if (measures[key] === null) continue;
         if (defaultKeys.has(key) || customKeys.has(key) || detectedKeys.has(key)) continue;
 
@@ -509,7 +820,12 @@ export function ColonyResultsTab({
           label: key
             .replace(/_/g, " ")
             .replace(/\b\w/g, (c) => c.toUpperCase()),
-          type: typeof measures[key] === "number" ? "number" : "text",
+          type:
+            typeof measures[key] === "number"
+              ? "number"
+              : typeof measures[key] === "boolean"
+                ? "boolean"
+                : "text",
         });
         detectedKeys.add(key);
       }
@@ -521,7 +837,12 @@ export function ColonyResultsTab({
   // Get ALL fields for an experiment (before hiding), with data-filled first
   const getAllFields = useCallback(
     (exp: string): MeasureField[] => {
-      const defaults = DEFAULT_MEASURES[exp] || [];
+      const runSchemaFields = selectedRun
+        ? schemaSnapshotToFields(
+            selectedRunExperimentRows.find((experiment) => experiment.experiment_key === exp)?.schema_snapshot
+          )
+        : [];
+      const defaults = runSchemaFields.length > 0 ? runSchemaFields : (DEFAULT_MEASURES[exp] || []);
       const custom = customFields[exp] || [];
       const autoDetected = detectedFields[exp] || [];
       const allFields = [...defaults, ...custom, ...autoDetected];
@@ -541,7 +862,7 @@ export function ColonyResultsTab({
         if (r.experiment_type !== exp) continue;
         const m = r.measures as Record<string, unknown>;
         for (const [k, v] of Object.entries(m)) {
-          if (k.startsWith("__")) continue; // Skip internal fields
+          if (!isVisibleMeasureKey(k)) continue;
           if (v !== null && v !== undefined && v !== "") keysWithData.add(k);
         }
       }
@@ -551,7 +872,7 @@ export function ColonyResultsTab({
       const withoutData = unique.filter((f) => !keysWithData.has(f.key));
       return [...withData, ...withoutData];
     },
-    [customFields, detectedFields, colonyResults]
+    [colonyResults, customFields, detectedFields, selectedRun, selectedRunExperimentRows]
   );
 
   // Get visible fields (filter out hidden)
@@ -634,7 +955,12 @@ export function ColonyResultsTab({
   ) => {
     setSaving(true);
     try {
-      const result = await batchUpsertColonyResults(tp, exp, entries, emptyResultStatus ? { emptyResultStatus } : undefined);
+      const result = await batchUpsertColonyResults(tp, exp, entries, {
+        ...(emptyResultStatus ? { emptyResultStatus } : {}),
+        experimentRunId: selectedRun?.id || null,
+        runTimepointId: selectedRunTimepointRow?.id || null,
+        runTimepointExperimentId: selectedRunExperimentRows.find((experiment) => experiment.experiment_key === exp)?.id || null,
+      });
       if (result.error) {
         toast.error(result.error);
       } else {
@@ -648,10 +974,10 @@ export function ColonyResultsTab({
     } finally {
       setSaving(false);
     }
-  }, [batchUpsertColonyResults]);
+  }, [batchUpsertColonyResults, selectedRun, selectedRunExperimentRows, selectedRunTimepointRow]);
 
   const handleSave = useCallback(async () => {
-    const tp = Number(activeTimepoint);
+    const tp = selectedRun ? (selectedRunTimepoint?.age ?? 0) : Number(activeTimepoint);
     const exp = activeExperiment;
 
     const entries: SaveEntry[] = [];
@@ -704,7 +1030,7 @@ export function ColonyResultsTab({
     }
 
     await executeSave(tp, exp, entries);
-  }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, getExistingResult, hasMeaningfulMeasures, executeSave]);
+  }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, getExistingResult, hasMeaningfulMeasures, executeSave, selectedRun, selectedRunTimepoint]);
 
   const handleReconcileTracker = useCallback(async () => {
     setReconciling(true);
@@ -726,7 +1052,7 @@ export function ColonyResultsTab({
 
   // Export current view as CSV
   const handleExport = useCallback(() => {
-    const tp = Number(activeTimepoint);
+    const tp = selectedRun ? (selectedRunTimepoint?.age ?? 0) : Number(activeTimepoint);
     const exp = activeExperiment;
     const fields = getFields(exp);
 
@@ -766,7 +1092,7 @@ export function ColonyResultsTab({
     a.click();
     URL.revokeObjectURL(url);
     toast.success("Exported to CSV");
-  }, [activeTimepoint, activeExperiment, activeAnimals, getFields, getRowData, cohorts]);
+  }, [activeTimepoint, activeExperiment, activeAnimals, getFields, getRowData, cohorts, selectedRun, selectedRunTimepoint]);
 
   const handleExportAll = useCallback(() => {
     exportColonyResultsWorkbook(colonyResults, animals, cohorts);
@@ -915,11 +1241,15 @@ export function ColonyResultsTab({
   );
 
   const handleDeleteFieldValues = useCallback(async (field: MeasureField) => {
-    const tp = Number(activeTimepoint);
+    const tp = selectedRun ? (selectedRunTimepoint?.age ?? 0) : Number(activeTimepoint);
     if (!Number.isFinite(tp)) return;
     setDeletingField(true);
     try {
-      const result = await deleteColonyResultMeasureColumn(tp, activeExperiment, field.key);
+      const result = await deleteColonyResultMeasureColumn(tp, activeExperiment, field.key, {
+        experimentRunId: selectedRun?.id || null,
+        runTimepointId: selectedRunTimepointRow?.id || null,
+        runTimepointExperimentId: selectedRunExperimentRow?.id || null,
+      });
       if (!result.success) {
         toast.error(result.error || "Failed to delete column values");
         return;
@@ -947,7 +1277,7 @@ export function ColonyResultsTab({
       setDeletingField(false);
       setPendingDeleteField(null);
     }
-  }, [activeExperiment, activeTimepoint, customFields, deleteColonyResultMeasureColumn]);
+  }, [activeExperiment, activeTimepoint, customFields, deleteColonyResultMeasureColumn, selectedRun, selectedRunExperimentRow, selectedRunTimepoint, selectedRunTimepointRow]);
 
   // Handle import completion: add imported measures as custom fields
   const handleImportComplete = useCallback(
@@ -996,7 +1326,7 @@ export function ColonyResultsTab({
   const hiddenFieldsList = allFieldsForExp.filter(
     (f) => hiddenFields[activeExperiment]?.has(f.key)
   );
-  const tp = Number(activeTimepoint);
+  const tp = selectedRun ? (selectedRunTimepoint?.age ?? 0) : Number(activeTimepoint);
 
   // Count how many animals have results for current view
   const filledCount = activeAnimals.filter((a) => {
@@ -1018,6 +1348,9 @@ export function ColonyResultsTab({
 
   // Available experiment types for the active timepoint (from timepoint config)
   const availableExperiments = useMemo(() => {
+    if (selectedRun) {
+      return selectedRunExperimentRows.map((experiment) => experiment.experiment_key);
+    }
     const tp = sortedTimepoints.find((t) => t.age_days === Number(activeTimepoint));
     if (tp && tp.experiments.length > 0) {
       // Filter to only experiments that produce results
@@ -1029,12 +1362,27 @@ export function ColonyResultsTab({
       return configured.length > 0 ? configured : RESULT_EXPERIMENT_TYPES;
     }
     return RESULT_EXPERIMENT_TYPES;
-  }, [activeTimepoint, sortedTimepoints]);
+  }, [activeTimepoint, selectedRun, selectedRunExperimentRows, sortedTimepoints]);
+
+  const runBlockLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const experiment of selectedRunTimepointExperimentRows) {
+      map.set(experiment.experiment_key, experiment.label || EXPERIMENT_LABELS[experiment.experiment_key] || experiment.experiment_key);
+    }
+    return map;
+  }, [selectedRunTimepointExperimentRows]);
 
   // Switch to first available experiment when timepoint changes
   const handleTimepointChange = useCallback(
     (val: string) => {
       setActiveTimepoint(val);
+      if (selectedRun) {
+        const nextAvailable = runTimepoints.find((timepoint) => timepoint.key === val)?.experiments || [];
+        if (nextAvailable.length > 0 && !nextAvailable.includes(activeExperiment)) {
+          setActiveExperiment(nextAvailable[0]);
+        }
+        return;
+      }
       // Reset experiment if not available in new timepoint
       const tp = sortedTimepoints.find((t) => t.age_days === Number(val));
       if (tp) {
@@ -1044,8 +1392,36 @@ export function ColonyResultsTab({
         }
       }
     },
-    [sortedTimepoints, activeExperiment]
+    [sortedTimepoints, activeExperiment, selectedRun, runTimepoints]
   );
+
+  useEffect(() => {
+    if (!selectedRun) {
+      if (lastRunIdForDefaults !== null) {
+        setLastRunIdForDefaults(null);
+      }
+      return;
+    }
+
+    if (lastRunIdForDefaults === selectedRun.id) return;
+
+    const firstTimepoint = runTimepoints[0]?.key;
+    const firstExperiment = runTimepoints[0]?.experiments[0];
+    if (firstTimepoint) {
+      setActiveTimepoint(firstTimepoint);
+    }
+    if (firstExperiment) {
+      setActiveExperiment(firstExperiment);
+    }
+    setLastRunIdForDefaults(selectedRun.id);
+  }, [lastRunIdForDefaults, runTimepoints, selectedRun]);
+
+  useEffect(() => {
+    if (availableExperiments.length === 0) return;
+    if (!availableExperiments.includes(activeExperiment)) {
+      setActiveExperiment(availableExperiments[0]);
+    }
+  }, [activeExperiment, availableExperiments]);
 
   if (activeAnimals.length === 0) {
     return (
@@ -1114,7 +1490,7 @@ export function ColonyResultsTab({
               onClick={async () => {
                 if (!pendingSaveEntries) return;
                 setShowEmptyStatusDialog(false);
-                await executeSave(Number(activeTimepoint), activeExperiment, pendingSaveEntries, emptyStatusChoice);
+                await executeSave(selectedRun ? (selectedRunTimepoint?.age ?? 0) : Number(activeTimepoint), activeExperiment, pendingSaveEntries, emptyStatusChoice);
               }}
             >
               {saving && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
@@ -1132,8 +1508,8 @@ export function ColonyResultsTab({
           <div className="space-y-2 text-sm">
             <p>
               This will remove all saved values in <span className="font-medium">{pendingDeleteField?.label}</span> for
-              <span className="font-medium"> {EXPERIMENT_LABELS[activeExperiment] || activeExperiment}</span> at
-              <span className="font-medium"> {activeTimepoint} days</span>.
+              <span className="font-medium"> {selectedRun ? (runBlockLabelById.get(activeExperiment) || activeExperiment) : (EXPERIMENT_LABELS[activeExperiment] || activeExperiment)}</span> at
+              <span className="font-medium"> {selectedRun ? (selectedRunTimepoint?.label || "General") : `${activeTimepoint} days`}</span>.
             </p>
             <p className="text-muted-foreground">
               Use <span className="font-medium">Hide</span> if you only want to hide the column visually.
@@ -1156,6 +1532,24 @@ export function ColonyResultsTab({
         </DialogContent>
       </Dialog>
 
+      {visibleRuns.length > 0 && (
+        <Tabs value={activeRunId} onValueChange={setActiveRunId}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <TabsList className="h-auto gap-1 rounded-xl bg-muted/60 p-1">
+              <TabsTrigger value="__legacy__" className="px-4 py-2 text-sm font-semibold">
+                Legacy
+              </TabsTrigger>
+              {visibleRuns.map((run) => (
+                <TabsTrigger key={run.id} value={run.id} className="px-4 py-2 text-sm font-semibold">
+                  {run.name}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {selectedRun ? <Badge variant="outline" className="font-normal">{selectedRun.status}</Badge> : null}
+          </div>
+        </Tabs>
+      )}
+
       {/* ─── Timepoint Master Tabs ─────────────────────────────── */}
       <Tabs value={activeTimepoint} onValueChange={handleTimepointChange}>
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1166,7 +1560,9 @@ export function ColonyResultsTab({
                 value={String(age)}
                 className="px-4 py-2 text-sm font-semibold"
               >
-                {age} Day
+                {selectedRun
+                  ? (runTimepoints.find((timepoint) => timepoint.key === String(age))?.label || String(age))
+                  : `${age} Day`}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -1190,9 +1586,28 @@ export function ColonyResultsTab({
                 {availableExperiments.map((exp) => {
                   // Count animals with data for this experiment
                   const count = activeAnimals.filter((a) => {
-                    const existing = getExistingResult(a.id, age, exp);
-                    if (existing && Object.values(existing.measures as Record<string, unknown>).some((v) => v !== null)) return true;
-                    const key = `${a.id}-${age}-${exp}`;
+                    const currentTimepointAge = selectedRun
+                      ? (runTimepoints.find((timepoint) => timepoint.key === String(age))?.age ?? 0)
+                      : Number(age);
+                    if (selectedRun) {
+                      const runExperimentRow = getRunExperimentRowForTab(String(age), exp);
+                      if (!runExperimentRow) return false;
+                      const existing = colonyResults.find(
+                        (result) =>
+                          result.animal_id === a.id &&
+                          result.experiment_run_id === selectedRun.id &&
+                          result.run_timepoint_experiment_id === runExperimentRow.id
+                      );
+                      if (existing && Object.values(existing.measures as Record<string, unknown>).some((v) => v !== null && v !== "")) {
+                        return true;
+                      }
+                    } else {
+                      const existing = getExistingResult(a.id, currentTimepointAge, exp);
+                      if (existing && Object.values(existing.measures as Record<string, unknown>).some((v) => v !== null && v !== "")) {
+                        return true;
+                      }
+                    }
+                    const key = `${a.id}-${currentTimepointAge}-${exp}`;
                     if (editData[key]) return Object.values(editData[key].measures).some((v) => v !== null && v !== "");
                     return false;
                   }).length;
@@ -1202,7 +1617,7 @@ export function ColonyResultsTab({
                       value={exp}
                       className="relative h-8 flex-none rounded-lg px-3 text-xs font-medium"
                     >
-                      {EXPERIMENT_LABELS[exp] || exp}
+                      {selectedRun ? (runBlockLabelById.get(exp) || exp) : (EXPERIMENT_LABELS[exp] || exp)}
                       {count > 0 && (
                         <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
                           {count}
@@ -1220,10 +1635,14 @@ export function ColonyResultsTab({
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div>
                           <CardTitle className="text-lg">
-                            {EXPERIMENT_LABELS[exp] || exp} — {age} Day Results
+                            {selectedRun
+                              ? `${runBlockLabelById.get(exp) || exp} — ${selectedRun.name}`
+                              : `${EXPERIMENT_LABELS[exp] || exp} — ${age} Day Results`}
                           </CardTitle>
                           <p className="mt-1 text-sm text-muted-foreground">
-                            Enter measured values for each animal. Changes are saved when you click Save.
+                            {selectedRun
+                              ? "Enter measured values for each assigned animal. Changes are saved when you click Save."
+                              : "Enter measured values for each animal. Changes are saved when you click Save."}
                           </p>
                           <div className="mt-3 inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 shadow-sm">
                             <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium">
@@ -1429,7 +1848,7 @@ export function ColonyResultsTab({
                         <table className="w-full text-sm">
                           <thead className="sticky top-0 z-20">
                             <tr className="border-b bg-background shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-                              <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground sticky left-0 z-30 bg-background min-w-[150px]">
+                              <th className="sticky left-0 z-30 min-w-[150px] bg-background px-3 py-2.5 text-left text-xs font-medium text-muted-foreground shadow-[6px_0_10px_-10px_rgba(15,23,42,0.35)]">
                                 Animal
                               </th>
                               <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[90px]">
@@ -1497,7 +1916,7 @@ export function ColonyResultsTab({
                                 key={cohort?.id || "unknown"}
                                 cohort={cohort}
                                 animals={cohortAnimals}
-                                timepoint={age}
+                                timepoint={Number(age)}
                                 experiment={exp}
                                 fields={currentFields}
                                 getRowData={getRowData}
@@ -1530,7 +1949,7 @@ export function ColonyResultsTab({
           cohorts={cohorts}
           timepoints={timepoints}
           colonyResults={colonyResults}
-          defaultTimepointAge={Number(activeTimepoint)}
+          defaultTimepointAge={selectedRun ? (selectedRunTimepoint?.age ?? 0) : Number(activeTimepoint)}
           defaultExperimentType={activeExperiment}
           batchUpsertColonyResults={batchUpsertColonyResults}
           onImportComplete={handleImportComplete}
@@ -1615,18 +2034,26 @@ function CohortGroup({
               ? "border-l-4 border-l-orange-400 dark:border-l-orange-600"
               : "border-l-4 border-l-slate-300 dark:border-l-slate-600";
 
+          const rowBackgroundClass = isDirty
+            ? "bg-amber-50/50 dark:bg-amber-950/20"
+            : hasData
+              ? "bg-emerald-50/30 dark:bg-emerald-950/10"
+              : "bg-background";
+
+          const stickyCellBackgroundClass = isDirty
+            ? "bg-amber-50 dark:bg-amber-950/35"
+            : hasData
+              ? "bg-emerald-50 dark:bg-emerald-950/20"
+              : "bg-background";
+
           return (
             <tr
               key={animal.id}
-              className={`border-b transition-colors ${genotypeRowColor} ${
-                isDirty
-                  ? "bg-amber-50/50 dark:bg-amber-950/20"
-                  : hasData
-                  ? "bg-emerald-50/30 dark:bg-emerald-950/10"
-                  : "bg-background"
-              } hover:bg-slate-50/70 dark:hover:bg-slate-900/30`}
+              className={`border-b transition-colors ${genotypeRowColor} ${rowBackgroundClass} hover:bg-slate-50/70 dark:hover:bg-slate-900/30`}
             >
-              <td className="px-3 py-2 sticky left-0 bg-inherit font-medium text-xs">
+              <td
+                className={`sticky left-0 z-10 px-3 py-2 text-xs font-medium ${stickyCellBackgroundClass} shadow-[6px_0_10px_-10px_rgba(15,23,42,0.35)]`}
+              >
                 <div className="flex items-center gap-1.5">
                   <MiniEarTag earTag={animal.ear_tag} size={20} />
                   <span>{animal.identifier}</span>
@@ -1658,13 +2085,28 @@ function CohortGroup({
                 <td key={field.key} className="px-1.5 py-1.5">
                   {(() => {
                     const readOnly = isDerivedReadOnlyField(experiment, field.key);
+                    if (field.type === "boolean") {
+                      return (
+                        <label className="flex h-7 min-w-[100px] items-center justify-center rounded-md border border-slate-200 bg-white px-2">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={Boolean(data.measures[field.key])}
+                            onChange={(e) =>
+                              updateMeasure(animal.id, timepoint, experiment, field.key, e.target.checked)
+                            }
+                          />
+                        </label>
+                      );
+                    }
+                    const inputValue = data.measures[field.key];
                     return (
                   <Input
                     type={field.type === "text" ? "text" : "text"}
                     inputMode={field.type === "text" ? "text" : "decimal"}
                     className={`h-7 text-xs w-full min-w-[100px] ${readOnly ? "bg-slate-50 text-slate-600" : ""}`}
                     placeholder={readOnly ? "auto" : "—"}
-                    value={data.measures[field.key] ?? ""}
+                    value={typeof inputValue === "string" || typeof inputValue === "number" ? inputValue : ""}
                     readOnly={readOnly}
                     onChange={(e) =>
                       updateMeasure(animal.id, timepoint, experiment, field.key, e.target.value)

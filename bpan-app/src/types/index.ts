@@ -399,6 +399,7 @@ export type ExperimentType =
   | "ldb"
   | "marble"
   | "nesting"
+  | "social_interaction"
   | "rotarod"
   | "rotarod_hab"
   | "rotarod_test1"
@@ -543,9 +544,12 @@ export interface ColonyResult {
   id: string;
   user_id: string;
   animal_id: string;
+  experiment_run_id: string | null;
+  run_timepoint_id: string | null;
+  run_timepoint_experiment_id: string | null;
   timepoint_age_days: number;
   experiment_type: string;
-  measures: Record<string, string | number | null | string[]>;
+  measures: Record<string, string | number | boolean | null | string[]>;
   notes: string | null;
   recorded_at: string;
   created_at: string;
@@ -888,6 +892,45 @@ export interface ExperimentRun {
   start_anchor_date: string | null;
   notes: string | null;
   created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunTimepoint {
+  id: string;
+  experiment_run_id: string;
+  key: string;
+  label: string;
+  target_age_days: number;
+  sort_order: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunTimepointExperiment {
+  id: string;
+  run_timepoint_id: string;
+  experiment_key: string;
+  label: string;
+  sort_order: number;
+  result_schema_id: string | null;
+  schema_snapshot: ResultSchemaColumnSnapshot[];
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunExperimentScheduleStep {
+  id: string;
+  run_timepoint_experiment_id: string;
+  relative_day: number;
+  slot_kind: PlatformSlotKind;
+  slot_label: string | null;
+  scheduled_time: string | null;
+  sort_order: number;
+  task_type: "experiment" | "handling" | "transport" | "prep" | "recovery" | "collection" | "custom";
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -15,6 +15,12 @@ import type {
   HousingCage,
   ColonyResult,
   AdvisorPortalAccessLog,
+  ExperimentRun,
+  RunAssignment,
+  RunExperimentScheduleStep,
+  RunScheduleBlock,
+  RunTimepoint,
+  RunTimepointExperiment,
 } from "@/types";
 import {
   createBreederCage,
@@ -94,6 +100,33 @@ async function fetchAllRows(supabase: any, table: string, userId: string): Promi
     if (data.length < PAGE) break;
   }
   return all;
+}
+
+async function fetchOptionalRows(supabase: unknown, table: string, orderBy?: Array<{ column: string; ascending?: boolean }>) {
+  try {
+    type OptionalRowsQuery = {
+      order: (column: string, options: { ascending: boolean }) => OptionalRowsQuery;
+      then: PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>["then"];
+    };
+
+    let query = (supabase as {
+      from: (tableName: string) => {
+        select: (columns: string) => OptionalRowsQuery;
+      };
+    }).from(table).select("*") as OptionalRowsQuery;
+    for (const order of orderBy || []) {
+      query = query.order(order.column, { ascending: order.ascending ?? true });
+    }
+    const { data, error } = await query;
+    if (error) {
+      console.warn(`fetchOptionalRows ${table} skipped:`, error.message);
+      return [];
+    }
+    return data || [];
+  } catch (error) {
+    console.warn(`fetchOptionalRows ${table} failed:`, error);
+    return [];
+  }
 }
 
 interface ColonyPageViewOptions {
@@ -184,6 +217,12 @@ export async function renderColonyPageView({
     animals,
     cageChanges,
     colonyResults,
+    { data: experimentRuns },
+    { data: runAssignments },
+    runTimepoints,
+    runTimepointExperiments,
+    runExperimentScheduleSteps,
+    { data: runScheduleBlocks },
   ] = await Promise.all([
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
@@ -197,6 +236,22 @@ export async function renderColonyPageView({
     fetchAllRows(supabase, "animals", user.id),
     fetchAllRows(supabase, "cage_changes", user.id),
     fetchAllRows(supabase, "colony_results", user.id),
+    supabase.from("experiment_runs").select("*").order("updated_at", { ascending: false }),
+    supabase.from("run_assignments").select("*").order("sort_order", { ascending: true }),
+    fetchOptionalRows(supabase, "run_timepoints", [
+      { column: "experiment_run_id" },
+      { column: "sort_order" },
+    ]),
+    fetchOptionalRows(supabase, "run_timepoint_experiments", [
+      { column: "run_timepoint_id" },
+      { column: "sort_order" },
+    ]),
+    fetchOptionalRows(supabase, "run_experiment_schedule_steps", [
+      { column: "run_timepoint_experiment_id" },
+      { column: "relative_day" },
+      { column: "sort_order" },
+    ]),
+    supabase.from("run_schedule_blocks").select("*").order("day_index", { ascending: true }).order("sort_order", { ascending: true }),
   ]);
 
   return (
@@ -225,6 +280,12 @@ export async function renderColonyPageView({
           colonyPhotos={(colonyPhotos || []) as ColonyPhoto[]}
           housingCages={(housingCages || []) as HousingCage[]}
           colonyResults={(colonyResults || []) as ColonyResult[]}
+          experimentRuns={(experimentRuns || []) as ExperimentRun[]}
+          runAssignments={(runAssignments || []) as RunAssignment[]}
+          runTimepoints={(runTimepoints || []) as RunTimepoint[]}
+          runTimepointExperiments={(runTimepointExperiments || []) as RunTimepointExperiment[]}
+          runExperimentScheduleSteps={(runExperimentScheduleSteps || []) as RunExperimentScheduleStep[]}
+          runScheduleBlocks={(runScheduleBlocks || []) as RunScheduleBlock[]}
           batchUpsertColonyResults={batchUpsertColonyResults}
           reconcileTrackerFromExistingColonyResults={reconcileTrackerFromExistingColonyResults}
           deleteColonyResultMeasureColumn={deleteColonyResultMeasureColumn}

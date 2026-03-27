@@ -121,7 +121,7 @@ async function markExperimentWithStatus(
     .eq("id", exp.id);
 }
 
-function hasMeaningfulMeasures(measures: Record<string, string | number | null | string[]> | null | undefined) {
+function hasMeaningfulMeasures(measures: Record<string, string | number | boolean | null | string[]> | null | undefined) {
   if (!measures) return false;
   return Object.values(measures).some((v) => {
     if (Array.isArray(v)) return v.length > 0;
@@ -138,8 +138,13 @@ export async function upsertColonyResult(
   animalId: string,
   timepointAgeDays: number,
   experimentType: string,
-  measures: Record<string, string | number | null | string[]>,
-  notes?: string
+  measures: Record<string, string | number | boolean | null | string[]>,
+  notes?: string,
+  options?: {
+    experimentRunId?: string | null;
+    runTimepointId?: string | null;
+    runTimepointExperimentId?: string | null;
+  }
 ) {
   const supabase = await createClient();
   const {
@@ -148,13 +153,22 @@ export async function upsertColonyResult(
   if (!user) redirect("/auth/login");
 
   // Check if row exists
-  const { data: existing } = await supabase
+  let existingQuery = supabase
     .from("colony_results")
     .select("id")
-    .eq("animal_id", animalId)
-    .eq("timepoint_age_days", timepointAgeDays)
-    .eq("experiment_type", experimentType)
-    .maybeSingle();
+    .eq("animal_id", animalId);
+
+  if (options?.experimentRunId && options?.runTimepointExperimentId) {
+    existingQuery = existingQuery
+      .eq("experiment_run_id", options.experimentRunId)
+      .eq("run_timepoint_experiment_id", options.runTimepointExperimentId);
+  } else {
+    existingQuery = existingQuery
+      .eq("timepoint_age_days", timepointAgeDays)
+      .eq("experiment_type", experimentType);
+  }
+
+  const { data: existing } = await existingQuery.maybeSingle();
 
   if (existing) {
     const { error } = await supabase
@@ -171,6 +185,9 @@ export async function upsertColonyResult(
     const { error } = await supabase.from("colony_results").insert({
       user_id: user.id,
       animal_id: animalId,
+      experiment_run_id: options?.experimentRunId || null,
+      run_timepoint_id: options?.runTimepointId || null,
+      run_timepoint_experiment_id: options?.runTimepointExperimentId || null,
       timepoint_age_days: timepointAgeDays,
       experiment_type: experimentType,
       measures,
@@ -202,11 +219,14 @@ export async function batchUpsertColonyResults(
   experimentType: string,
   entries: {
     animalId: string;
-    measures: Record<string, string | number | null | string[]>;
+    measures: Record<string, string | number | boolean | null | string[]>;
     notes?: string;
   }[],
   options?: {
     emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave";
+    experimentRunId?: string | null;
+    runTimepointId?: string | null;
+    runTimepointExperimentId?: string | null;
   }
 ) {
   const supabase = await createClient();
@@ -220,13 +240,22 @@ export async function batchUpsertColonyResults(
 
   for (const entry of entries) {
     // Check if row exists
-    const { data: existing } = await supabase
+    let existingQuery = supabase
       .from("colony_results")
       .select("id")
-      .eq("animal_id", entry.animalId)
-      .eq("timepoint_age_days", timepointAgeDays)
-      .eq("experiment_type", experimentType)
-      .maybeSingle();
+      .eq("animal_id", entry.animalId);
+
+    if (options?.experimentRunId && options?.runTimepointExperimentId) {
+      existingQuery = existingQuery
+        .eq("experiment_run_id", options.experimentRunId)
+        .eq("run_timepoint_experiment_id", options.runTimepointExperimentId);
+    } else {
+      existingQuery = existingQuery
+        .eq("timepoint_age_days", timepointAgeDays)
+        .eq("experiment_type", experimentType);
+    }
+
+    const { data: existing } = await existingQuery.maybeSingle();
 
     if (existing) {
       const { error } = await supabase
@@ -244,6 +273,9 @@ export async function batchUpsertColonyResults(
       const { error } = await supabase.from("colony_results").insert({
         user_id: user.id,
         animal_id: entry.animalId,
+        experiment_run_id: options?.experimentRunId || null,
+        run_timepoint_id: options?.runTimepointId || null,
+        run_timepoint_experiment_id: options?.runTimepointExperimentId || null,
         timepoint_age_days: timepointAgeDays,
         experiment_type: experimentType,
         measures: entry.measures,
@@ -361,7 +393,7 @@ export async function reconcileTrackerFromExistingColonyResults() {
 
   for (const row of rows || []) {
     const hasData = hasMeaningfulMeasures(
-      (row.measures || {}) as Record<string, string | number | null | string[]>
+      (row.measures || {}) as Record<string, string | number | boolean | null | string[]>
     );
     if (!hasData) {
       ignored++;
@@ -391,7 +423,12 @@ export async function reconcileTrackerFromExistingColonyResults() {
 export async function deleteColonyResultMeasureColumn(
   timepointAgeDays: number,
   experimentType: string,
-  fieldKey: string
+  fieldKey: string,
+  options?: {
+    experimentRunId?: string | null;
+    runTimepointId?: string | null;
+    runTimepointExperimentId?: string | null;
+  }
 ) {
   const supabase = await createClient();
   const {
@@ -402,12 +439,22 @@ export async function deleteColonyResultMeasureColumn(
   const safeFieldKey = String(fieldKey || "").trim();
   if (!safeFieldKey) return { error: "Field key is required" };
 
-  const { data: rows, error } = await supabase
+  let query = supabase
     .from("colony_results")
     .select("id, measures")
-    .eq("user_id", user.id)
-    .eq("timepoint_age_days", timepointAgeDays)
-    .eq("experiment_type", experimentType);
+    .eq("user_id", user.id);
+
+  if (options?.experimentRunId && options?.runTimepointExperimentId) {
+    query = query
+      .eq("experiment_run_id", options.experimentRunId)
+      .eq("run_timepoint_experiment_id", options.runTimepointExperimentId);
+  } else {
+    query = query
+      .eq("timepoint_age_days", timepointAgeDays)
+      .eq("experiment_type", experimentType);
+  }
+
+  const { data: rows, error } = await query;
 
   if (error) return { error: error.message };
 

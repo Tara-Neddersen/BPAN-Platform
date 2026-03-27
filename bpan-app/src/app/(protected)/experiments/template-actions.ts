@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 import { createTemplateAiWorkflowSuggestion } from "@/lib/automation-workflows";
+import { syncRunsForTemplateId } from "@/lib/run-results-layout";
 
 type TemplateProtocolInput = {
   protocolId: string;
@@ -332,6 +333,8 @@ export async function saveExperimentTemplate(formData: FormData) {
 
   revalidatePath("/experiments");
   revalidatePath("/tasks");
+  await syncRunsForTemplateId(supabase, persistedTemplateId);
+  revalidatePath("/colony");
   await createTemplateAiWorkflowSuggestion({
     supabase,
     userId: user.id,

@@ -14,6 +14,7 @@ import {
   Download,
   Loader2,
   Table as TableIcon,
+  Plus,
   ChevronDown,
   ChevronRight,
   ClipboardPaste,
@@ -50,10 +51,21 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   createDataset,
   deleteDataset,
+  updateDatasetContent,
   saveAnalysis,
   deleteAnalysis,
 } from "@/app/(protected)/results/actions";
-import type { Dataset, DatasetColumn, Analysis, Figure, Experiment } from "@/types";
+import type {
+  Dataset,
+  DatasetColumn,
+  Analysis,
+  Figure,
+  Experiment,
+  Animal,
+  Cohort,
+  RunAssignment,
+  RunScheduleBlock,
+} from "@/types";
 import {
   normalizeSchemaSnapshot,
   reconcileDataWithSchemaSnapshot,
@@ -78,6 +90,37 @@ function detectColumnType(values: unknown[]): DatasetColumn["type"] {
   const uniqueCount = new Set(nonNull.map(String)).size;
   if (uniqueCount <= 20) return "categorical";
   return "text";
+}
+
+function mapSnapshotColumnTypeToDatasetType(rawType: string | null | undefined): DatasetColumn["type"] {
+  switch (rawType) {
+    case "number":
+    case "integer":
+      return "numeric";
+    case "select":
+    case "multi_select":
+    case "boolean":
+    case "animal_ref":
+    case "cohort_ref":
+    case "batch_ref":
+      return "categorical";
+    case "date":
+    case "datetime":
+    case "time":
+      return "date";
+    default:
+      return "text";
+  }
+}
+
+function buildColumnsFromRunSnapshot(run: ExperimentRunOption | null): DatasetColumn[] {
+  if (!run) return [];
+  const snapshot = normalizeSchemaSnapshot(run.schema_snapshot);
+  return snapshot.map((column) => ({
+    name: column.label || column.name || column.key || "Column",
+    type: mapSnapshotColumnTypeToDatasetType(column.column_type || column.columnType || column.type),
+    unit: typeof column.unit === "string" && column.unit.trim() ? column.unit : undefined,
+  }));
 }
 
 function getNumericColumns(columns: DatasetColumn[]): string[] {
@@ -231,7 +274,12 @@ interface Props {
   initialFigures: Figure[];
   experiments: Pick<Experiment, "id" | "title">[];
   runs: ExperimentRunOption[];
+  animals: Animal[];
+  cohorts: Cohort[];
+  runAssignments: RunAssignment[];
+  runScheduleBlocks: RunScheduleBlock[];
   initialDatasetId?: string | null;
+  initialScopeRunId?: string | null;
   initialTab?: "data" | "visualize";
   initialAnalysisId?: string | null;
   initialFigureId?: string | null;
@@ -266,13 +314,20 @@ type DatasetRunLinkResolution = {
   mode: "explicit" | "legacy_inferred" | null;
 };
 
+const WORKSPACE_SCOPE = "__workspace__";
+
 export function ResultsClient({
   initialDatasets,
   initialAnalyses,
   initialFigures,
   experiments,
   runs,
+  animals,
+  cohorts,
+  runAssignments,
+  runScheduleBlocks,
   initialDatasetId = null,
+  initialScopeRunId = null,
   initialTab = "data",
   initialAnalysisId = null,
   initialFigureId = null,
@@ -293,11 +348,15 @@ export function ResultsClient({
   const [analyses] = useState(initialAnalyses);
   const [figures] = useState(initialFigures);
   const [activeTab, setActiveTab] = useState<"data" | "visualize">(initialTab);
+  const [activeScope, setActiveScope] = useState<string>(
+    initialScopeRunId || initialPrefillRunId || WORKSPACE_SCOPE
+  );
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(
     initialDatasets.find((d) => d.id === initialDatasetId)?.id || initialDatasets[0]?.id || null
   );
   const [showImport, setShowImport] = useState(initialOpenImport);
   const [showPaste, setShowPaste] = useState(false);
+  const [showManualBuilder, setShowManualBuilder] = useState(false);
   const [showSheets, setShowSheets] = useState(false);
   const [exportingSheetsBackup, setExportingSheetsBackup] = useState(false);
   const [creatingLiveSyncSheet, setCreatingLiveSyncSheet] = useState(false);
@@ -335,6 +394,37 @@ export function ResultsClient({
     [resolveDatasetRunLink, selectedDataset]
   );
   const selectedRun = selectedRunResolution.run;
+  const selectedScopeRun = useMemo(
+    () => runs.find((run) => run.id === activeScope) || null,
+    [activeScope, runs]
+  );
+
+  const scopedDatasets = useMemo(() => {
+    if (activeScope === WORKSPACE_SCOPE) {
+      return datasets;
+    }
+
+    return datasets.filter((dataset) => resolveDatasetRunLink(dataset).run?.id === activeScope);
+  }, [activeScope, datasets, resolveDatasetRunLink]);
+
+  useEffect(() => {
+    if (activeScope === WORKSPACE_SCOPE) return;
+    if (selectedScopeRun) return;
+    setActiveScope(WORKSPACE_SCOPE);
+  }, [activeScope, selectedScopeRun]);
+
+  useEffect(() => {
+    if (scopedDatasets.length === 0) {
+      setSelectedDatasetId(null);
+      return;
+    }
+
+    if (selectedDatasetId && scopedDatasets.some((dataset) => dataset.id === selectedDatasetId)) {
+      return;
+    }
+
+    setSelectedDatasetId(scopedDatasets[0]?.id || null);
+  }, [scopedDatasets, selectedDatasetId]);
 
   const datasetAnalyses = useMemo(
     () =>
@@ -481,12 +571,14 @@ export function ResultsClient({
   }, [ensureGoogleSheetsReady]);
 
   useEffect(() => {
-    if (!selectedDatasetId) return;
     const next = new URLSearchParams(searchParams?.toString() || "");
-    next.set("dataset", selectedDatasetId);
+    if (selectedDatasetId) next.set("dataset", selectedDatasetId);
+    else next.delete("dataset");
     next.set("tab", activeTab);
+    if (activeScope !== WORKSPACE_SCOPE) next.set("run", activeScope);
+    else next.delete("run");
     router.replace(`${pathname}?${next.toString()}`, { scroll: false });
-  }, [selectedDatasetId, activeTab, router, pathname, searchParams]);
+  }, [selectedDatasetId, activeTab, activeScope, router, pathname, searchParams]);
 
   useEffect(() => {
     if (!highlightedAnalysisId && !highlightedFigureId) return;
@@ -540,6 +632,9 @@ export function ResultsClient({
           <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             <Button onClick={() => setShowImport(true)} className="touch-target gap-2">
               <Upload className="h-4 w-4" /> Import file
+            </Button>
+            <Button variant="outline" onClick={() => setShowManualBuilder(true)} className="touch-target gap-2">
+              <Plus className="h-4 w-4" /> New table
             </Button>
             {datasets.length > 0 && (
               <>
@@ -627,7 +722,50 @@ export function ResultsClient({
           </div>
         </div>
 
-        {datasets.length > 0 && (
+        {runs.length > 0 && (
+          <div className="results-hero-inner space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Label className="text-sm font-medium">Results scope:</Label>
+              <HelpHint text="Switch between the full workspace and run-specific result lanes." />
+            </div>
+            <div className="sticky-section-switcher flex gap-1 overflow-x-auto px-1 py-1">
+              <Button
+                type="button"
+                variant={activeScope === WORKSPACE_SCOPE ? "default" : "ghost"}
+                size="sm"
+                className="touch-target shrink-0"
+                onClick={() => setActiveScope(WORKSPACE_SCOPE)}
+              >
+                Workspace
+                <span className="ml-1 text-xs opacity-80">{datasets.length}</span>
+              </Button>
+              {runs.map((run) => {
+                const count = datasets.filter((dataset) => resolveDatasetRunLink(dataset).run?.id === run.id).length;
+                return (
+                  <Button
+                    key={run.id}
+                    type="button"
+                    variant={activeScope === run.id ? "default" : "ghost"}
+                    size="sm"
+                    className="touch-target shrink-0"
+                    onClick={() => setActiveScope(run.id)}
+                  >
+                    {run.name}
+                    <span className="ml-1 text-xs opacity-80">{count}</span>
+                  </Button>
+                );
+              })}
+            </div>
+            {selectedScopeRun && (
+              <div className="rounded-xl border bg-background/85 px-3 py-2.5 text-xs text-muted-foreground">
+                Viewing datasets linked to <span className="font-medium text-foreground">{selectedScopeRun.name}</span>
+                {selectedScopeRun.status ? ` (${selectedScopeRun.status})` : ""}.
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeScope === WORKSPACE_SCOPE && scopedDatasets.length > 0 && (
           <div className="results-hero-inner space-y-3">
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex items-center gap-1.5">
@@ -642,7 +780,7 @@ export function ResultsClient({
                   <SelectValue placeholder="Select a dataset" />
                 </SelectTrigger>
                 <SelectContent>
-                  {datasets.map((d) => (
+                  {scopedDatasets.map((d) => (
                     <SelectItem key={d.id} value={d.id}>
                       {d.name} ({d.row_count} rows)
                       {resolveDatasetRunLink(d).mode === "legacy_inferred" ? " • legacy linked" : ""}
@@ -659,7 +797,7 @@ export function ResultsClient({
                     if (confirm(`Delete "${selectedDataset.name}"?`)) {
                       await deleteDataset(selectedDataset.id);
                       setDatasets((prev) => prev.filter((d) => d.id !== selectedDataset.id));
-                      setSelectedDatasetId(datasets.find((d) => d.id !== selectedDataset.id)?.id || null);
+                      setSelectedDatasetId(null);
                     }
                   }}
                 >
@@ -734,28 +872,63 @@ export function ResultsClient({
       </section>
 
       {/* Main content */}
-      {!selectedDataset ? (
+      {activeScope !== WORKSPACE_SCOPE && selectedScopeRun ? (
+        <RunCapturePanel
+          run={selectedScopeRun}
+          animals={animals}
+          cohorts={cohorts}
+          runAssignments={runAssignments}
+          runScheduleBlocks={runScheduleBlocks}
+          datasets={datasets}
+          onImport={() => setShowImport(true)}
+        />
+      ) : !selectedDataset ? (
         <div className="rounded-2xl border border-dashed bg-gradient-to-b from-white to-slate-50/80 p-8 text-center sm:p-12">
           <div className="mb-4 inline-flex rounded-2xl border border-primary/20 bg-primary/5 p-3">
             <BarChart3 className="h-8 w-8 text-primary" />
           </div>
           <div className="mb-4 flex items-center justify-center gap-1.5">
-            <h3 className="font-medium text-lg">No data yet</h3>
+            <h3 className="font-medium text-lg">
+              {activeScope === WORKSPACE_SCOPE ? "No data yet" : "No data for this run yet"}
+            </h3>
             <HelpHint text="Upload a CSV or Excel file, or paste table data to create your first dataset." />
           </div>
           <p className="mx-auto mb-5 max-w-xl text-sm text-muted-foreground">
-            For run-linked capture, use <span className="font-medium">Create Dataset from Run</span> on the run screen.
+            {selectedScopeRun ? (
+              <>
+                Import or paste data for <span className="font-medium">{selectedScopeRun.name}</span>, or use{" "}
+                <span className="font-medium">Create Dataset from Run</span> on the run screen.
+              </>
+            ) : (
+              <>
+                For run-linked capture, use <span className="font-medium">Create Dataset from Run</span> on the run screen.
+              </>
+            )}
           </p>
           <div className="mx-auto mb-6 grid max-w-lg grid-cols-1 gap-2 text-left text-xs text-muted-foreground sm:grid-cols-3">
             <div className="rounded-lg border bg-background/80 px-3 py-2">
               <span className="font-medium text-foreground">1.</span> Import or paste raw values
             </div>
             <div className="rounded-lg border bg-background/80 px-3 py-2">
-              <span className="font-medium text-foreground">2.</span> Run analyses and compare outcomes
+              <span className="font-medium text-foreground">2.</span> Or build a table manually
             </div>
             <div className="rounded-lg border bg-background/80 px-3 py-2">
               <span className="font-medium text-foreground">3.</span> Export figures and report packs
             </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button onClick={() => setShowManualBuilder(true)} className="gap-2">
+              <Plus className="h-4 w-4" />
+              {selectedScopeRun ? "Create dataset for this run" : "Create table manually"}
+            </Button>
+            <Button variant="outline" onClick={() => setShowImport(true)} className="gap-2">
+              <Upload className="h-4 w-4" />
+              Import file
+            </Button>
+            <Button variant="outline" onClick={() => setShowPaste(true)} className="gap-2">
+              <ClipboardPaste className="h-4 w-4" />
+              Paste data
+            </Button>
           </div>
           <p className="text-xs text-muted-foreground">
             Use the <span className="font-medium">Import file</span> button in the header to get started.
@@ -796,16 +969,39 @@ export function ResultsClient({
         <ImportDialog
           experiments={experiments}
           runs={runs}
-          prefillRunId={initialPrefillRunId}
+          prefillRunId={selectedScopeRun?.id || initialPrefillRunId}
           prefillDatasetName={initialPrefillDatasetName}
           prefillDatasetDescription={initialPrefillDatasetDescription}
-          prefillExperimentId={initialPrefillExperimentId}
+          prefillExperimentId={selectedScopeRun?.legacy_experiment_id || initialPrefillExperimentId}
           onClose={() => setShowImport(false)}
           onImported={(ds) => {
             setDatasets((prev) => [ds, ...prev]);
+            if (ds.experiment_run_id) {
+              setActiveScope(ds.experiment_run_id);
+            }
             setSelectedDatasetId(ds.id);
             if (initialPrefillStarterAnalyses) router.push("/colony/analysis");
             setShowImport(false);
+          }}
+        />
+      )}
+
+      {showManualBuilder && (
+        <ManualDatasetDialog
+          experiments={experiments}
+          runs={runs}
+          prefillRunId={selectedScopeRun?.id || initialPrefillRunId}
+          prefillDatasetName={initialPrefillDatasetName}
+          prefillDatasetDescription={initialPrefillDatasetDescription}
+          prefillExperimentId={selectedScopeRun?.legacy_experiment_id || initialPrefillExperimentId}
+          onClose={() => setShowManualBuilder(false)}
+          onCreated={(ds) => {
+            setDatasets((prev) => [ds, ...prev]);
+            if (ds.experiment_run_id) {
+              setActiveScope(ds.experiment_run_id);
+            }
+            setSelectedDatasetId(ds.id);
+            setShowManualBuilder(false);
           }}
         />
       )}
@@ -815,13 +1011,16 @@ export function ResultsClient({
         <PasteDialog
           experiments={experiments}
           runs={runs}
-          prefillRunId={initialPrefillRunId}
+          prefillRunId={selectedScopeRun?.id || initialPrefillRunId}
           prefillDatasetName={initialPrefillDatasetName}
           prefillDatasetDescription={initialPrefillDatasetDescription}
-          prefillExperimentId={initialPrefillExperimentId}
+          prefillExperimentId={selectedScopeRun?.legacy_experiment_id || initialPrefillExperimentId}
           onClose={() => setShowPaste(false)}
           onImported={(ds) => {
             setDatasets((prev) => [ds, ...prev]);
+            if (ds.experiment_run_id) {
+              setActiveScope(ds.experiment_run_id);
+            }
             setSelectedDatasetId(ds.id);
             if (initialPrefillStarterAnalyses) router.push("/colony/analysis");
             setShowPaste(false);
@@ -851,6 +1050,397 @@ export function ResultsClient({
 }
 
 // ─── Data Table ──────────────────────────────────────────────────────────────
+
+type RunCaptureField = {
+  key: string;
+  label: string;
+  type: DatasetColumn["type"];
+  unit?: string;
+};
+
+function RunCapturePanel({
+  run,
+  animals,
+  cohorts,
+  runAssignments,
+  runScheduleBlocks,
+  datasets,
+  onImport,
+}: {
+  run: ExperimentRunOption;
+  animals: Animal[];
+  cohorts: Cohort[];
+  runAssignments: RunAssignment[];
+  runScheduleBlocks: RunScheduleBlock[];
+  datasets: ResultsDatasetRecord[];
+  onImport: () => void;
+}) {
+  const router = useRouter();
+  const runAssignment = useMemo(
+    () => runAssignments.find((assignment) => assignment.experiment_run_id === run.id) || null,
+    [run.id, runAssignments]
+  );
+  const assignedAnimals = useMemo(() => {
+    if (!runAssignment) return animals;
+    if (runAssignment.scope_type === "animal" && runAssignment.animal_id) {
+      return animals.filter((animal) => animal.id === runAssignment.animal_id);
+    }
+    if (runAssignment.scope_type === "cohort" && runAssignment.cohort_id) {
+      return animals.filter((animal) => animal.cohort_id === runAssignment.cohort_id);
+    }
+    return animals;
+  }, [animals, runAssignment]);
+  const runBlocks = useMemo(
+    () => runScheduleBlocks.filter((block) => block.experiment_run_id === run.id),
+    [run.id, runScheduleBlocks]
+  );
+  const dayOptions = useMemo(() => {
+    const days = [...new Set(runBlocks.map((block) => block.day_index))].sort((a, b) => a - b);
+    return days.length > 0 ? days : [0];
+  }, [runBlocks]);
+  const [activeDay, setActiveDay] = useState<number>(dayOptions[0] || 0);
+  const dayBlocks = useMemo(() => {
+    const blocks = runBlocks.filter((block) => block.day_index === activeDay);
+    return blocks.length > 0
+      ? blocks
+      : [
+          {
+            id: "__default__",
+            experiment_run_id: run.id,
+            source_scheduled_block_id: null,
+            day_index: 0,
+            slot_kind: "custom",
+            slot_label: null,
+            scheduled_time: null,
+            sort_order: 0,
+            experiment_template_id: null,
+            protocol_id: null,
+            title: run.name,
+            notes: null,
+            status: run.status as RunScheduleBlock["status"],
+            metadata: {},
+            created_at: "",
+            updated_at: "",
+          } satisfies RunScheduleBlock,
+        ];
+  }, [activeDay, run.id, run.name, run.status, runBlocks]);
+  const [activeBlockId, setActiveBlockId] = useState<string>(dayBlocks[0]?.id || "__default__");
+  const schemaFields = useMemo<RunCaptureField[]>(
+    () =>
+      normalizeSchemaSnapshot(run.schema_snapshot)
+        .filter((column) => column.is_enabled !== false)
+        .map((column) => ({
+          key: column.key || column.name || column.label || crypto.randomUUID(),
+          label: column.label || column.name || column.key || "Field",
+          type: mapSnapshotColumnTypeToDatasetType(column.column_type || column.columnType || column.type),
+          unit: typeof column.unit === "string" && column.unit.trim() ? column.unit : undefined,
+        })),
+    [run.schema_snapshot]
+  );
+  const [customFields, setCustomFields] = useState<RunCaptureField[]>([]);
+  const [draftByBlockId, setDraftByBlockId] = useState<Record<string, Record<string, Record<string, string>>>>({});
+  const [newFieldLabel, setNewFieldLabel] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!dayOptions.includes(activeDay)) setActiveDay(dayOptions[0] || 0);
+  }, [activeDay, dayOptions]);
+
+  useEffect(() => {
+    if (!dayBlocks.some((block) => block.id === activeBlockId)) {
+      setActiveBlockId(dayBlocks[0]?.id || "__default__");
+    }
+  }, [activeBlockId, dayBlocks]);
+
+  const selectedBlock = dayBlocks.find((block) => block.id === activeBlockId) || dayBlocks[0];
+  const fields = useMemo(
+    () => (customFields.length > 0 ? [...schemaFields, ...customFields] : schemaFields),
+    [customFields, schemaFields]
+  );
+
+  const datasetTagForBlock = useCallback(
+    (blockId: string) => `run_capture:${run.id}:${blockId}`,
+    [run.id]
+  );
+  const currentDataset = useMemo(
+    () =>
+      datasets.find(
+        (dataset) =>
+          dataset.experiment_run_id === run.id &&
+          Array.isArray(dataset.tags) &&
+          dataset.tags.includes(datasetTagForBlock(activeBlockId))
+      ) || null,
+    [activeBlockId, datasetTagForBlock, datasets, run.id]
+  );
+
+  useEffect(() => {
+    if (!selectedBlock) return;
+    setDraftByBlockId((current) => {
+      if (current[selectedBlock.id]) return current;
+      const nextDraft: Record<string, Record<string, string>> = {};
+      for (const animal of assignedAnimals) {
+        const existingRow = currentDataset?.data.find(
+          (row) => String(row.__animal_id ?? row.Animal ?? "") === String(animal.id || animal.identifier)
+        );
+        const fieldValues: Record<string, string> = {};
+        for (const field of fields) {
+          fieldValues[field.label] = String(existingRow?.[field.label] ?? "");
+        }
+        nextDraft[animal.id] = fieldValues;
+      }
+      return { ...current, [selectedBlock.id]: nextDraft };
+    });
+  }, [assignedAnimals, currentDataset, fields, selectedBlock]);
+
+  const groupedAnimals = useMemo(() => {
+    const groups = new Map<string, { cohort: Cohort | null; animals: Animal[] }>();
+    for (const animal of assignedAnimals) {
+      const cohort = cohorts.find((entry) => entry.id === animal.cohort_id) || null;
+      const key = cohort?.id || "__ungrouped__";
+      const existing = groups.get(key) || { cohort, animals: [] };
+      existing.animals.push(animal);
+      groups.set(key, existing);
+    }
+    return Array.from(groups.values());
+  }, [assignedAnimals, cohorts]);
+
+  const currentDraft = draftByBlockId[selectedBlock?.id || "__default__"] || {};
+
+  const updateCell = (animalId: string, fieldLabel: string, value: string) => {
+    if (!selectedBlock) return;
+    setDraftByBlockId((current) => ({
+      ...current,
+      [selectedBlock.id]: {
+        ...(current[selectedBlock.id] || {}),
+        [animalId]: {
+          ...((current[selectedBlock.id] || {})[animalId] || {}),
+          [fieldLabel]: value,
+        },
+      },
+    }));
+  };
+
+  const addField = () => {
+    const label = newFieldLabel.trim();
+    if (!label) return;
+    const nextField: RunCaptureField = {
+      key: label.toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+      label,
+      type: "text",
+    };
+    setCustomFields((current) => [...current, nextField]);
+    setDraftByBlockId((current) => {
+      const next = { ...current };
+      for (const blockId of Object.keys(next)) {
+        const rows = next[blockId] || {};
+        next[blockId] = Object.fromEntries(
+          Object.entries(rows).map(([animalId, row]) => [animalId, { ...row, [label]: row[label] || "" }])
+        );
+      }
+      return next;
+    });
+    setNewFieldLabel("");
+  };
+
+  const saveCurrentBlock = async () => {
+    if (!selectedBlock) return;
+    const datasetName = `${run.name} — ${selectedBlock.title}`;
+    const managedTags = [
+      "run_capture",
+      `run_id:${run.id}`,
+      datasetTagForBlock(selectedBlock.id),
+      `run_day:${selectedBlock.day_index}`,
+    ];
+    const columns: DatasetColumn[] = [
+      { name: "Animal", type: "text" },
+      { name: "Cohort", type: "text" },
+      { name: "Sex", type: "categorical" },
+      { name: "GT", type: "categorical" },
+      ...fields.map((field) => ({ name: field.label, type: field.type, unit: field.unit })),
+    ];
+    const data = assignedAnimals.map((animal) => {
+      const cohort = cohorts.find((entry) => entry.id === animal.cohort_id);
+      const rowDraft = currentDraft[animal.id] || {};
+      return {
+        __animal_id: animal.id,
+        Animal: animal.identifier,
+        Cohort: cohort?.name || "Unassigned",
+        Sex: animal.sex,
+        GT: animal.genotype,
+        ...Object.fromEntries(fields.map((field) => [field.label, rowDraft[field.label] || ""])),
+      };
+    });
+
+    setSaving(true);
+    try {
+      if (currentDataset?.id) {
+        await updateDatasetContent({
+          id: currentDataset.id,
+          name: datasetName,
+          description: `Managed run capture for ${selectedBlock.title}`,
+          experiment_id: run.legacy_experiment_id || undefined,
+          experiment_run_id: run.id,
+          result_schema_id: run.result_schema_id || undefined,
+          schema_snapshot: run.schema_snapshot,
+          columns,
+          data,
+          source: "paste",
+          tags: managedTags,
+        });
+      } else {
+        await createDataset({
+          name: datasetName,
+          description: `Managed run capture for ${selectedBlock.title}`,
+          experiment_id: run.legacy_experiment_id || undefined,
+          experiment_run_id: run.id,
+          result_schema_id: run.result_schema_id || undefined,
+          schema_snapshot: run.schema_snapshot,
+          columns,
+          data,
+          source: "paste",
+          tags: managedTags,
+        });
+      }
+      router.refresh();
+      toast.success("Run results saved.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save run results.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardTitle className="text-base">{run.name} Results</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Enter measured values for each assigned animal directly in the table, then click Save All.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" className="gap-2" onClick={onImport}>
+                <Upload className="h-4 w-4" />
+                Import Data
+              </Button>
+              <div className="flex items-center gap-2 rounded-full border px-3 py-1.5">
+                <Input
+                  value={newFieldLabel}
+                  onChange={(event) => setNewFieldLabel(event.target.value)}
+                  placeholder="New field"
+                  className="h-7 w-32 border-0 p-0 shadow-none focus-visible:ring-0"
+                />
+                <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={addField}>
+                  <Plus className="h-3.5 w-3.5" />
+                  Add Field
+                </Button>
+              </div>
+              <Button size="sm" className="gap-2" onClick={saveCurrentBlock} disabled={saving}>
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Save All
+              </Button>
+            </div>
+          </div>
+          <Tabs value={String(activeDay)} onValueChange={(value) => setActiveDay(Number(value))} className="space-y-3">
+            <TabsList className="sticky-section-switcher h-auto w-full justify-start gap-1 px-1 py-1">
+              {dayOptions.map((day) => (
+                <TabsTrigger key={day} value={String(day)} className="touch-target">
+                  {day === 0 ? "Run" : `Day ${day}`}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {dayOptions.map((day) => (
+              <TabsContent key={day} value={String(day)} className="space-y-3">
+                <div className="sticky-section-switcher flex gap-1 overflow-x-auto px-1 py-1">
+                  {dayBlocks.map((block) => (
+                    <Button
+                      key={block.id}
+                      type="button"
+                      variant={block.id === activeBlockId ? "default" : "ghost"}
+                      size="sm"
+                      className="touch-target shrink-0"
+                      onClick={() => setActiveBlockId(block.id)}
+                    >
+                      {block.title}
+                    </Button>
+                  ))}
+                </div>
+              </TabsContent>
+            ))}
+          </Tabs>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {groupedAnimals.length === 0 ? (
+            <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+              No assigned animals were found for this run yet.
+            </div>
+          ) : (
+            groupedAnimals.map((group) => {
+              const recordedCount = group.animals.filter((animal) =>
+                fields.some((field) => {
+                  const value = currentDraft[animal.id]?.[field.label];
+                  return typeof value === "string" && value.trim().length > 0;
+                })
+              ).length;
+
+              return (
+                <div key={group.cohort?.id || "ungrouped"} className="overflow-hidden rounded-xl border">
+                  <div className="flex items-center gap-3 border-b bg-muted/30 px-4 py-3">
+                    <div className="font-semibold">{group.cohort?.name || "Unassigned cohort"}</div>
+                    <Badge variant="outline">
+                      {recordedCount}/{group.animals.length} recorded
+                    </Badge>
+                  </div>
+                  <ScrollArea className="max-h-[520px]">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-background">
+                        <tr className="border-b">
+                          <th className="px-3 py-2 text-left font-medium">Animal</th>
+                          <th className="px-3 py-2 text-left font-medium">Cohort</th>
+                          <th className="px-3 py-2 text-left font-medium">Sex</th>
+                          <th className="px-3 py-2 text-left font-medium">GT</th>
+                          {fields.map((field) => (
+                            <th key={field.key} className="min-w-[180px] px-3 py-2 text-left font-medium">
+                              {field.label}
+                              {field.unit ? <span className="ml-1 text-muted-foreground">({field.unit})</span> : null}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {group.animals.map((animal) => (
+                          <tr key={animal.id} className="border-b">
+                            <td className="px-3 py-2 font-medium">{animal.identifier}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{group.cohort?.name || "Unassigned"}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{animal.sex}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{animal.genotype}</td>
+                            {fields.map((field) => (
+                              <td key={`${animal.id}-${field.key}`} className="px-3 py-2">
+                                <Input
+                                  value={currentDraft[animal.id]?.[field.label] || ""}
+                                  onChange={(event) => updateCell(animal.id, field.label, event.target.value)}
+                                  placeholder={field.type === "numeric" ? "0" : "—"}
+                                  className="min-w-[150px]"
+                                />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </ScrollArea>
+                </div>
+              );
+            })
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 function DataTable({ dataset }: { dataset: Dataset }) {
   const [page, setPage] = useState(0);
@@ -2633,35 +3223,35 @@ function ImportDialog({
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-h-[85vh] max-w-4xl overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileSpreadsheet className="h-5 w-5" /> Import Data File
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
+        <div className="space-y-4 overflow-y-auto pr-1">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="min-w-0">
               <Label className="text-xs mb-1 block">Dataset Name *</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Western blot results" />
             </div>
-            <div>
+            <div className="min-w-0">
               <Label className="text-xs mb-1 block">Description (optional)</Label>
               <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Run notes, cohort, or source context" />
             </div>
-            <div>
+            <div className="min-w-0">
               <Label className="text-xs mb-1 block">Link to Run (optional)</Label>
               <Select
                 value={runId || "__none__"}
                 onValueChange={(value) => setRunId(value === "__none__" ? "" : value)}
               >
-                <SelectTrigger>
-                <SelectValue placeholder="None" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">None</SelectItem>
-                {runs.map((run) => (
+                <SelectTrigger className="w-full min-w-0">
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {runs.map((run) => (
                     <SelectItem key={run.id} value={run.id}>
                       {run.name}
                       {run.status ? ` (${run.status})` : ""}
@@ -2671,13 +3261,13 @@ function ImportDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div>
+            <div className="min-w-0">
               <Label className="text-xs mb-1 block">Link to Experiment (optional)</Label>
               <Select
                 value={experimentId || "__none__"}
                 onValueChange={(value) => setExperimentId(value === "__none__" ? "" : value)}
               >
-                <SelectTrigger>
+                <SelectTrigger className="w-full min-w-0">
                   <SelectValue placeholder="None" />
                 </SelectTrigger>
                 <SelectContent>
@@ -2764,26 +3354,26 @@ function ImportDialog({
           )}
 
           {preview && (
-            <div className="space-y-2">
+            <div className="min-w-0 space-y-2">
               <p className="text-sm font-medium">
                 Preview: {preview.data.length} rows, {(reconciliation?.columns || preview.columns).length} columns
               </p>
               {selectedRun && reconciliation && (
                 <SnapshotGuardrailsSummary guardrails={reconciliation.guardrails} />
               )}
-              <div className="flex gap-2 flex-wrap">
+              <div className="flex flex-wrap gap-2">
                 {(reconciliation?.columns || preview.columns).map((col) => (
                   <Badge key={col.name} variant="secondary" className="text-xs">
                     {col.name} <span className="opacity-60 ml-1">({col.type})</span>
                   </Badge>
                 ))}
               </div>
-              <ScrollArea className="max-h-[200px] border rounded">
-                <table className="w-full text-xs">
+              <div className="max-h-[200px] overflow-auto rounded border">
+                <table className="min-w-full w-max text-xs">
                   <thead className="sticky top-0 bg-muted">
                     <tr>
                       {(reconciliation?.columns || preview.columns).map((c) => (
-                        <th key={c.name} className="px-2 py-1 text-left font-medium">{c.name}</th>
+                        <th key={c.name} className="whitespace-nowrap px-2 py-1 text-left font-medium">{c.name}</th>
                       ))}
                     </tr>
                   </thead>
@@ -2791,13 +3381,13 @@ function ImportDialog({
                     {(reconciliation?.data || preview.data).slice(0, 10).map((row, i) => (
                       <tr key={i} className="border-t">
                         {(reconciliation?.columns || preview.columns).map((c) => (
-                          <td key={c.name} className="px-2 py-1">{String(row[c.name] ?? "")}</td>
+                          <td key={c.name} className="whitespace-nowrap px-2 py-1">{String(row[c.name] ?? "")}</td>
                         ))}
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </ScrollArea>
+              </div>
             </div>
           )}
           {preview && preview.data.length === 0 && (
@@ -2821,6 +3411,364 @@ function ImportDialog({
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
             Import {preview ? `(${preview.data.length} rows)` : ""}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ManualDatasetDialog({
+  experiments,
+  runs,
+  prefillRunId,
+  prefillDatasetName,
+  prefillDatasetDescription,
+  prefillExperimentId,
+  onClose,
+  onCreated,
+}: {
+  experiments: Pick<Experiment, "id" | "title">[];
+  runs: ExperimentRunOption[];
+  prefillRunId?: string | null;
+  prefillDatasetName?: string | null;
+  prefillDatasetDescription?: string | null;
+  prefillExperimentId?: string | null;
+  onClose: () => void;
+  onCreated: (ds: ResultsDatasetRecord) => void;
+}) {
+  const [name, setName] = useState(prefillDatasetName || "");
+  const [description, setDescription] = useState(prefillDatasetDescription || "");
+  const [experimentId, setExperimentId] = useState(prefillExperimentId || "");
+  const [runId, setRunId] = useState(prefillRunId || "");
+  const [loading, setLoading] = useState(false);
+  const [columns, setColumns] = useState<DatasetColumn[]>([]);
+  const [rows, setRows] = useState<Record<string, string>[]>([]);
+
+  const selectedRun = useMemo(
+    () => runs.find((run) => run.id === runId) || null,
+    [runId, runs]
+  );
+
+  useEffect(() => {
+    const snapshotColumns = buildColumnsFromRunSnapshot(selectedRun);
+    const nextColumns =
+      snapshotColumns.length > 0
+        ? snapshotColumns
+        : columns.length > 0
+          ? columns
+          : [
+              { name: "Sample", type: "text" as const },
+              { name: "Value", type: "numeric" as const },
+            ];
+
+    setColumns(nextColumns);
+    setRows((current) => {
+      if (current.length === 0) {
+        return [Object.fromEntries(nextColumns.map((column) => [column.name, ""]))];
+      }
+      return current.map((row) => {
+        const nextRow: Record<string, string> = {};
+        for (const column of nextColumns) {
+          nextRow[column.name] = typeof row[column.name] === "string" ? row[column.name] : "";
+        }
+        return nextRow;
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRun]);
+
+  const resolvedExperimentId = useMemo(
+    () => experimentId || selectedRun?.legacy_experiment_id || "",
+    [experimentId, selectedRun]
+  );
+
+  function addColumn() {
+    const nextName = `Column ${columns.length + 1}`;
+    setColumns((current) => [...current, { name: nextName, type: "text" }]);
+    setRows((current) => current.map((row) => ({ ...row, [nextName]: "" })));
+  }
+
+  function updateColumn(index: number, patch: Partial<DatasetColumn>) {
+    const currentColumn = columns[index];
+    if (!currentColumn) return;
+    const previousName = currentColumn.name;
+    const nextName = patch.name ?? previousName;
+
+    setColumns((current) => current.map((column, columnIndex) => (
+      columnIndex === index ? { ...column, ...patch, name: nextName } : column
+    )));
+
+    if (nextName !== previousName) {
+      setRows((current) =>
+        current.map((row) => {
+          const nextRow = { ...row };
+          nextRow[nextName] = row[previousName] ?? "";
+          delete nextRow[previousName];
+          return nextRow;
+        })
+      );
+    }
+  }
+
+  function removeColumn(index: number) {
+    const targetColumn = columns[index];
+    if (!targetColumn || columns.length <= 1) return;
+    setColumns((current) => current.filter((_, columnIndex) => columnIndex !== index));
+    setRows((current) =>
+      current.map((row) => {
+        const nextRow = { ...row };
+        delete nextRow[targetColumn.name];
+        return nextRow;
+      })
+    );
+  }
+
+  function addRow() {
+    setRows((current) => [
+      ...current,
+      Object.fromEntries(columns.map((column) => [column.name, ""])),
+    ]);
+  }
+
+  function removeRow(index: number) {
+    if (rows.length <= 1) return;
+    setRows((current) => current.filter((_, rowIndex) => rowIndex !== index));
+  }
+
+  function updateRowCell(rowIndex: number, columnName: string, value: string) {
+    setRows((current) =>
+      current.map((row, index) => (index === rowIndex ? { ...row, [columnName]: value } : row))
+    );
+  }
+
+  async function handleCreate() {
+    const normalizedColumns = columns
+      .map((column) => ({
+        ...column,
+        name: column.name.trim(),
+        unit: column.unit?.trim() || undefined,
+      }))
+      .filter((column) => column.name);
+
+    if (!name.trim() || normalizedColumns.length === 0) return;
+
+    const data = rows
+      .map((row) =>
+        Object.fromEntries(normalizedColumns.map((column) => [column.name, row[column.name] ?? ""]))
+      )
+      .filter((row) => Object.values(row).some((value) => String(value ?? "").trim().length > 0));
+
+    setLoading(true);
+    try {
+      const id = await createDataset({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        experiment_id: resolvedExperimentId || undefined,
+        experiment_run_id: selectedRun?.id,
+        result_schema_id: selectedRun?.result_schema_id || undefined,
+        schema_snapshot: selectedRun?.schema_snapshot,
+        columns: normalizedColumns,
+        data,
+        source: "paste",
+      });
+
+      onCreated({
+        id,
+        user_id: "",
+        name: name.trim(),
+        description: description.trim() || null,
+        experiment_id: resolvedExperimentId || null,
+        experiment_run_id: selectedRun?.id || null,
+        result_schema_id: selectedRun?.result_schema_id || null,
+        schema_snapshot: selectedRun?.schema_snapshot,
+        columns: normalizedColumns,
+        data,
+        row_count: data.length,
+        source: "paste",
+        tags: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to create dataset");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-6xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <TableIcon className="h-5 w-5" /> Create Dataset Manually
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <Label className="text-xs mb-1 block">Dataset Name *</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Day 1 scoring table" />
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Description (optional)</Label>
+              <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Manual table entry" />
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Link to Run (optional)</Label>
+              <Select value={runId || "__none__"} onValueChange={(value) => setRunId(value === "__none__" ? "" : value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {runs.map((run) => (
+                    <SelectItem key={run.id} value={run.id}>
+                      {run.name}
+                      {run.status ? ` (${run.status})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Link to Experiment (optional)</Label>
+              <Select value={experimentId || "__none__"} onValueChange={(value) => setExperimentId(value === "__none__" ? "" : value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {experiments.map((experiment) => (
+                    <SelectItem key={experiment.id} value={experiment.id}>{experiment.title}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {selectedRun && (
+            <div className="rounded-md border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs text-cyan-800">
+              This table starts from the active run schema when available, so you can type values directly instead of importing a file.
+            </div>
+          )}
+
+          <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+            <Card>
+              <CardHeader className="py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="text-sm font-medium">Columns</CardTitle>
+                  <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={addColumn}>
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    Add column
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {columns.map((column, index) => (
+                  <div key={`${column.name}-${index}`} className="rounded-md border p-2 space-y-2">
+                    <Input
+                      value={column.name}
+                      onChange={(event) => updateColumn(index, { name: event.target.value })}
+                      placeholder="Column name"
+                    />
+                    <div className="flex gap-2">
+                      <Select value={column.type} onValueChange={(value) => updateColumn(index, { type: value as DatasetColumn["type"] })}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text">Text</SelectItem>
+                          <SelectItem value="numeric">Numeric</SelectItem>
+                          <SelectItem value="categorical">Categorical</SelectItem>
+                          <SelectItem value="date">Date</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={column.unit || ""}
+                        onChange={(event) => updateColumn(index, { unit: event.target.value || undefined })}
+                        placeholder="Unit"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs text-destructive"
+                      onClick={() => removeColumn(index)}
+                      disabled={columns.length <= 1}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="text-sm font-medium">Rows</CardTitle>
+                  <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={addRow}>
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    Add row
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                <ScrollArea className="max-h-[420px]">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-muted">
+                      <tr>
+                        <th className="px-2 py-2 text-left font-medium text-muted-foreground">#</th>
+                        {columns.map((column) => (
+                          <th key={column.name} className="px-2 py-2 text-left font-medium">{column.name}</th>
+                        ))}
+                        <th className="px-2 py-2 text-left font-medium text-muted-foreground">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row, rowIndex) => (
+                        <tr key={`row-${rowIndex}`} className="border-t align-top">
+                          <td className="px-2 py-2 text-muted-foreground">{rowIndex + 1}</td>
+                          {columns.map((column) => (
+                            <td key={`${rowIndex}-${column.name}`} className="min-w-[160px] px-2 py-2">
+                              <Input
+                                value={row[column.name] || ""}
+                                onChange={(event) => updateRowCell(rowIndex, column.name, event.target.value)}
+                                placeholder={column.type === "numeric" ? "0" : ""}
+                              />
+                            </td>
+                          ))}
+                          <td className="px-2 py-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs text-destructive"
+                              onClick={() => removeRow(rowIndex)}
+                              disabled={rows.length <= 1}
+                            >
+                              Remove
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleCreate} disabled={loading || !name.trim() || columns.length === 0}>
+            {loading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+            Create Dataset
           </Button>
         </DialogFooter>
       </DialogContent>

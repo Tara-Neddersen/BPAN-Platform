@@ -7,10 +7,7 @@ import {
   BarChart3,
   FlaskConical,
   Download,
-  Loader2,
   Table as TableIcon,
-  Brain,
-  Sparkles,
   Filter,
   TrendingUp,
   Info,
@@ -33,7 +30,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
+import type { Animal, Cohort, ColonyResult, ExperimentRun, RunAssignment, RunTimepoint, RunTimepointExperiment } from "@/types";
 
 // Dynamically import Plotly
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -45,8 +42,11 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   ldb: "Light-Dark Box",
   marble: "Marble Burying",
   nesting: "Overnight Nesting",
+  social_interaction: "Social Interaction",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Habituation",
+  rotarod_test1: "Rotarod Test 1",
+  rotarod_test2: "Rotarod Test 2",
   rotarod: "Rotarod Testing",
   stamina: "Stamina Test",
   blood_draw: "Plasma Collection",
@@ -103,6 +103,24 @@ function round(n: number, d = 4): number {
 function formatNum(n: number, d = 2): string {
   if (Number.isInteger(n)) return String(n);
   return n.toFixed(d);
+}
+
+function resultHasData(result: ColonyResult) {
+  return Object.values((result.measures || {}) as Record<string, unknown>).some((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    return value !== null && value !== undefined && value !== "";
+  });
+}
+
+function animalMatchesRunAssignments(animal: Animal, assignments: RunAssignment[]) {
+  if (assignments.length === 0) return true;
+
+  return assignments.some((assignment) => {
+    if (assignment.scope_type === "study") return true;
+    if (assignment.scope_type === "cohort" && assignment.cohort_id) return animal.cohort_id === assignment.cohort_id;
+    if (assignment.scope_type === "animal" && assignment.animal_id) return animal.id === assignment.animal_id;
+    return false;
+  });
 }
 
 /** Welch's t-test (two-tailed) */
@@ -263,8 +281,11 @@ interface GroupStats {
 interface ColonyAnalysisPanelProps {
   animals: Animal[];
   cohorts: Cohort[];
-  timepoints: ColonyTimepoint[];
   colonyResults: ColonyResult[];
+  experimentRuns: ExperimentRun[];
+  runAssignments: RunAssignment[];
+  runTimepoints: RunTimepoint[];
+  runTimepointExperiments: RunTimepointExperiment[];
 }
 
 // ─── Main Component ─────────────────────────────────────────────────────────
@@ -272,21 +293,65 @@ interface ColonyAnalysisPanelProps {
 export function ColonyAnalysisPanel({
   animals,
   cohorts,
-  timepoints,
   colonyResults,
+  experimentRuns,
+  runAssignments,
+  runTimepoints,
+  runTimepointExperiments,
 }: ColonyAnalysisPanelProps) {
   // ── Filter state ──
+  const [activeRunId, setActiveRunId] = useState<string>("__all__");
   const [selectedExperiment, setSelectedExperiment] = useState<string>(
     () => colonyResults[0]?.experiment_type || "__all__"
   );
   const [selectedTimepoint, setSelectedTimepoint] = useState<string>("__all__");
   const [selectedCohort, setSelectedCohort] = useState<string>("__all__");
 
+  const visibleRuns = useMemo(() => experimentRuns.filter((run) => run.status !== "cancelled"), [experimentRuns]);
+  const resolvedRunId =
+    activeRunId === "__all__" || visibleRuns.some((run) => run.id === activeRunId) ? activeRunId : "__all__";
+  const selectedRun = useMemo(
+    () => visibleRuns.find((run) => run.id === resolvedRunId) || null,
+    [resolvedRunId, visibleRuns],
+  );
+  const selectedRunAssignments = useMemo(
+    () => runAssignments.filter((assignment) => assignment.experiment_run_id === resolvedRunId),
+    [resolvedRunId, runAssignments],
+  );
+  const selectedRunTimepoints = useMemo(
+    () =>
+      runTimepoints
+        .filter((timepoint) => timepoint.experiment_run_id === resolvedRunId)
+        .sort((a, b) => a.sort_order - b.sort_order),
+    [resolvedRunId, runTimepoints],
+  );
+  const selectedRunTimepointIds = useMemo(
+    () => selectedRunTimepoints.map((timepoint) => timepoint.id),
+    [selectedRunTimepoints],
+  );
+  const selectedRunExperiments = useMemo(
+    () =>
+      runTimepointExperiments
+        .filter((experiment) => selectedRunTimepointIds.includes(experiment.run_timepoint_id))
+        .sort((a, b) => a.sort_order - b.sort_order),
+    [runTimepointExperiments, selectedRunTimepointIds],
+  );
+  const filteredResults = useMemo(() => {
+    let results = colonyResults.filter(resultHasData);
+    if (selectedRun) {
+      results = results.filter((result) => result.experiment_run_id === selectedRun.id);
+    }
+    return results;
+  }, [colonyResults, selectedRun]);
+
   // Available experiment types from results
   const availableExperiments = useMemo(() => {
-    const exps = new Set(colonyResults.map((r) => r.experiment_type));
+    if (selectedRun) {
+      return selectedRunExperiments.map((experiment) => experiment.experiment_key);
+    }
+    const exps = new Set(filteredResults.map((r) => r.experiment_type));
     return Array.from(exps).sort();
-  }, [colonyResults]);
+  }, [filteredResults, selectedRun, selectedRunExperiments]);
 
   const effectiveSelectedExperiment =
     selectedExperiment === "__all__" && availableExperiments.length > 0
@@ -295,13 +360,25 @@ export function ColonyAnalysisPanel({
 
   // Available timepoints from results, scoped by selected experiment.
   const availableTimepoints = useMemo(() => {
+    if (selectedRun) {
+      const scopedTimepoints =
+        effectiveSelectedExperiment && effectiveSelectedExperiment !== "__all__"
+          ? selectedRunTimepoints.filter((timepoint) =>
+              selectedRunExperiments.some(
+                (experiment) =>
+                  experiment.run_timepoint_id === timepoint.id && experiment.experiment_key === effectiveSelectedExperiment,
+              ),
+            )
+          : selectedRunTimepoints;
+      return scopedTimepoints.map((timepoint) => timepoint.target_age_days).sort((a, b) => a - b);
+    }
     const scoped =
       effectiveSelectedExperiment && effectiveSelectedExperiment !== "__all__"
-        ? colonyResults.filter((r) => r.experiment_type === effectiveSelectedExperiment)
-        : colonyResults;
+        ? filteredResults.filter((r) => r.experiment_type === effectiveSelectedExperiment)
+        : filteredResults;
     const tps = new Set(scoped.map((r) => r.timepoint_age_days));
     return Array.from(tps).sort((a, b) => a - b);
-  }, [colonyResults, effectiveSelectedExperiment]);
+  }, [effectiveSelectedExperiment, filteredResults, selectedRun, selectedRunExperiments, selectedRunTimepoints]);
 
   const effectiveSelectedTimepoint =
     selectedTimepoint !== "__all__" && !availableTimepoints.includes(Number(selectedTimepoint))
@@ -310,7 +387,7 @@ export function ColonyAnalysisPanel({
 
   // ── Build flat dataset ──
   const { flatData, measureKeys, measureLabels } = useMemo(() => {
-    let results = colonyResults;
+    let results = filteredResults;
 
     if (effectiveSelectedExperiment !== "__all__") {
       results = results.filter((r) => r.experiment_type === effectiveSelectedExperiment);
@@ -327,6 +404,7 @@ export function ColonyAnalysisPanel({
       const animal = animals.find((a) => a.id === result.animal_id);
       if (!animal) continue;
       if (selectedCohort !== "__all__" && animal.cohort_id !== selectedCohort) continue;
+      if (selectedRun && !animalMatchesRunAssignments(animal, selectedRunAssignments)) continue;
 
       const cohort = cohorts.find((c) => c.id === animal.cohort_id);
       const genotypeLabel = animal.genotype === "hemi" ? "Hemi" : animal.genotype === "het" ? "Het" : "WT";
@@ -341,7 +419,10 @@ export function ColonyAnalysisPanel({
         group,
         cohort: cohort?.name || "Unknown",
         timepoint: result.timepoint_age_days,
-        experiment: result.experiment_type,
+        experiment:
+          selectedRun && result.run_timepoint_experiment_id
+            ? selectedRunExperiments.find((item) => item.id === result.run_timepoint_experiment_id)?.label || result.experiment_type
+            : result.experiment_type,
       };
 
       const measures = result.measures as Record<string, string | number | null>;
@@ -369,7 +450,7 @@ export function ColonyAnalysisPanel({
       measureKeys: Array.from(keySet).sort(),
       measureLabels: labels,
     };
-  }, [colonyResults, animals, cohorts, effectiveSelectedExperiment, effectiveSelectedTimepoint, selectedCohort]);
+  }, [animals, cohorts, effectiveSelectedExperiment, effectiveSelectedTimepoint, filteredResults, selectedCohort, selectedRun, selectedRunAssignments, selectedRunExperiments]);
 
   // Numeric measure keys only
   const numericMeasureKeys = useMemo(() => {
@@ -419,7 +500,23 @@ export function ColonyAnalysisPanel({
               <Badge variant="outline" className="text-[11px]">{availableGroups.length} groups</Badge>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <Label className="text-xs mb-1 block">Run Scope</Label>
+              <Select value={resolvedRunId} onValueChange={setActiveRunId}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All Runs / Legacy</SelectItem>
+                  {visibleRuns.map((run) => (
+                    <SelectItem key={run.id} value={run.id}>
+                      {run.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div>
               <Label className="text-xs mb-1 block">Experiment Type</Label>
               <Select value={selectedExperiment} onValueChange={setSelectedExperiment}>
@@ -430,7 +527,9 @@ export function ColonyAnalysisPanel({
                     <SelectItem value="__all__">All Experiments</SelectItem>
                     {availableExperiments.map((e) => (
                     <SelectItem key={e} value={e}>
-                      {EXPERIMENT_LABELS[e] || e}
+                      {selectedRun
+                        ? selectedRunExperiments.find((item) => item.experiment_key === e)?.label || EXPERIMENT_LABELS[e] || e
+                        : EXPERIMENT_LABELS[e] || e}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -446,7 +545,9 @@ export function ColonyAnalysisPanel({
                   <SelectItem value="__all__">All Timepoints</SelectItem>
                   {availableTimepoints.map((tp) => (
                     <SelectItem key={tp} value={String(tp)}>
-                      {tp} Day
+                      {selectedRun
+                        ? selectedRunTimepoints.find((item) => item.target_age_days === tp)?.label || `${tp} Day`
+                        : `${tp} Day`}
                     </SelectItem>
                   ))}
                 </SelectContent>

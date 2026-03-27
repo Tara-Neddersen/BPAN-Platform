@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import {
   Plus, Edit, Trash2, Loader2, Check, X, Copy, Pencil,
-  ExternalLink, Eye, ChevronDown, ChevronUp,
+  ExternalLink, ChevronDown, ChevronUp,
   Calendar, AlertTriangle, Link2, Mouse, Home,
-  RefreshCw, FileText, CheckCircle2,
+  RefreshCw, CheckCircle2,
   Upload, CloudOff, Cloud, ImageIcon,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -28,7 +28,8 @@ import { toast } from "sonner";
 import type {
   BreederCage, Cohort, Animal, AnimalExperiment,
   ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange, ColonyPhoto,
-  HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AnimalStatus, AdvisorPortalAccessLog,
+  HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AdvisorPortalAccessLog,
+  ExperimentRun, RunAssignment, RunExperimentScheduleStep, RunScheduleBlock, RunTimepoint, RunTimepointExperiment,
 } from "@/types";
 import { ColonyResultsTab } from "@/components/colony-results-tab";
 import { ColonyAnalysisPanel } from "@/components/colony-analysis-panel";
@@ -165,20 +166,37 @@ interface ColonyClientProps {
   colonyPhotos: ColonyPhoto[];
   housingCages: HousingCage[];
   colonyResults: ColonyResult[];
+  experimentRuns: ExperimentRun[];
+  runAssignments: RunAssignment[];
+  runTimepoints: RunTimepoint[];
+  runTimepointExperiments: RunTimepointExperiment[];
+  runExperimentScheduleSteps: RunExperimentScheduleStep[];
+  runScheduleBlocks: RunScheduleBlock[];
   batchUpsertColonyResults: (
     timepointAgeDays: number,
     experimentType: string,
     entries: {
       animalId: string;
-      measures: Record<string, string | number | null | string[]>;
+      measures: Record<string, string | number | boolean | null | string[]>;
       notes?: string;
-    }[]
+    }[],
+    options?: {
+      emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave";
+      experimentRunId?: string | null;
+      runTimepointId?: string | null;
+      runTimepointExperimentId?: string | null;
+    }
   ) => Promise<{ success?: boolean; error?: string; saved?: number; errors?: string[] }>;
   reconcileTrackerFromExistingColonyResults: () => Promise<{ success?: boolean; error?: string; completed?: number; ignored?: number }>;
   deleteColonyResultMeasureColumn: (
     timepointAgeDays: number,
     experimentType: string,
-    fieldKey: string
+    fieldKey: string,
+    options?: {
+      experimentRunId?: string | null;
+      runTimepointId?: string | null;
+      runTimepointExperimentId?: string | null;
+    }
   ) => Promise<{ success?: boolean; error?: string; updated?: number }>;
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -274,11 +292,16 @@ export function ColonyClient({
   timepoints: initTPs,
   advisorPortals: initPortals,
   advisorPortalAccessLogs: initPortalAccessLogs,
-  meetingNotes: initMeetings,
   cageChanges: initCageChanges,
   colonyPhotos: initPhotos,
   housingCages: initHousingCages,
   colonyResults: initColonyResults,
+  experimentRuns,
+  runAssignments,
+  runTimepoints,
+  runTimepointExperiments,
+  runExperimentScheduleSteps,
+  runScheduleBlocks,
   batchUpsertColonyResults,
   reconcileTrackerFromExistingColonyResults,
   deleteColonyResultMeasureColumn,
@@ -298,7 +321,6 @@ export function ColonyClient({
   const [timepoints, setTimepoints] = useState(initTPs);
   const [portals, setPortals] = useState(initPortals);
   const [portalAccessLogs, setPortalAccessLogs] = useState(initPortalAccessLogs);
-  const [meetings, setMeetings] = useState(initMeetings);
   const [cageChanges, setCageChanges] = useState(initCageChanges);
   const [photos, setPhotos] = useState(initPhotos);
   const [housingCages, setHousingCages] = useState(initHousingCages);
@@ -355,13 +377,12 @@ export function ColonyClient({
         return;
       }
       // Small tables: normal query. Large tables: cursor-based pagination.
-      const [r1, r2, r5, r6, r6b, r7, r9, r10, allAnimals, allExps, allCageChanges, allResults] = await Promise.all([
+      const [r1, r2, r5, r6, r6b, r9, r10, allAnimals, allExps, allCageChanges, allResults] = await Promise.all([
         sb.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
         sb.from("cohorts").select("*").eq("user_id", user.id).order("name"),
         sb.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
         sb.from("advisor_portal").select("*").eq("user_id", user.id).order("created_at"),
         sb.from("advisor_portal_access_logs").select("*").eq("user_id", user.id).order("viewed_at", { ascending: false }).limit(400),
-        sb.from("meeting_notes").select("*").eq("user_id", user.id).order("meeting_date", { ascending: false }),
         sb.from("colony_photos").select("*").eq("user_id", user.id).order("sort_order"),
         sb.from("housing_cages").select("*").eq("user_id", user.id).order("cage_label"),
         fetchAllClientRows(sb, "animals", user.id),
@@ -376,7 +397,6 @@ export function ColonyClient({
       setTimepoints((r5.data || []) as ColonyTimepoint[]);
       setPortals((r6.data || []) as AdvisorPortal[]);
       setPortalAccessLogs((r6b.data || []) as AdvisorPortalAccessLog[]);
-      setMeetings((r7.data || []) as MeetingNote[]);
       setCageChanges(allCageChanges as CageChange[]);
       setPhotos((r9.data || []) as ColonyPhoto[]);
       setHousingCages((r10.data || []) as HousingCage[]);
@@ -702,18 +722,6 @@ export function ColonyClient({
     if (result.error) toast.error(result.error);
     else await refetchAll();
     return result;
-  }
-
-  async function handleScheduleAll(animal: Animal) {
-    setBusy(true);
-    const result = await actions.scheduleExperimentsForAnimal(animal.id, animal.birth_date);
-    setBusy(false);
-    if (result.error) {
-      toast.error(result.error);
-    } else {
-      toast.success(`Scheduled ${result.count} experiments for ${animal.identifier}!`);
-      await refetchAll(); router.refresh();
-    }
   }
 
   async function handleUpdateExpStatus(expId: string, status: string) {
@@ -1587,6 +1595,11 @@ export function ColonyClient({
             cohorts={cohorts}
             timepoints={timepoints}
             experiments={experiments}
+            colonyResults={colonyResults}
+            experimentRuns={experimentRuns}
+            runAssignments={runAssignments}
+            runTimepoints={runTimepoints}
+            runTimepointExperiments={runTimepointExperiments}
             onBatchUpdateStatus={actions.batchUpdateExperimentStatus}
             onBatchUpdated={refetchAll}
           />
@@ -1599,8 +1612,14 @@ export function ColonyClient({
             cohorts={cohorts}
             timepoints={timepoints}
             colonyResults={colonyResults}
-            batchUpsertColonyResults={async (tp, exp, entries) => {
-              const result = await batchUpsertColonyResults(tp, exp, entries);
+            experimentRuns={experimentRuns}
+            runAssignments={runAssignments}
+            runTimepoints={runTimepoints}
+            runTimepointExperiments={runTimepointExperiments}
+            runExperimentScheduleSteps={runExperimentScheduleSteps}
+            runScheduleBlocks={runScheduleBlocks}
+            batchUpsertColonyResults={async (tp, exp, entries, options) => {
+              const result = await batchUpsertColonyResults(tp, exp, entries, options);
               if (result.success) await refetchAll();
               return result;
             }}
@@ -1609,8 +1628,8 @@ export function ColonyClient({
               if (result.success) await refetchAll();
               return result;
             }}
-            deleteColonyResultMeasureColumn={async (tp, exp, fieldKey) => {
-              const result = await deleteColonyResultMeasureColumn(tp, exp, fieldKey);
+            deleteColonyResultMeasureColumn={async (tp, exp, fieldKey, options) => {
+              const result = await deleteColonyResultMeasureColumn(tp, exp, fieldKey, options);
               if (result.success) await refetchAll();
               return result;
             }}
@@ -1622,8 +1641,11 @@ export function ColonyClient({
           <ColonyAnalysisPanel
             animals={animals}
             cohorts={cohorts}
-            timepoints={timepoints}
             colonyResults={colonyResults}
+            experimentRuns={experimentRuns}
+            runAssignments={runAssignments}
+            runTimepoints={runTimepoints}
+            runTimepointExperiments={runTimepointExperiments}
           />
         </TabsContent>
 

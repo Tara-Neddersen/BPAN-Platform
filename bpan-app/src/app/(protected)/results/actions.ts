@@ -115,6 +115,99 @@ export async function createDataset(payload: {
   return data.id;
 }
 
+export async function updateDatasetContent(payload: {
+  id: string;
+  name: string;
+  description?: string;
+  experiment_id?: string;
+  experiment_run_id?: string;
+  result_schema_id?: string;
+  schema_snapshot?: unknown;
+  columns: DatasetColumn[];
+  data: Record<string, unknown>[];
+  source: string;
+  tags?: string[];
+}) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const shouldApplyRunSnapshot =
+    Boolean(payload.experiment_run_id) || Boolean(payload.result_schema_id) || Boolean(payload.schema_snapshot);
+
+  const reconciliation = shouldApplyRunSnapshot
+    ? reconcileDataWithSchemaSnapshot(payload.columns, payload.data, payload.schema_snapshot)
+    : null;
+
+  if (reconciliation && !reconciliation.canImport) {
+    const blockingColumns = [
+      ...reconciliation.guardrails.missingRequiredColumnsWithoutDefault,
+      ...reconciliation.guardrails.missingRequiredValuesWithoutDefault,
+    ];
+    throw new Error(
+      `Run schema requirements are missing data with no default: ${blockingColumns.join(", ")}`
+    );
+  }
+
+  const resolvedColumns = reconciliation?.columns || payload.columns;
+  const resolvedData = reconciliation?.data || payload.data;
+
+  const baseUpdate = {
+    name: payload.name,
+    description: payload.description || null,
+    experiment_id: payload.experiment_id || null,
+    columns: resolvedColumns,
+    data: resolvedData,
+    row_count: resolvedData.length,
+    source: payload.source,
+    tags: payload.tags || [],
+  };
+
+  const runAwareUpdate = {
+    ...baseUpdate,
+    experiment_run_id: payload.experiment_run_id || null,
+    result_schema_id: payload.result_schema_id || null,
+    schema_snapshot: Array.isArray(payload.schema_snapshot) ? payload.schema_snapshot : payload.schema_snapshot || [],
+  };
+
+  let errorMessage: string | null = null;
+
+  if (payload.experiment_run_id || payload.result_schema_id || payload.schema_snapshot) {
+    const runAwareResult = await supabase
+      .from("datasets")
+      .update(runAwareUpdate)
+      .eq("id", payload.id)
+      .eq("user_id", user.id);
+
+    if (runAwareResult.error && !shouldRetryLegacyDatasetInsert(runAwareResult.error.message)) {
+      throw new Error(runAwareResult.error.message);
+    }
+
+    if (!runAwareResult.error) {
+      revalidatePath("/results");
+      await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+      await syncResultsMirrorsBestEffort(user.id);
+      return payload.id;
+    }
+
+    errorMessage = runAwareResult.error?.message || null;
+  }
+
+  const legacyResult = await supabase
+    .from("datasets")
+    .update(baseUpdate)
+    .eq("id", payload.id)
+    .eq("user_id", user.id);
+
+  if (legacyResult.error) throw new Error(legacyResult.error.message || errorMessage || "Failed to update dataset.");
+  revalidatePath("/results");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncResultsMirrorsBestEffort(user.id);
+  return payload.id;
+}
+
 export async function deleteDataset(id: string) {
   const supabase = await createClient();
   const {

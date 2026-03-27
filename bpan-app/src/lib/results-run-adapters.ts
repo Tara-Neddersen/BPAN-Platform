@@ -7,6 +7,8 @@ export interface ResultSchemaSnapshotColumn {
   column_type?: string | null;
   columnType?: string | null;
   type?: string | null;
+  is_enabled?: boolean | null;
+  isEnabled?: boolean | null;
   required?: boolean | null;
   default_value?: unknown;
   defaultValue?: unknown;

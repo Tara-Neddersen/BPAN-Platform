@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { syncRunResultsLayoutFromScheduleBlocks } from "@/lib/run-results-layout";
 import type { ExperimentType, PlatformAssignmentScope, PlatformRunStatus, PlatformSlotKind, ScheduledBlock } from "@/types";
 
 type RunScheduleBlockInput = {
@@ -48,6 +49,7 @@ const VALID_EXPERIMENT_TYPES: ExperimentType[] = [
   "ldb",
   "marble",
   "nesting",
+  "social_interaction",
   "catwalk",
   "rotarod_hab",
   "rotarod_test1",
@@ -182,6 +184,13 @@ function getMetadataString(metadata: Record<string, unknown>, key: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function getMetadataStringArray(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
 function getMetadataNumber(metadata: Record<string, unknown>, key: string) {
   const raw = getMetadataString(metadata, key);
   if (!raw) return null;
@@ -212,26 +221,72 @@ function inferExperimentTypeFromTitle(title: string) {
     ldb: "ldb",
     marble_burying: "marble",
     nesting: "nesting",
+    si: "social_interaction",
+    social_interaction: "social_interaction",
     catwalk: "catwalk",
+    rr_hab: "rotarod_hab",
     rotarod_hab: "rotarod_hab",
     rotarod_habituation: "rotarod_hab",
+    rr_1: "rotarod_test1",
     rotarod_test_1: "rotarod_test1",
     rotarod_test1: "rotarod_test1",
+    rr_2: "rotarod_test2",
     rotarod_test_2: "rotarod_test2",
     rotarod_test2: "rotarod_test2",
+    rr_stamina: "stamina",
     rotarod: "rotarod",
     stamina: "stamina",
     blood_draw: "blood_draw",
+    plasma: "blood_draw",
     plasma_collection: "blood_draw",
     eeg_implant: "eeg_implant",
     eeg_surgery: "eeg_implant",
     eeg_recording: "eeg_recording",
     handling: "handling",
+    transport: "data_collection",
+    rest_day: "core_acclimation",
     data_collection: "data_collection",
     core_acclimation: "core_acclimation",
   };
 
   return aliases[slug] || normalizeExperimentType(slug);
+}
+
+function buildNormalizedRunBlockMetadata(
+  metadata: Record<string, unknown>,
+  title: string,
+): Array<Record<string, unknown>> {
+  const explicitExperimentType = normalizeExperimentType(getMetadataString(metadata, "experimentType"));
+  const inferredExperimentType = explicitExperimentType || inferExperimentTypeFromTitle(title);
+  const singleWindowName = getMetadataString(metadata, "timepointWindowName");
+  const windowNames = getMetadataStringArray(metadata, "timepointWindowNames");
+  const normalizedWindowNames = windowNames.length > 0
+    ? windowNames
+    : singleWindowName
+      ? [singleWindowName]
+      : [];
+
+  const baseMetadata: Record<string, unknown> = {
+    ...metadata,
+  };
+
+  if (inferredExperimentType) {
+    baseMetadata.experimentType = inferredExperimentType;
+  }
+
+  const expansions = normalizedWindowNames.length > 0 ? normalizedWindowNames : [singleWindowName || ""];
+
+  return expansions.map((windowName) => {
+    const nextMetadata = { ...baseMetadata };
+    if (windowName) {
+      nextMetadata.timepointWindowName = windowName;
+      nextMetadata.timepointWindowNames = [windowName];
+      if ((nextMetadata.targetAgeDays === undefined || nextMetadata.targetAgeDays === null || nextMetadata.targetAgeDays === "") && !Number.isNaN(Number(windowName))) {
+        nextMetadata.targetAgeDays = String(Number(windowName));
+      }
+    }
+    return nextMetadata;
+  });
 }
 
 function chooseNearestWeekdayDate(
@@ -672,13 +727,14 @@ async function instantiateRunBlocksFromScheduleTemplate(
   let dayCursor = -1;
   let daySort = 0;
 
+  const dedupeKeys = new Set<string>();
   const runBlocks = sourceBlocks
     .sort((a, b) => {
       if (a.day_index !== b.day_index) return a.day_index - b.day_index;
       if (a.slot_sort_order !== b.slot_sort_order) return a.slot_sort_order - b.slot_sort_order;
       return a.block.sort_order - b.block.sort_order;
     })
-    .map((entry) => {
+    .flatMap((entry) => {
       if (entry.day_index !== dayCursor) {
         dayCursor = entry.day_index;
         daySort = 0;
@@ -689,26 +745,44 @@ async function instantiateRunBlocksFromScheduleTemplate(
         titleByTemplateId.get(entry.block.experiment_template_id) ||
         "Untitled block";
 
-      const next = {
-        experiment_run_id: runId,
-        source_scheduled_block_id: entry.block.id,
-        day_index: entry.day_index,
-        slot_kind: entry.slot_kind,
-        slot_label: entry.slot_kind === "custom" ? entry.slot_label : entry.slot_kind === "exact_time" ? entry.slot_label : null,
-        scheduled_time: entry.slot_kind === "exact_time" ? entry.scheduled_time : null,
-        sort_order: daySort,
-        experiment_template_id: entry.block.experiment_template_id,
-        protocol_id: entry.block.protocol_id,
-        title,
-        notes: entry.block.notes,
-        status: "planned" as const,
-        metadata:
-          entry.block.metadata && typeof entry.block.metadata === "object" && !Array.isArray(entry.block.metadata)
-            ? entry.block.metadata
-            : {},
-      };
-      daySort += 1;
-      return next;
+      const rawMetadata =
+        entry.block.metadata && typeof entry.block.metadata === "object" && !Array.isArray(entry.block.metadata)
+          ? entry.block.metadata
+          : {};
+
+      const normalizedMetadataEntries = buildNormalizedRunBlockMetadata(rawMetadata, title);
+
+      return normalizedMetadataEntries.flatMap((normalizedMetadata) => {
+        const dedupeKey = [
+          entry.day_index,
+          title,
+          getMetadataString(normalizedMetadata, "timepointWindowName") || "__none__",
+          getMetadataString(normalizedMetadata, "experimentType") || "__none__",
+        ].join("::");
+
+        if (dedupeKeys.has(dedupeKey)) {
+          return [];
+        }
+        dedupeKeys.add(dedupeKey);
+
+        const next = {
+          experiment_run_id: runId,
+          source_scheduled_block_id: entry.block.id,
+          day_index: entry.day_index,
+          slot_kind: entry.slot_kind,
+          slot_label: entry.slot_kind === "custom" ? entry.slot_label : entry.slot_kind === "exact_time" ? entry.slot_label : null,
+          scheduled_time: entry.slot_kind === "exact_time" ? entry.scheduled_time : null,
+          sort_order: daySort,
+          experiment_template_id: entry.block.experiment_template_id,
+          protocol_id: entry.block.protocol_id,
+          title,
+          notes: entry.block.notes,
+          status: "planned" as const,
+          metadata: normalizedMetadata,
+        };
+        daySort += 1;
+        return [next];
+      });
     });
 
   const { error: runBlocksError } = await supabase.from("run_schedule_blocks").insert(runBlocks);
@@ -716,6 +790,7 @@ async function instantiateRunBlocksFromScheduleTemplate(
     throw new Error(withRunSchemaGuidance(runBlocksError.message));
   }
 }
+
 
 async function maybeGenerateCohortScheduleForAssignment(
   runId: string,
@@ -855,6 +930,8 @@ export async function createExperimentRunFromTemplate(formData: FormData) {
     await instantiateRunBlocksFromScheduleTemplate(supabase, runId, resolvedScheduleTemplateId);
   }
 
+  await syncRunResultsLayoutFromScheduleBlocks(supabase, runId);
+
   if (assignment) {
     const { error: assignmentError } = await supabase.from("run_assignments").insert({
       experiment_run_id: runId,
@@ -947,6 +1024,8 @@ export async function saveRunScheduleBlocks(formData: FormData) {
     }
   }
 
+  await syncRunResultsLayoutFromScheduleBlocks(supabase, runId);
+
   revalidatePath("/experiments");
 }
 
@@ -985,6 +1064,7 @@ export async function resetRunToTemplateSchedule(runId: string) {
   }
 
   await instantiateRunBlocksFromScheduleTemplate(supabase, runId, scheduleTemplateId);
+  await syncRunResultsLayoutFromScheduleBlocks(supabase, runId);
   revalidatePath("/experiments");
 }
 
@@ -1126,6 +1206,8 @@ export async function cloneExperimentRun(runId: string) {
       throw new Error(withRunSchemaGuidance(insertAssignmentsError.message));
     }
   }
+
+  await syncRunResultsLayoutFromScheduleBlocks(supabase, newRunId);
 
   revalidatePath("/experiments");
   return { run_id: newRunId };

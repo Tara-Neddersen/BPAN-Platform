@@ -8,7 +8,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Check, X, Clock, Minus, Zap } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import type { Animal, Cohort, ColonyTimepoint, AnimalExperiment } from "@/types";
+import type {
+  Animal,
+  Cohort,
+  ColonyResult,
+  ColonyTimepoint,
+  AnimalExperiment,
+  ExperimentRun,
+  RunAssignment,
+  RunTimepoint,
+  RunTimepointExperiment,
+} from "@/types";
 
 // ─── Labels ────────────────────────────────────────────────────────────
 
@@ -18,6 +28,7 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   ldb: "LDB",
   marble: "Marble",
   nesting: "Nesting",
+  social_interaction: "Social Interaction",
   data_collection: "Transport to Core",
   core_acclimation: "Core Acclim",
   catwalk: "CatWalk",
@@ -26,7 +37,7 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   rotarod_test2: "Rotarod Test 2",
   rotarod: "Rotarod",
   stamina: "Stamina",
-  blood_draw: "Blood Draw",
+  blood_draw: "Plasma Collection",
   eeg_implant: "EEG Implant",
   eeg_recording: "EEG Record",
 };
@@ -66,6 +77,11 @@ interface ExperimentTrackerMatrixProps {
   cohorts: Cohort[];
   timepoints: ColonyTimepoint[];
   experiments: AnimalExperiment[];
+  colonyResults: ColonyResult[];
+  experimentRuns: ExperimentRun[];
+  runAssignments: RunAssignment[];
+  runTimepoints: RunTimepoint[];
+  runTimepointExperiments: RunTimepointExperiment[];
   onBatchUpdateStatus?: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string, notes?: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
   onBatchUpdated?: () => Promise<void> | void;
 }
@@ -79,6 +95,24 @@ function toggleSet<T>(set: Set<T>, value: T): Set<T> {
   return next;
 }
 
+function resultHasData(result: ColonyResult) {
+  return Object.values((result.measures || {}) as Record<string, unknown>).some((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    return value !== null && value !== undefined && value !== "";
+  });
+}
+
+function animalMatchesRunAssignments(animal: Animal, assignments: RunAssignment[]) {
+  if (assignments.length === 0) return true;
+
+  return assignments.some((assignment) => {
+    if (assignment.scope_type === "study") return true;
+    if (assignment.scope_type === "cohort" && assignment.cohort_id) return animal.cohort_id === assignment.cohort_id;
+    if (assignment.scope_type === "animal" && assignment.animal_id) return animal.id === assignment.animal_id;
+    return false;
+  });
+}
+
 // ─── Component ─────────────────────────────────────────────────────────
 
 export function ExperimentTrackerMatrix({
@@ -86,10 +120,16 @@ export function ExperimentTrackerMatrix({
   cohorts,
   timepoints,
   experiments,
+  colonyResults,
+  experimentRuns,
+  runAssignments,
+  runTimepoints,
+  runTimepointExperiments,
   onBatchUpdateStatus,
   onBatchUpdated,
 }: ExperimentTrackerMatrixProps) {
   const router = useRouter();
+  const [activeRunId, setActiveRunId] = useState("__all__");
   const [filterCohort, setFilterCohort] = useState("all");
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchCohorts, setBatchCohorts] = useState<Set<string>>(new Set());
@@ -109,6 +149,46 @@ export function ExperimentTrackerMatrix({
     setBatchResult(null);
   }, []);
 
+  const visibleRuns = useMemo(() => {
+    return experimentRuns
+      .filter((run) => run.status !== "cancelled")
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [experimentRuns]);
+
+  const resolvedRunId =
+    activeRunId === "__all__" || visibleRuns.some((run) => run.id === activeRunId) ? activeRunId : "__all__";
+
+  const selectedRun = useMemo(
+    () => visibleRuns.find((run) => run.id === resolvedRunId) || null,
+    [resolvedRunId, visibleRuns],
+  );
+
+  const selectedRunAssignments = useMemo(
+    () => runAssignments.filter((assignment) => assignment.experiment_run_id === resolvedRunId),
+    [resolvedRunId, runAssignments],
+  );
+
+  const selectedRunTimepoints = useMemo(
+    () =>
+      runTimepoints
+        .filter((timepoint) => timepoint.experiment_run_id === resolvedRunId)
+        .sort((a, b) => a.sort_order - b.sort_order),
+    [resolvedRunId, runTimepoints],
+  );
+
+  const selectedRunTimepointIds = useMemo(
+    () => selectedRunTimepoints.map((timepoint) => timepoint.id),
+    [selectedRunTimepoints],
+  );
+
+  const selectedRunExperiments = useMemo(
+    () =>
+      runTimepointExperiments
+        .filter((experiment) => selectedRunTimepointIds.includes(experiment.run_timepoint_id))
+        .sort((a, b) => a.sort_order - b.sort_order),
+    [runTimepointExperiments, selectedRunTimepointIds],
+  );
+
   // Sorted timepoints by age
   const sortedTimepoints = useMemo(
     () => [...timepoints].sort((a, b) => a.age_days - b.age_days),
@@ -117,6 +197,9 @@ export function ExperimentTrackerMatrix({
 
   // Gather all unique experiment types: from timepoint config + actual experiment data
   const allExperimentTypes = useMemo(() => {
+    if (selectedRun) {
+      return [...new Set(selectedRunExperiments.map((experiment) => experiment.experiment_key))];
+    }
     const types: string[] = [];
     // Start with timepoint-configured experiments
     for (const tp of sortedTimepoints) {
@@ -135,13 +218,16 @@ export function ExperimentTrackerMatrix({
       }
     }
     return types;
-  }, [sortedTimepoints, experiments]);
+  }, [experiments, selectedRun, selectedRunExperiments, sortedTimepoints]);
 
   // Filter animals
   const filteredAnimals = useMemo(() => {
     let list = animals.filter((a) => a.status === "active");
     if (filterCohort !== "all") {
       list = list.filter((a) => a.cohort_id === filterCohort);
+    }
+    if (selectedRun) {
+      list = list.filter((animal) => animalMatchesRunAssignments(animal, selectedRunAssignments));
     }
     // Sort by cohort then identifier
     return list.sort((a, b) => {
@@ -150,7 +236,7 @@ export function ExperimentTrackerMatrix({
       if (cohortA !== cohortB) return cohortA.localeCompare(cohortB);
       return a.identifier.localeCompare(b.identifier, undefined, { numeric: true });
     });
-  }, [animals, filterCohort, cohorts]);
+  }, [animals, filterCohort, cohorts, selectedRun, selectedRunAssignments]);
 
   // Build a lookup: animalId -> timepointAge -> experimentType -> status
   const statusMap = useMemo(() => {
@@ -164,6 +250,41 @@ export function ExperimentTrackerMatrix({
     }
     return map;
   }, [experiments]);
+
+  const completedResultMap = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const result of colonyResults) {
+      if (!resultHasData(result)) continue;
+
+      if (selectedRun) {
+        if (result.experiment_run_id !== selectedRun.id) continue;
+        const timepoint = selectedRunTimepoints.find((item) => item.id === result.run_timepoint_id);
+        const experiment = selectedRunExperiments.find((item) => item.id === result.run_timepoint_experiment_id);
+        if (!timepoint || !experiment) continue;
+        if (!map.has(result.animal_id)) map.set(result.animal_id, new Set());
+        map.get(result.animal_id)?.add(`${timepoint.target_age_days}::${experiment.experiment_key}`);
+        continue;
+      }
+
+      if (!map.has(result.animal_id)) map.set(result.animal_id, new Set());
+      map.get(result.animal_id)?.add(`${result.timepoint_age_days}::${result.experiment_type}`);
+    }
+    return map;
+  }, [colonyResults, selectedRun, selectedRunExperiments, selectedRunTimepoints]);
+
+  const effectiveTimepoints = useMemo(
+    () =>
+      selectedRun
+        ? selectedRunTimepoints.map((timepoint) => ({
+            age_days: timepoint.target_age_days,
+            name: timepoint.label,
+          }))
+        : sortedTimepoints.map((timepoint) => ({
+            age_days: timepoint.age_days,
+            name: timepoint.name,
+          })),
+    [selectedRun, selectedRunTimepoints, sortedTimepoints],
+  );
 
   // EEG Implant only belongs at the first timepoint; EEG Recording at all.
   // Build per-timepoint experiment type lists accordingly.
@@ -182,20 +303,38 @@ export function ExperimentTrackerMatrix({
     let total = 0;
     let completed = 0;
     for (const animal of filteredAnimals) {
-      for (const tp of sortedTimepoints) {
+      for (const tp of effectiveTimepoints) {
         for (const expType of getTypesForTp(tp.age_days)) {
           total++;
-          const status = statusMap.get(animal.id)?.get(tp.age_days)?.get(expType);
+          const status = completedResultMap.get(animal.id)?.has(`${tp.age_days}::${expType}`)
+            ? "completed"
+            : statusMap.get(animal.id)?.get(tp.age_days)?.get(expType);
           if (status === "completed") completed++;
         }
       }
     }
     return { total, completed, pct: total > 0 ? Math.round((completed / total) * 100) : 0 };
-  }, [filteredAnimals, sortedTimepoints, getTypesForTp, statusMap]);
+  }, [completedResultMap, effectiveTimepoints, filteredAnimals, getTypesForTp, statusMap]);
 
   // Column headers: per-timepoint experiment types (EEG implant only at first TP)
   const columns = useMemo(() => {
     const cols: { tpAge: number; tpName: string; expType: string; label: string }[] = [];
+    if (selectedRun) {
+      for (const tp of selectedRunTimepoints) {
+        const experimentsForTimepoint = selectedRunExperiments
+          .filter((experiment) => experiment.run_timepoint_id === tp.id)
+          .sort((a, b) => a.sort_order - b.sort_order);
+        for (const experiment of experimentsForTimepoint) {
+          cols.push({
+            tpAge: tp.target_age_days,
+            tpName: tp.label,
+            expType: experiment.experiment_key,
+            label: experiment.label || EXPERIMENT_LABELS[experiment.experiment_key] || experiment.experiment_key,
+          });
+        }
+      }
+      return cols;
+    }
     for (const tp of sortedTimepoints) {
       for (const expType of getTypesForTp(tp.age_days)) {
         cols.push({
@@ -207,11 +346,21 @@ export function ExperimentTrackerMatrix({
       }
     }
     return cols;
-  }, [sortedTimepoints, getTypesForTp]);
+  }, [selectedRun, selectedRunExperiments, selectedRunTimepoints, sortedTimepoints, getTypesForTp]);
 
   // Group columns by timepoint for header spans
   const tpGroups = useMemo(() => {
     const groups: { tpAge: number; tpName: string; colCount: number }[] = [];
+    if (selectedRun) {
+      for (const tp of selectedRunTimepoints) {
+        groups.push({
+          tpAge: tp.target_age_days,
+          tpName: tp.label,
+          colCount: selectedRunExperiments.filter((experiment) => experiment.run_timepoint_id === tp.id).length,
+        });
+      }
+      return groups;
+    }
     for (const tp of sortedTimepoints) {
       groups.push({
         tpAge: tp.age_days,
@@ -220,7 +369,7 @@ export function ExperimentTrackerMatrix({
       });
     }
     return groups;
-  }, [sortedTimepoints, getTypesForTp]);
+  }, [selectedRun, selectedRunExperiments, selectedRunTimepoints, sortedTimepoints, getTypesForTp]);
 
   return (
     <Card>
@@ -240,6 +389,19 @@ export function ExperimentTrackerMatrix({
                 {summary.completed}/{summary.total} done
               </div>
             </div>
+            <Select value={resolvedRunId} onValueChange={setActiveRunId}>
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="All Runs / Legacy" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All Runs / Legacy</SelectItem>
+                {visibleRuns.map((run) => (
+                  <SelectItem key={run.id} value={run.id}>
+                    {run.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {/* Filter */}
             <Select value={filterCohort} onValueChange={setFilterCohort}>
               <SelectTrigger className="w-[160px]">
@@ -312,7 +474,7 @@ export function ExperimentTrackerMatrix({
             <div className="space-y-1.5">
               <p className="text-xs text-muted-foreground font-medium">Timepoints</p>
               <div className="flex flex-wrap gap-1.5">
-                {sortedTimepoints.map((tp) => (
+                {effectiveTimepoints.map((tp) => (
                   <button
                     key={tp.age_days}
                     type="button"
@@ -329,12 +491,12 @@ export function ExperimentTrackerMatrix({
                 <button
                   type="button"
                   onClick={() => {
-                    if (batchTps.size === sortedTimepoints.length) setBatchTps(new Set());
-                    else setBatchTps(new Set(sortedTimepoints.map(tp => tp.age_days)));
+                    if (batchTps.size === effectiveTimepoints.length) setBatchTps(new Set());
+                    else setBatchTps(new Set(effectiveTimepoints.map((tp) => tp.age_days)));
                   }}
                   className="px-2.5 py-1 rounded-full text-xs border border-dashed hover:bg-muted transition-colors text-muted-foreground"
                 >
-                  {batchTps.size === sortedTimepoints.length ? "Clear all" : "Select all"}
+                  {batchTps.size === effectiveTimepoints.length ? "Clear all" : "Select all"}
                 </button>
               </div>
             </div>
@@ -509,12 +671,15 @@ export function ExperimentTrackerMatrix({
                 {filteredAnimals.map((animal, rowIdx) => {
                   const cohort = cohorts.find((c) => c.id === animal.cohort_id);
                   const animalStatuses = statusMap.get(animal.id);
+                  const resultCompletions = completedResultMap.get(animal.id) || new Set<string>();
 
                   // Count completed for this animal
                   let animalCompleted = 0;
                   const animalTotal = columns.length;
                   for (const col of columns) {
-                    const st = animalStatuses?.get(col.tpAge)?.get(col.expType);
+                    const st = resultCompletions.has(`${col.tpAge}::${col.expType}`)
+                      ? "completed"
+                      : animalStatuses?.get(col.tpAge)?.get(col.expType);
                     if (st === "completed") animalCompleted++;
                   }
 
@@ -556,7 +721,9 @@ export function ExperimentTrackerMatrix({
 
                       {/* Status cells */}
                       {columns.map((col, i) => {
-                        const status = animalStatuses?.get(col.tpAge)?.get(col.expType);
+                        const status = resultCompletions.has(`${col.tpAge}::${col.expType}`)
+                          ? "completed"
+                          : animalStatuses?.get(col.tpAge)?.get(col.expType);
                         const info = status
                           ? STATUS_ICON[status] || STATUS_ICON.pending
                           : STATUS_ICON.pending;
