@@ -54,6 +54,7 @@ import {
   updateDatasetContent,
   saveAnalysis,
   deleteAnalysis,
+  syncImportedDatasetToRunCapture,
 } from "@/app/(protected)/results/actions";
 import type {
   Dataset,
@@ -65,6 +66,8 @@ import type {
   Cohort,
   RunAssignment,
   RunScheduleBlock,
+  RunTimepoint,
+  RunTimepointExperiment,
 } from "@/types";
 import {
   normalizeSchemaSnapshot,
@@ -277,6 +280,8 @@ interface Props {
   animals: Animal[];
   cohorts: Cohort[];
   runAssignments: RunAssignment[];
+  runTimepoints: RunTimepoint[];
+  runTimepointExperiments: RunTimepointExperiment[];
   runScheduleBlocks: RunScheduleBlock[];
   initialDatasetId?: string | null;
   initialScopeRunId?: string | null;
@@ -309,12 +314,134 @@ type ExperimentRunOption = {
   status?: string | null;
 };
 
+type RunImportDestination = {
+  blockId: string;
+  blockTitle: string;
+  dayIndex: number;
+  experimentKey: string;
+  experimentLabel: string;
+  timepointKey: string;
+  timepointLabel: string;
+  timepointAgeDays: number;
+  resultSchemaId: string | null;
+  schemaSnapshot: unknown;
+};
+
 type DatasetRunLinkResolution = {
   run: ExperimentRunOption | null;
   mode: "explicit" | "legacy_inferred" | null;
 };
 
 const WORKSPACE_SCOPE = "__workspace__";
+
+function normalizeLooseKey(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function prettifyExperimentLabel(value: string) {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getRunBlockMetadata(block: RunScheduleBlock) {
+  const metadata =
+    block.metadata && typeof block.metadata === "object" && !Array.isArray(block.metadata)
+      ? (block.metadata as Record<string, unknown>)
+      : {};
+
+  const experimentTypeRaw =
+    typeof metadata.experimentType === "string" && metadata.experimentType.trim()
+      ? metadata.experimentType.trim()
+      : null;
+  const timepointWindowName =
+    typeof metadata.timepointWindowName === "string" && metadata.timepointWindowName.trim()
+      ? metadata.timepointWindowName.trim()
+      : null;
+  const targetAgeDaysRaw =
+    typeof metadata.targetAgeDays === "number"
+      ? metadata.targetAgeDays
+      : typeof metadata.targetAgeDays === "string" && metadata.targetAgeDays.trim()
+        ? Number(metadata.targetAgeDays)
+        : typeof metadata.minAgeDays === "number"
+          ? metadata.minAgeDays
+          : typeof metadata.minAgeDays === "string" && metadata.minAgeDays.trim()
+            ? Number(metadata.minAgeDays)
+            : null;
+
+  const timepointAgeDays = Number.isFinite(targetAgeDaysRaw) ? Number(targetAgeDaysRaw) : 0;
+
+  return {
+    experimentType: experimentTypeRaw,
+    timepointWindowName,
+    timepointAgeDays,
+  };
+}
+
+function buildRunImportDestinations(
+  run: ExperimentRunOption | null,
+  runScheduleBlocks: RunScheduleBlock[],
+  runTimepoints: RunTimepoint[],
+  runTimepointExperiments: RunTimepointExperiment[]
+): RunImportDestination[] {
+  if (!run) return [];
+
+  const blocks = runScheduleBlocks.filter((block) => block.experiment_run_id === run.id);
+  const timepointRows = runTimepoints.filter((timepoint) => timepoint.experiment_run_id === run.id);
+  const experimentRows = runTimepointExperiments.filter((experiment) =>
+    timepointRows.some((timepoint) => timepoint.id === experiment.run_timepoint_id)
+  );
+
+  return blocks.flatMap((block) => {
+    const metadata = getRunBlockMetadata(block);
+    if (!metadata.experimentType) return [];
+
+    const matchedTimepoint =
+      timepointRows.find((timepoint) => timepoint.key === metadata.timepointWindowName) ||
+      timepointRows.find((timepoint) => timepoint.label === metadata.timepointWindowName) ||
+      timepointRows.find((timepoint) => timepoint.target_age_days === metadata.timepointAgeDays) ||
+      null;
+
+    const matchedExperiment =
+      experimentRows.find((experiment) =>
+        experiment.run_timepoint_id === matchedTimepoint?.id &&
+        experiment.experiment_key === metadata.experimentType
+      ) || null;
+
+    const timepointLabel =
+      matchedTimepoint?.label ||
+      metadata.timepointWindowName ||
+      (metadata.timepointAgeDays > 0 ? `Day ${metadata.timepointAgeDays}` : "General");
+
+    const timepointKey =
+      matchedTimepoint?.key ||
+      metadata.timepointWindowName ||
+      (metadata.timepointAgeDays > 0 ? String(metadata.timepointAgeDays) : "general");
+
+    const timepointAgeDays =
+      matchedTimepoint?.target_age_days ||
+      metadata.timepointAgeDays ||
+      0;
+
+    return [{
+      blockId: block.id,
+      blockTitle: block.title || matchedExperiment?.label || prettifyExperimentLabel(metadata.experimentType),
+      dayIndex: block.day_index,
+      experimentKey: metadata.experimentType,
+      experimentLabel: matchedExperiment?.label || prettifyExperimentLabel(metadata.experimentType),
+      timepointKey,
+      timepointLabel,
+      timepointAgeDays,
+      resultSchemaId: matchedExperiment?.result_schema_id || run.result_schema_id || null,
+      schemaSnapshot:
+        (matchedExperiment?.schema_snapshot && matchedExperiment.schema_snapshot.length > 0)
+          ? matchedExperiment.schema_snapshot
+          : run.schema_snapshot,
+    }];
+  });
+}
 
 export function ResultsClient({
   initialDatasets,
@@ -325,6 +452,8 @@ export function ResultsClient({
   animals,
   cohorts,
   runAssignments,
+  runTimepoints,
+  runTimepointExperiments,
   runScheduleBlocks,
   initialDatasetId = null,
   initialScopeRunId = null,
@@ -878,6 +1007,8 @@ export function ResultsClient({
           animals={animals}
           cohorts={cohorts}
           runAssignments={runAssignments}
+          runTimepoints={runTimepoints}
+          runTimepointExperiments={runTimepointExperiments}
           runScheduleBlocks={runScheduleBlocks}
           datasets={datasets}
           onImport={() => setShowImport(true)}
@@ -969,6 +1100,9 @@ export function ResultsClient({
         <ImportDialog
           experiments={experiments}
           runs={runs}
+          runScheduleBlocks={runScheduleBlocks}
+          runTimepoints={runTimepoints}
+          runTimepointExperiments={runTimepointExperiments}
           prefillRunId={selectedScopeRun?.id || initialPrefillRunId}
           prefillDatasetName={initialPrefillDatasetName}
           prefillDatasetDescription={initialPrefillDatasetDescription}
@@ -1063,6 +1197,8 @@ function RunCapturePanel({
   animals,
   cohorts,
   runAssignments,
+  runTimepoints,
+  runTimepointExperiments,
   runScheduleBlocks,
   datasets,
   onImport,
@@ -1071,6 +1207,8 @@ function RunCapturePanel({
   animals: Animal[];
   cohorts: Cohort[];
   runAssignments: RunAssignment[];
+  runTimepoints: RunTimepoint[];
+  runTimepointExperiments: RunTimepointExperiment[];
   runScheduleBlocks: RunScheduleBlock[];
   datasets: ResultsDatasetRecord[];
   onImport: () => void;
@@ -1125,9 +1263,17 @@ function RunCapturePanel({
         ];
   }, [activeDay, run.id, run.name, run.status, runBlocks]);
   const [activeBlockId, setActiveBlockId] = useState<string>(dayBlocks[0]?.id || "__default__");
+  const runImportDestinations = useMemo(
+    () => buildRunImportDestinations(run, runScheduleBlocks, runTimepoints, runTimepointExperiments),
+    [run, runScheduleBlocks, runTimepointExperiments, runTimepoints]
+  );
+  const selectedDestination = useMemo(
+    () => runImportDestinations.find((destination) => destination.blockId === activeBlockId) || null,
+    [activeBlockId, runImportDestinations]
+  );
   const schemaFields = useMemo<RunCaptureField[]>(
     () =>
-      normalizeSchemaSnapshot(run.schema_snapshot)
+      normalizeSchemaSnapshot(selectedDestination?.schemaSnapshot || run.schema_snapshot)
         .filter((column) => column.is_enabled !== false)
         .map((column) => ({
           key: column.key || column.name || column.label || crypto.randomUUID(),
@@ -1135,7 +1281,7 @@ function RunCapturePanel({
           type: mapSnapshotColumnTypeToDatasetType(column.column_type || column.columnType || column.type),
           unit: typeof column.unit === "string" && column.unit.trim() ? column.unit : undefined,
         })),
-    [run.schema_snapshot]
+    [run.schema_snapshot, selectedDestination]
   );
   const [customFields, setCustomFields] = useState<RunCaptureField[]>([]);
   const [draftByBlockId, setDraftByBlockId] = useState<Record<string, Record<string, Record<string, string>>>>({});
@@ -1153,11 +1299,6 @@ function RunCapturePanel({
   }, [activeBlockId, dayBlocks]);
 
   const selectedBlock = dayBlocks.find((block) => block.id === activeBlockId) || dayBlocks[0];
-  const fields = useMemo(
-    () => (customFields.length > 0 ? [...schemaFields, ...customFields] : schemaFields),
-    [customFields, schemaFields]
-  );
-
   const datasetTagForBlock = useCallback(
     (blockId: string) => `run_capture:${run.id}:${blockId}`,
     [run.id]
@@ -1171,6 +1312,33 @@ function RunCapturePanel({
           dataset.tags.includes(datasetTagForBlock(activeBlockId))
       ) || null,
     [activeBlockId, datasetTagForBlock, datasets, run.id]
+  );
+  const datasetExtraFields = useMemo<RunCaptureField[]>(() => {
+    if (!currentDataset) return [];
+    const reservedKeys = new Set(["animal", "cohort", "sex", "gt"]);
+    const schemaKeys = new Set(schemaFields.map((field) => normalizeLooseKey(field.label)));
+    return currentDataset.columns
+      .filter((column) => {
+        const key = normalizeLooseKey(column.name);
+        return !reservedKeys.has(key) && !schemaKeys.has(key);
+      })
+      .map((column) => ({
+        key: column.name,
+        label: column.name,
+        type: column.type,
+        unit: column.unit,
+      }));
+  }, [currentDataset, schemaFields]);
+  const fields = useMemo(
+    () =>
+      [...schemaFields, ...datasetExtraFields, ...customFields].reduce<RunCaptureField[]>((acc, field) => {
+        if (acc.some((entry) => normalizeLooseKey(entry.label) === normalizeLooseKey(field.label))) {
+          return acc;
+        }
+        acc.push(field);
+        return acc;
+      }, []),
+    [customFields, datasetExtraFields, schemaFields]
   );
 
   useEffect(() => {
@@ -1280,8 +1448,8 @@ function RunCapturePanel({
           description: `Managed run capture for ${selectedBlock.title}`,
           experiment_id: run.legacy_experiment_id || undefined,
           experiment_run_id: run.id,
-          result_schema_id: run.result_schema_id || undefined,
-          schema_snapshot: run.schema_snapshot,
+          result_schema_id: selectedDestination?.resultSchemaId || run.result_schema_id || undefined,
+          schema_snapshot: selectedDestination?.schemaSnapshot || run.schema_snapshot,
           columns,
           data,
           source: "paste",
@@ -1293,8 +1461,8 @@ function RunCapturePanel({
           description: `Managed run capture for ${selectedBlock.title}`,
           experiment_id: run.legacy_experiment_id || undefined,
           experiment_run_id: run.id,
-          result_schema_id: run.result_schema_id || undefined,
-          schema_snapshot: run.schema_snapshot,
+          result_schema_id: selectedDestination?.resultSchemaId || run.result_schema_id || undefined,
+          schema_snapshot: selectedDestination?.schemaSnapshot || run.schema_snapshot,
           columns,
           data,
           source: "paste",
@@ -1320,6 +1488,11 @@ function RunCapturePanel({
               <p className="text-sm text-muted-foreground">
                 Enter measured values for each assigned animal directly in the table, then click Save All.
               </p>
+              {selectedDestination ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Sync target: {selectedDestination.experimentLabel} at {selectedDestination.timepointLabel}
+                </p>
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" className="gap-2" onClick={onImport}>
@@ -2978,6 +3151,9 @@ function SnapshotGuardrailsSummary({
 function ImportDialog({
   experiments,
   runs,
+  runScheduleBlocks,
+  runTimepoints,
+  runTimepointExperiments,
   prefillRunId,
   prefillDatasetName,
   prefillDatasetDescription,
@@ -2987,6 +3163,9 @@ function ImportDialog({
 }: {
   experiments: Pick<Experiment, "id" | "title">[];
   runs: ExperimentRunOption[];
+  runScheduleBlocks: RunScheduleBlock[];
+  runTimepoints: RunTimepoint[];
+  runTimepointExperiments: RunTimepointExperiment[];
   prefillRunId?: string | null;
   prefillDatasetName?: string | null;
   prefillDatasetDescription?: string | null;
@@ -2994,10 +3173,14 @@ function ImportDialog({
   onClose: () => void;
   onImported: (ds: ResultsDatasetRecord) => void;
 }) {
+  const router = useRouter();
   const [name, setName] = useState(prefillDatasetName || "");
   const [description, setDescription] = useState(prefillDatasetDescription || "");
   const [experimentId, setExperimentId] = useState(prefillExperimentId || "");
   const [runId, setRunId] = useState(prefillRunId || "");
+  const [syncIntoRunCapture, setSyncIntoRunCapture] = useState(Boolean(prefillRunId));
+  const [selectedTimepointKey, setSelectedTimepointKey] = useState("");
+  const [selectedExperimentKey, setSelectedExperimentKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [isParsingFile, setIsParsingFile] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -3006,17 +3189,75 @@ function ImportDialog({
     data: Record<string, unknown>[];
   } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const lastConfiguredRunRef = useRef<string>("");
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === runId) || null,
     [runs, runId]
   );
+  const runImportDestinations = useMemo(
+    () => buildRunImportDestinations(selectedRun, runScheduleBlocks, runTimepoints, runTimepointExperiments),
+    [runScheduleBlocks, runTimepointExperiments, runTimepoints, selectedRun]
+  );
+  const timepointOptions = useMemo(
+    () =>
+      runImportDestinations.reduce<Array<{ key: string; label: string }>>((acc, destination) => {
+        if (!acc.some((entry) => entry.key === destination.timepointKey)) {
+          acc.push({ key: destination.timepointKey, label: destination.timepointLabel });
+        }
+        return acc;
+      }, []),
+    [runImportDestinations]
+  );
+  const experimentOptions = useMemo(
+    () =>
+      runImportDestinations.filter((destination) => destination.timepointKey === selectedTimepointKey),
+    [runImportDestinations, selectedTimepointKey]
+  );
+  const selectedImportDestination = useMemo(
+    () =>
+      experimentOptions.find((destination) => destination.experimentKey === selectedExperimentKey) ||
+      experimentOptions[0] ||
+      null,
+    [experimentOptions, selectedExperimentKey]
+  );
   const missingPrefillRun = Boolean(prefillRunId) && !selectedRun && runId === prefillRunId;
+  useEffect(() => {
+    if (!selectedRun || runImportDestinations.length === 0) {
+      setSyncIntoRunCapture(false);
+      setSelectedTimepointKey("");
+      setSelectedExperimentKey("");
+      lastConfiguredRunRef.current = "";
+      return;
+    }
+    if (lastConfiguredRunRef.current !== selectedRun.id) {
+      setSyncIntoRunCapture(true);
+      lastConfiguredRunRef.current = selectedRun.id;
+    }
+    if (!selectedTimepointKey || !runImportDestinations.some((destination) => destination.timepointKey === selectedTimepointKey)) {
+      setSelectedTimepointKey(runImportDestinations[0]?.timepointKey || "");
+    }
+  }, [runImportDestinations, selectedRun, selectedTimepointKey]);
+  useEffect(() => {
+    if (experimentOptions.length === 0) {
+      setSelectedExperimentKey("");
+      return;
+    }
+    if (!selectedExperimentKey || !experimentOptions.some((destination) => destination.experimentKey === selectedExperimentKey)) {
+      setSelectedExperimentKey(experimentOptions[0]?.experimentKey || "");
+    }
+  }, [experimentOptions, selectedExperimentKey]);
+  const activeSchemaSnapshot = syncIntoRunCapture && selectedImportDestination
+    ? selectedImportDestination.schemaSnapshot
+    : selectedRun?.schema_snapshot;
+  const activeResultSchemaId = syncIntoRunCapture && selectedImportDestination
+    ? selectedImportDestination.resultSchemaId
+    : selectedRun?.result_schema_id;
   const reconciliation = useMemo(
     () =>
       preview
-        ? reconcileDataWithSchemaSnapshot(preview.columns, preview.data, selectedRun?.schema_snapshot)
+        ? reconcileDataWithSchemaSnapshot(preview.columns, preview.data, activeSchemaSnapshot)
         : null,
-    [preview, selectedRun]
+    [activeSchemaSnapshot, preview]
   );
   const resolvedExperimentId = useMemo(
     () => experimentId || selectedRun?.legacy_experiment_id || "",
@@ -3183,7 +3424,16 @@ function ImportDialog({
   }
 
   async function handleImport() {
-    if (!preview || !reconciliation || preview.data.length === 0 || !name || !reconciliation.canImport) return;
+    if (
+      !preview ||
+      !reconciliation ||
+      preview.data.length === 0 ||
+      !name ||
+      !reconciliation.canImport ||
+      (syncIntoRunCapture && selectedRun && runImportDestinations.length > 0 && !selectedImportDestination)
+    ) {
+      return;
+    }
     setLoading(true);
     try {
       const id = await createDataset({
@@ -3191,12 +3441,25 @@ function ImportDialog({
         description: description || undefined,
         experiment_id: resolvedExperimentId || undefined,
         experiment_run_id: selectedRun?.id,
-        result_schema_id: selectedRun?.result_schema_id || undefined,
-        schema_snapshot: selectedRun?.schema_snapshot,
+        result_schema_id: activeResultSchemaId || undefined,
+        schema_snapshot: activeSchemaSnapshot,
         columns: reconciliation.columns,
         data: reconciliation.data,
         source: "csv",
       });
+      let syncSummary: { matchedAnimals: number; totalAnimals: number } | null = null;
+      if (syncIntoRunCapture && selectedRun && selectedImportDestination) {
+        syncSummary = await syncImportedDatasetToRunCapture({
+          experiment_run_id: selectedRun.id,
+          block_id: selectedImportDestination.blockId,
+          result_schema_id: selectedImportDestination.resultSchemaId,
+          schema_snapshot: selectedImportDestination.schemaSnapshot,
+          columns: reconciliation.columns,
+          data: reconciliation.data,
+          source: "csv",
+        });
+        router.refresh();
+      }
       onImported({
         id,
         user_id: "",
@@ -3204,8 +3467,8 @@ function ImportDialog({
         description: description || null,
         experiment_id: resolvedExperimentId || null,
         experiment_run_id: selectedRun?.id || null,
-        result_schema_id: selectedRun?.result_schema_id || null,
-        schema_snapshot: selectedRun?.schema_snapshot,
+        result_schema_id: activeResultSchemaId || null,
+        schema_snapshot: activeSchemaSnapshot,
         columns: reconciliation.columns,
         data: reconciliation.data,
         row_count: reconciliation.data.length,
@@ -3214,6 +3477,11 @@ function ImportDialog({
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
+      if (syncSummary && selectedImportDestination) {
+        toast.success(
+          `Imported dataset and synced ${syncSummary.matchedAnimals}/${syncSummary.totalAnimals} animals into ${selectedImportDestination.experimentLabel} at ${selectedImportDestination.timepointLabel}.`
+        );
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : "Import failed");
     } finally {
@@ -3306,6 +3574,72 @@ function ImportDialog({
                   Use run-linked experiment
                 </Button>
               )}
+            </div>
+          )}
+          {selectedRun && runImportDestinations.length > 0 && (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700 space-y-3">
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                  checked={syncIntoRunCapture}
+                  onChange={(event) => setSyncIntoRunCapture(event.target.checked)}
+                />
+                <span className="space-y-1">
+                  <span className="block font-medium text-slate-900">
+                    Also sync this import into the run results section above
+                  </span>
+                  <span className="block text-slate-600">
+                    Pick the template-backed timepoint and experiment this file belongs to.
+                  </span>
+                </span>
+              </label>
+
+              {syncIntoRunCapture ? (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="min-w-0">
+                    <Label className="mb-1 block text-xs">Timepoint</Label>
+                    <Select value={selectedTimepointKey} onValueChange={setSelectedTimepointKey}>
+                      <SelectTrigger className="w-full min-w-0">
+                        <SelectValue placeholder="Choose timepoint" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {timepointOptions.map((timepoint) => (
+                          <SelectItem key={timepoint.key} value={timepoint.key}>
+                            {timepoint.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="min-w-0">
+                    <Label className="mb-1 block text-xs">Experiment Section</Label>
+                    <Select value={selectedExperimentKey} onValueChange={setSelectedExperimentKey}>
+                      <SelectTrigger className="w-full min-w-0">
+                        <SelectValue placeholder="Choose experiment" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {experimentOptions.map((destination) => (
+                          <SelectItem key={destination.blockId} value={destination.experimentKey}>
+                            {destination.experimentLabel}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="md:col-span-2 rounded-md border border-white/80 bg-white px-3 py-2 text-[11px] text-slate-600">
+                    {selectedImportDestination ? (
+                      <>
+                        This import will also fill <span className="font-medium text-slate-900">{selectedImportDestination.blockTitle}</span>
+                        {" "}for <span className="font-medium text-slate-900">{selectedImportDestination.experimentLabel}</span>
+                        {" "}at <span className="font-medium text-slate-900">{selectedImportDestination.timepointLabel}</span>.
+                      </>
+                    ) : (
+                      "Choose a destination timepoint and experiment section to sync this file into the run table."
+                    )}
+                  </div>
+                </div>
+              ) : null}
             </div>
           )}
           {!selectedRun && runs.length > 0 && (
@@ -3407,7 +3741,16 @@ function ImportDialog({
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button
             onClick={handleImport}
-            disabled={!preview || !reconciliation || preview.data.length === 0 || !reconciliation.canImport || !name || loading || isParsingFile}
+            disabled={
+              !preview ||
+              !reconciliation ||
+              preview.data.length === 0 ||
+              !reconciliation.canImport ||
+              !name ||
+              loading ||
+              isParsingFile ||
+              Boolean(syncIntoRunCapture && selectedRun && runImportDestinations.length > 0 && !selectedImportDestination)
+            }
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
             Import {preview ? `(${preview.data.length} rows)` : ""}

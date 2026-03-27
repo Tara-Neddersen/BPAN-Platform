@@ -1,6 +1,17 @@
 import { createClient } from "@/lib/supabase/server";
 import { ResultsClient } from "@/components/results-client";
-import type { Dataset, Analysis, Figure, Experiment, Animal, Cohort, RunAssignment, RunScheduleBlock } from "@/types";
+import type {
+  Dataset,
+  Analysis,
+  Figure,
+  Experiment,
+  Animal,
+  Cohort,
+  RunAssignment,
+  RunScheduleBlock,
+  RunTimepoint,
+  RunTimepointExperiment,
+} from "@/types";
 
 type ResultsDatasetRecord = Dataset & {
   experiment_run_id?: string | null;
@@ -34,6 +45,35 @@ export type ResultsSearchParams = {
   prefill_starter_analyses?: string;
 };
 
+async function fetchOptionalRows(supabase: unknown, table: string, orderBy?: Array<{ column: string; ascending?: boolean }>) {
+  try {
+    type OptionalRowsQuery = {
+      order: (column: string, options: { ascending: boolean }) => OptionalRowsQuery;
+      then: PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>["then"];
+    };
+
+    let query = (supabase as {
+      from: (tableName: string) => {
+        select: (columns: string) => OptionalRowsQuery;
+      };
+    }).from(table).select("*") as OptionalRowsQuery;
+
+    for (const order of orderBy || []) {
+      query = query.order(order.column, { ascending: order.ascending ?? true });
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.warn(`results fetchOptionalRows ${table} skipped:`, error.message);
+      return [];
+    }
+    return data || [];
+  } catch (error) {
+    console.warn(`results fetchOptionalRows ${table} failed:`, error);
+    return [];
+  }
+}
+
 export async function renderResultsView(params?: ResultsSearchParams) {
   const supabase = await createClient();
   const {
@@ -51,6 +91,8 @@ export async function renderResultsView(params?: ResultsSearchParams) {
     { data: animals },
     { data: cohorts },
     { data: runAssignments },
+    runTimepoints,
+    runTimepointExperiments,
     { data: runScheduleBlocks },
   ] = await Promise.all([
     supabase
@@ -93,6 +135,14 @@ export async function renderResultsView(params?: ResultsSearchParams) {
       .from("run_assignments")
       .select("*")
       .order("sort_order", { ascending: true }),
+    fetchOptionalRows(supabase, "run_timepoints", [
+      { column: "experiment_run_id" },
+      { column: "sort_order" },
+    ]),
+    fetchOptionalRows(supabase, "run_timepoint_experiments", [
+      { column: "run_timepoint_id" },
+      { column: "sort_order" },
+    ]),
     supabase
       .from("run_schedule_blocks")
       .select("*")
@@ -110,6 +160,8 @@ export async function renderResultsView(params?: ResultsSearchParams) {
       animals={(animals as Animal[]) || []}
       cohorts={(cohorts as Cohort[]) || []}
       runAssignments={(runAssignments as RunAssignment[]) || []}
+      runTimepoints={(runTimepoints as RunTimepoint[]) || []}
+      runTimepointExperiments={(runTimepointExperiments as RunTimepointExperiment[]) || []}
       runScheduleBlocks={(runScheduleBlocks as RunScheduleBlock[]) || []}
       initialDatasetId={params?.dataset ?? null}
       initialScopeRunId={params?.run ?? null}
