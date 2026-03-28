@@ -3562,8 +3562,8 @@ function ImportDialog({
           run_timepoint_experiment_id: selectedImportDestination.runTimepointExperimentId,
           result_schema_id: selectedImportDestination.resultSchemaId,
           schema_snapshot: selectedImportDestination.schemaSnapshot,
-          columns: reconciliation.columns,
-          data: reconciliation.data,
+          columns: preview.columns,
+          data: preview.data,
           source: "csv",
         });
         router.refresh();
