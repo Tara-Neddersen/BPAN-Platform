@@ -123,6 +123,34 @@ function schemaSnapshotToFields(schemaSnapshot: ResultSchemaColumnSnapshot[] | n
     }));
 }
 
+function normalizeMeasureLookupKey(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function normalizeMeasuresForFields(measures: MeasureMap, fields: MeasureField[]) {
+  if (fields.length === 0) return measures;
+
+  const aliasToKey = new Map<string, string>();
+  for (const field of fields) {
+    aliasToKey.set(normalizeMeasureLookupKey(field.key), field.key);
+    aliasToKey.set(normalizeMeasureLookupKey(field.label), field.key);
+    if (field.unit) {
+      aliasToKey.set(normalizeMeasureLookupKey(`${field.label} (${field.unit})`), field.key);
+    }
+  }
+
+  const normalized: MeasureMap = { ...measures };
+  for (const [rawKey, rawValue] of Object.entries(measures)) {
+    const targetKey = aliasToKey.get(normalizeMeasureLookupKey(rawKey));
+    if (!targetKey || targetKey === rawKey) continue;
+    if (normalized[targetKey] === undefined || normalized[targetKey] === null || normalized[targetKey] === "") {
+      normalized[targetKey] = rawValue;
+    }
+  }
+
+  return normalized;
+}
+
 type MeasureValue = string | number | boolean | null | string[];
 type MeasureMap = Record<string, MeasureValue>;
 
@@ -711,6 +739,23 @@ export function ColonyResultsTab({
     () => selectedRunExperimentRows.find((experiment) => experiment.experiment_key === activeExperiment) || null,
     [activeExperiment, selectedRunExperimentRows]
   );
+  const getSchemaFieldsForExperiment = useCallback(
+    (exp: string) =>
+      selectedRun
+        ? schemaSnapshotToFields(
+            selectedRunExperimentRows.find((experiment) => experiment.experiment_key === exp)?.schema_snapshot
+          )
+        : [],
+    [selectedRun, selectedRunExperimentRows]
+  );
+  const getNormalizedMeasures = useCallback(
+    (exp: string, measures: MeasureMap | null | undefined) => {
+      const rawMeasures = measures || {};
+      const schemaFields = getSchemaFieldsForExperiment(exp);
+      return normalizeMeasuresForFields(rawMeasures, schemaFields);
+    },
+    [getSchemaFieldsForExperiment]
+  );
   const getRunExperimentRowForTab = useCallback(
     (timepointKey: string, experimentKey: string) => {
       const timepointRow = selectedRunTimepointRows.find((timepoint) => timepoint.key === timepointKey);
@@ -789,13 +834,13 @@ export function ColonyResultsTab({
         return {
           measures: applyDerivedMeasuresForExperiment(
             exp,
-            (existing.measures as MeasureMap) || {}
+            getNormalizedMeasures(exp, (existing.measures as MeasureMap) || {})
           ),
           notes: existing.notes || "",
         };
       return { measures: applyDerivedMeasuresForExperiment(exp, {}), notes: "" };
     },
-    [editData, getExistingResult]
+    [editData, getExistingResult, getNormalizedMeasures]
   );
 
   // Auto-detect extra measure fields from existing colony results (e.g. from tracking imports)
@@ -809,7 +854,7 @@ export function ColonyResultsTab({
       if (!detected[exp]) detected[exp] = [];
       const detectedKeys = new Set(detected[exp].map((f) => f.key));
 
-      const measures = result.measures as Record<string, unknown>;
+      const measures = getNormalizedMeasures(exp, (result.measures as MeasureMap) || {}) as Record<string, unknown>;
       for (const key of Object.keys(measures)) {
         if (!isVisibleMeasureKey(key)) continue;
         if (measures[key] === null) continue;
@@ -837,11 +882,7 @@ export function ColonyResultsTab({
   // Get ALL fields for an experiment (before hiding), with data-filled first
   const getAllFields = useCallback(
     (exp: string): MeasureField[] => {
-      const runSchemaFields = selectedRun
-        ? schemaSnapshotToFields(
-            selectedRunExperimentRows.find((experiment) => experiment.experiment_key === exp)?.schema_snapshot
-          )
-        : [];
+      const runSchemaFields = getSchemaFieldsForExperiment(exp);
       const defaults = runSchemaFields.length > 0 ? runSchemaFields : (DEFAULT_MEASURES[exp] || []);
       const custom = customFields[exp] || [];
       const autoDetected = detectedFields[exp] || [];
@@ -860,7 +901,7 @@ export function ColonyResultsTab({
       const keysWithData = new Set<string>();
       for (const r of colonyResults) {
         if (r.experiment_type !== exp) continue;
-        const m = r.measures as Record<string, unknown>;
+        const m = getNormalizedMeasures(exp, (r.measures as MeasureMap) || {}) as Record<string, unknown>;
         for (const [k, v] of Object.entries(m)) {
           if (!isVisibleMeasureKey(k)) continue;
           if (v !== null && v !== undefined && v !== "") keysWithData.add(k);
@@ -872,7 +913,7 @@ export function ColonyResultsTab({
       const withoutData = unique.filter((f) => !keysWithData.has(f.key));
       return [...withData, ...withoutData];
     },
-    [colonyResults, customFields, detectedFields, selectedRun, selectedRunExperimentRows]
+    [colonyResults, customFields, detectedFields, getNormalizedMeasures, getSchemaFieldsForExperiment]
   );
 
   // Get visible fields (filter out hidden)
