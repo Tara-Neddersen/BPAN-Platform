@@ -6,7 +6,18 @@ import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backst
 import { reconcileDataWithSchemaSnapshot } from "@/lib/results-run-adapters";
 import { syncManagedGoogleSheetMirrorsForUser } from "@/lib/google-sheet-mirror";
 import type { DatasetColumn } from "@/types";
-import { normalizeSchemaSnapshot } from "@/lib/results-run-adapters";
+import {
+  buildColonyMeasuresFromImportedRow,
+  buildImportedColumnAliasMap,
+  buildImportedRowsWithIdentity,
+  buildSyncableRunFields,
+  findImportedColumnName,
+  findImportedRowForAnimal,
+  isAnimalIdentityColumn,
+  normalizeLooseKey,
+  serializeDatasetCellValue,
+  type SyncableRunField,
+} from "@/lib/results-run-import-sync";
 
 async function syncResultsMirrorsBestEffort(userId: string) {
   try {
@@ -16,128 +27,16 @@ async function syncResultsMirrorsBestEffort(userId: string) {
   }
 }
 
-function normalizeLooseKey(value: string) {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-function serializeDatasetCellValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (Array.isArray(value)) {
-    return value.map((entry) => String(entry ?? "").trim()).filter(Boolean).join(", ");
+async function syncColonyMirrorsBestEffort(userId: string) {
+  try {
+    await syncManagedGoogleSheetMirrorsForUser(userId, "colony_results");
+  } catch (error) {
+    console.error("colony mirror sync failed", error);
   }
-  if (typeof value === "boolean") return value ? "true" : "false";
-  return String(value);
 }
 
 function buildRunCaptureDatasetTag(runId: string, blockId: string) {
   return `run_capture:${runId}:${blockId}`;
-}
-
-function isAnimalIdentityColumn(columnName: string) {
-  const key = normalizeLooseKey(columnName);
-  return [
-    "__animalid",
-    "animal",
-    "animalid",
-    "animalnumber",
-    "animalno",
-    "animalidentifier",
-    "bpananimalnumber",
-    "identifier",
-    "mouse",
-    "mouseid",
-    "mousenumber",
-    "eartag",
-  ].includes(key);
-}
-
-function isCohortIdentityColumn(columnName: string) {
-  const key = normalizeLooseKey(columnName);
-  return [
-    "cohort",
-    "cohortid",
-    "cohortname",
-    "cohortnumber",
-    "bpancohort",
-    "bpancohortnumber",
-  ].includes(key);
-}
-
-function extractNumericTokens(value: string) {
-  const matches = value.match(/\d+/g) || [];
-  return matches.map((entry) => entry.trim()).filter(Boolean);
-}
-
-function getImportedRowIdentityValues(row: Record<string, unknown>) {
-  const animalValues: string[] = [];
-  const cohortValues: string[] = [];
-  for (const [key, value] of Object.entries(row)) {
-    const serialized = serializeDatasetCellValue(value).trim();
-    if (!serialized) continue;
-    if (isAnimalIdentityColumn(key)) animalValues.push(serialized);
-    if (isCohortIdentityColumn(key)) cohortValues.push(serialized);
-  }
-  return { animalValues, cohortValues };
-}
-
-function buildLookupTokens(values: Array<string | null | undefined>) {
-  const tokens = new Set<string>();
-  for (const value of values) {
-    if (!value) continue;
-    const serialized = String(value).trim();
-    if (!serialized) continue;
-    tokens.add(normalizeLooseKey(serialized));
-    extractNumericTokens(serialized).forEach((token) => tokens.add(normalizeLooseKey(token)));
-  }
-  return tokens;
-}
-
-type SyncableRunField = {
-  name: string;
-  type: DatasetColumn["type"];
-  unit?: string;
-  aliases: string[];
-};
-
-function mapSnapshotColumnTypeToDatasetType(rawType: string | null | undefined): DatasetColumn["type"] {
-  switch (rawType) {
-    case "number":
-    case "integer":
-      return "numeric";
-    case "select":
-    case "multi_select":
-    case "boolean":
-    case "animal_ref":
-    case "cohort_ref":
-    case "batch_ref":
-      return "categorical";
-    case "date":
-    case "datetime":
-    case "time":
-      return "date";
-    default:
-      return "text";
-  }
-}
-
-function buildSyncableRunFields(snapshot: unknown): SyncableRunField[] {
-  return normalizeSchemaSnapshot(snapshot)
-    .filter((column) => column.is_enabled !== false && column.isEnabled !== false)
-    .map((column) => {
-      const aliasCandidates = [
-        column.label,
-        column.name,
-        column.key,
-      ]
-        .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
-
-      return {
-        name: column.label || column.name || column.key || "Field",
-        type: mapSnapshotColumnTypeToDatasetType(column.column_type || column.columnType || column.type),
-        unit: typeof column.unit === "string" && column.unit.trim() ? column.unit : undefined,
-        aliases: Array.from(new Set(aliasCandidates)),
-      };
-    });
 }
 
 // ─── Datasets ────────────────────────────────────────────────────────────────
@@ -357,6 +256,10 @@ export async function syncImportedDatasetToRunCapture(payload: {
   block_id: string;
   schema_snapshot?: unknown;
   result_schema_id?: string | null;
+  experiment_type?: string | null;
+  timepoint_age_days?: number | null;
+  run_timepoint_id?: string | null;
+  run_timepoint_experiment_id?: string | null;
   columns: DatasetColumn[];
   data: Record<string, unknown>[];
   source?: string;
@@ -385,7 +288,7 @@ export async function syncImportedDatasetToRunCapture(payload: {
   if (runError || !run) throw new Error(runError?.message || "Run not found.");
   if (blockError || !block) throw new Error(blockError?.message || "Run section not found.");
 
-  const [{ data: assignmentRows }, { data: animalRows }, { data: cohortRows }, { data: datasetRows }] = await Promise.all([
+  const [{ data: assignmentRows }, { data: animalRows }, { data: cohortRows }, { data: datasetRows }, { data: colonyResultRows }] = await Promise.all([
     supabase
       .from("run_assignments")
       .select("*")
@@ -404,6 +307,11 @@ export async function syncImportedDatasetToRunCapture(payload: {
     supabase
       .from("datasets")
       .select("*")
+      .eq("user_id", user.id)
+      .eq("experiment_run_id", payload.experiment_run_id),
+    supabase
+      .from("colony_results")
+      .select("id,animal_id,measures,notes,experiment_run_id,run_timepoint_id,run_timepoint_experiment_id,timepoint_age_days,experiment_type")
       .eq("user_id", user.id)
       .eq("experiment_run_id", payload.experiment_run_id),
   ]);
@@ -457,6 +365,7 @@ export async function syncImportedDatasetToRunCapture(payload: {
       return !fixedColumnKeys.has(key) && !schemaFieldKeys.has(key);
     })
     .map((column) => ({
+      key: column.name,
       name: column.name,
       type: column.type,
       unit: column.unit,
@@ -469,6 +378,7 @@ export async function syncImportedDatasetToRunCapture(payload: {
       return !fixedColumnKeys.has(key) && !schemaFieldKeys.has(key) && !isAnimalIdentityColumn(column.name);
     })
     .map((column) => ({
+      key: column.name,
       name: column.name,
       type: column.type,
       unit: column.unit,
@@ -485,19 +395,8 @@ export async function syncImportedDatasetToRunCapture(payload: {
     []
   );
 
-  const importedRowsWithIdentity = payload.data.map((row) => {
-    const identities = getImportedRowIdentityValues(row);
-    return {
-      row,
-      animalTokens: buildLookupTokens(identities.animalValues),
-      cohortTokens: buildLookupTokens(identities.cohortValues),
-    };
-  });
-
-  const importedColumnByAlias = new Map<string, string>();
-  for (const column of payload.columns) {
-    importedColumnByAlias.set(normalizeLooseKey(column.name), column.name);
-  }
+  const importedRowsWithIdentity = buildImportedRowsWithIdentity(payload.data);
+  const importedColumnByAlias = buildImportedColumnAliasMap(payload.columns);
 
   const existingRows = existingManagedDataset?.data || [];
   const existingRowsByAnimalId = new Map(
@@ -505,28 +404,57 @@ export async function syncImportedDatasetToRunCapture(payload: {
       .map((row) => [serializeDatasetCellValue(row.__animal_id), row] as const)
       .filter(([animalId]) => Boolean(animalId))
   );
+  const existingColonyRows = ((colonyResultRows || []) as Array<{
+    id: string;
+    animal_id: string;
+    measures: Record<string, unknown> | null;
+    notes: string | null;
+    experiment_run_id: string | null;
+    run_timepoint_id: string | null;
+    run_timepoint_experiment_id: string | null;
+    timepoint_age_days: number;
+    experiment_type: string;
+  }>).filter((row) => {
+    if (payload.run_timepoint_experiment_id) {
+      return row.run_timepoint_experiment_id === payload.run_timepoint_experiment_id;
+    }
+    return (
+      Boolean(payload.experiment_type) &&
+      Number(row.timepoint_age_days) === Number(payload.timepoint_age_days || 0) &&
+      row.experiment_type === payload.experiment_type
+    );
+  });
+  const existingColonyRowsByAnimalId = new Map(existingColonyRows.map((row) => [row.animal_id, row] as const));
+
+  const colonyUpserts: Array<{
+    id?: string;
+    user_id: string;
+    animal_id: string;
+    experiment_run_id: string;
+    run_timepoint_id: string | null;
+    run_timepoint_experiment_id: string | null;
+    timepoint_age_days: number;
+    experiment_type: string;
+    measures: Record<string, string | number | boolean | null | string[]>;
+    notes: string | null;
+    recorded_at: string;
+  }> = [];
 
   let matchedAnimals = 0;
   const mergedData = assignedAnimals.map((animal) => {
     const existingRow = existingRowsByAnimalId.get(animal.id) || null;
     const cohortName = animal.cohort_id ? cohortsById.get(animal.cohort_id) || "" : "";
-    const animalTokens = buildLookupTokens([animal.id, animal.identifier, animal.ear_tag]);
-    const cohortTokens = buildLookupTokens([cohortName]);
-    const importedMatch = importedRowsWithIdentity.find((entry) => {
-      const animalMatch = Array.from(animalTokens).some((token) => entry.animalTokens.has(token));
-      if (!animalMatch) return false;
-      if (entry.cohortTokens.size === 0) return true;
-      return Array.from(cohortTokens).some((token) => entry.cohortTokens.has(token));
-    });
-    const importedRow = importedMatch?.row || null;
+    const importedRow = findImportedRowForAnimal(
+      importedRowsWithIdentity,
+      [animal.id, animal.identifier, animal.ear_tag],
+      [cohortName]
+    );
 
     if (importedRow) matchedAnimals += 1;
 
     const mergedValues = Object.fromEntries(
       mergedFields.map((field) => {
-        const importedColumnName = field.aliases
-          .map((alias) => importedColumnByAlias.get(normalizeLooseKey(alias)) || null)
-          .find(Boolean);
+        const importedColumnName = findImportedColumnName(field, importedColumnByAlias);
         const importedValue =
           importedRow && importedColumnName ? importedRow[importedColumnName] : undefined;
         const existingValue = existingRow?.[field.name];
@@ -537,6 +465,31 @@ export async function syncImportedDatasetToRunCapture(payload: {
         ];
       })
     );
+
+    if (importedRow && payload.experiment_type) {
+      const existingColonyRow = existingColonyRowsByAnimalId.get(animal.id) || null;
+      const { measures, notes } = buildColonyMeasuresFromImportedRow({
+        fields: mergedFields,
+        importedRow,
+        importedColumnByAlias,
+        existingMeasures: (existingColonyRow?.measures || {}) as Record<string, string | number | boolean | null | string[]>,
+        existingNotes: existingColonyRow?.notes || null,
+      });
+
+      colonyUpserts.push({
+        ...(existingColonyRow?.id ? { id: existingColonyRow.id } : {}),
+        user_id: user.id,
+        animal_id: animal.id,
+        experiment_run_id: payload.experiment_run_id,
+        run_timepoint_id: payload.run_timepoint_id || null,
+        run_timepoint_experiment_id: payload.run_timepoint_experiment_id || null,
+        timepoint_age_days: Number(payload.timepoint_age_days || 0),
+        experiment_type: payload.experiment_type,
+        measures,
+        notes,
+        recorded_at: new Date().toISOString(),
+      });
+    }
 
     return {
       __animal_id: animal.id,
@@ -586,6 +539,13 @@ export async function syncImportedDatasetToRunCapture(payload: {
         ...datasetPayload,
       })
     : await createDataset(datasetPayload);
+
+  if (colonyUpserts.length > 0) {
+    const { error: colonyError } = await supabase.from("colony_results").upsert(colonyUpserts, { onConflict: "id" });
+    if (colonyError) throw new Error(colonyError.message);
+    revalidatePath("/colony");
+    await syncColonyMirrorsBestEffort(user.id);
+  }
 
   return {
     datasetId,

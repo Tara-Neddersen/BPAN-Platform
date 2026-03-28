@@ -323,6 +323,8 @@ type RunImportDestination = {
   timepointKey: string;
   timepointLabel: string;
   timepointAgeDays: number;
+  runTimepointId: string | null;
+  runTimepointExperimentId: string | null;
   resultSchemaId: string | null;
   schemaSnapshot: unknown;
 };
@@ -434,6 +436,8 @@ function buildRunImportDestinations(
       timepointKey,
       timepointLabel,
       timepointAgeDays,
+      runTimepointId: matchedTimepoint?.id || null,
+      runTimepointExperimentId: matchedExperiment?.id || null,
       resultSchemaId: matchedExperiment?.result_schema_id || run.result_schema_id || null,
       schemaSnapshot:
         (matchedExperiment?.schema_snapshot && matchedExperiment.schema_snapshot.length > 0)
@@ -1323,6 +1327,8 @@ function RunCapturePanel({
         metadata.timepointWindowName ||
         (metadata.timepointAgeDays > 0 ? `Day ${metadata.timepointAgeDays}` : "General"),
       timepointAgeDays: matchingTimepoint?.target_age_days || metadata.timepointAgeDays || 0,
+      runTimepointId: matchingTimepoint?.id || null,
+      runTimepointExperimentId: matchingExperiment?.id || null,
       resultSchemaId: matchingExperiment?.result_schema_id || run.result_schema_id || null,
       schemaSnapshot:
         matchingExperiment?.schema_snapshot && matchingExperiment.schema_snapshot.length > 0
@@ -3550,6 +3556,10 @@ function ImportDialog({
         syncSummary = await syncImportedDatasetToRunCapture({
           experiment_run_id: selectedRun.id,
           block_id: selectedImportDestination.blockId,
+          experiment_type: selectedImportDestination.experimentKey,
+          timepoint_age_days: selectedImportDestination.timepointAgeDays,
+          run_timepoint_id: selectedImportDestination.runTimepointId,
+          run_timepoint_experiment_id: selectedImportDestination.runTimepointExperimentId,
           result_schema_id: selectedImportDestination.resultSchemaId,
           schema_snapshot: selectedImportDestination.schemaSnapshot,
           columns: reconciliation.columns,
