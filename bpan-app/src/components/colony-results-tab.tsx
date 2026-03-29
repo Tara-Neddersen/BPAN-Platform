@@ -884,8 +884,14 @@ export function ColonyResultsTab({
     (exp: string): MeasureField[] => {
       const runSchemaFields = getSchemaFieldsForExperiment(exp);
       const defaults = runSchemaFields.length > 0 ? runSchemaFields : (DEFAULT_MEASURES[exp] || []);
-      const custom = customFields[exp] || [];
-      const autoDetected = detectedFields[exp] || [];
+      const custom =
+        selectedRun && runSchemaFields.length > 0
+          ? []
+          : (customFields[exp] || []);
+      const autoDetected =
+        selectedRun && runSchemaFields.length > 0
+          ? []
+          : (detectedFields[exp] || []);
       const allFields = [...defaults, ...custom, ...autoDetected];
 
       // De-duplicate by key (imported fields may overlap with defaults)
@@ -913,7 +919,7 @@ export function ColonyResultsTab({
       const withoutData = unique.filter((f) => !keysWithData.has(f.key));
       return [...withData, ...withoutData];
     },
-    [colonyResults, customFields, detectedFields, getNormalizedMeasures, getSchemaFieldsForExperiment]
+    [colonyResults, customFields, detectedFields, getNormalizedMeasures, getSchemaFieldsForExperiment, selectedRun]
   );
 
   // Get visible fields (filter out hidden)
