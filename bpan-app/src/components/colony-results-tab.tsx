@@ -1333,9 +1333,18 @@ export function ColonyResultsTab({
 
   // Handle import completion: add imported measures as custom fields
   const handleImportComplete = useCallback(
-    (experimentType: string, importedMeasures: { key: string; name: string; unit?: string }[]) => {
+    (
+      experimentType: string,
+      timepointAgeDays: number,
+      importedMeasures: { key: string; name: string; unit?: string }[]
+    ) => {
       // Get existing keys to avoid duplicates
-      const defaults = DEFAULT_MEASURES[experimentType] || [];
+      const runSchemaFields = selectedRun
+        ? schemaSnapshotToFields(
+            getRunExperimentRowForTab(String(timepointAgeDays), experimentType)?.schema_snapshot
+          )
+        : [];
+      const defaults = runSchemaFields.length > 0 ? runSchemaFields : (DEFAULT_MEASURES[experimentType] || []);
       const existing = customFields[experimentType] || [];
       const existingKeys = new Set([
         ...defaults.map((f) => f.key),
@@ -1369,7 +1378,7 @@ export function ColonyResultsTab({
         return { ...prev, [experimentType]: next };
       });
     },
-    [customFields]
+    [customFields, getRunExperimentRowForTab, selectedRun]
   );
 
   const currentFields = getFields(activeExperiment);
@@ -2022,6 +2031,21 @@ export function ColonyResultsTab({
               runTimepointId: timepointRow?.id || null,
               runTimepointExperimentId: experimentRow?.id || null,
             };
+          }}
+          resolveImportSchemaSnapshot={(timepointAgeDays, experimentType) => {
+            if (!selectedRun) return null;
+            const timepointRow =
+              selectedRunTimepointRows.find((timepoint) => String(timepoint.target_age_days) === String(timepointAgeDays)) ||
+              selectedRunTimepointRows.find((timepoint) => timepoint.key === String(timepointAgeDays)) ||
+              null;
+            const experimentRow = timepointRow
+              ? selectedRunTimepointExperimentRows.find(
+                  (experiment) =>
+                    experiment.run_timepoint_id === timepointRow.id &&
+                    experiment.experiment_key === experimentType
+                ) || null
+              : null;
+            return experimentRow?.schema_snapshot || null;
           }}
           onImportComplete={handleImportComplete}
         />

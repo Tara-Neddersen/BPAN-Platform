@@ -29,6 +29,11 @@ import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 import { maybeDecodeRtf, parseMetricReportPreview } from "@/lib/results-import";
 import { parseDelimitedDatasetPreview } from "@/lib/dataset-preview";
+import {
+  buildImportedColumnAliasMap,
+  buildSyncableRunFields,
+  findImportedColumnName,
+} from "@/lib/results-run-import-sync";
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -367,8 +372,13 @@ interface BehaviorImportDialogProps {
     runTimepointId?: string | null;
     runTimepointExperimentId?: string | null;
   } | null;
+  resolveImportSchemaSnapshot?: (
+    timepointAgeDays: number,
+    experimentType: string
+  ) => unknown;
   onImportComplete?: (
     experimentType: string,
+    timepointAgeDays: number,
     importedMeasures: { key: string; name: string; unit?: string }[]
   ) => void;
 }
@@ -386,6 +396,7 @@ export function BehaviorImportDialog({
   defaultExperimentType,
   batchUpsertColonyResults,
   resolveImportTarget,
+  resolveImportSchemaSnapshot,
   onImportComplete,
 }: BehaviorImportDialogProps) {
   const [rawText, setRawText] = useState("");
@@ -566,6 +577,29 @@ export function BehaviorImportDialog({
     try {
       const tp = Number(timepointAge);
       const importTarget = resolveImportTarget?.(tp, experimentType) || null;
+      const syncableFields = buildSyncableRunFields(
+        resolveImportSchemaSnapshot?.(tp, experimentType) || null
+      );
+      const importedColumnByAlias = buildImportedColumnAliasMap(
+        parsed.map((measure) => ({
+          name: measure.name,
+          type: measure.type === "numeric" ? "numeric" : "text",
+          unit: measure.unit,
+        }))
+      );
+      const targetFieldByMeasureName = new Map<
+        string,
+        { key: string; name: string; unit?: string }
+      >();
+      for (const field of syncableFields) {
+        const importedColumnName = findImportedColumnName(field, importedColumnByAlias);
+        if (!importedColumnName || targetFieldByMeasureName.has(importedColumnName)) continue;
+        targetFieldByMeasureName.set(importedColumnName, {
+          key: field.key,
+          name: field.name,
+          unit: field.unit,
+        });
+      }
 
       // Build one entry per matched animal, merging with any existing results
       const entriesMap = new Map<
@@ -578,6 +612,8 @@ export function BehaviorImportDialog({
 
       for (const measure of parsed) {
         if (!selectedMeasures.has(measure.key)) continue;
+        const mappedField = targetFieldByMeasureName.get(measure.name);
+        const targetMeasureKey = mappedField?.key || measure.key;
 
         for (const [fileId, value] of Object.entries(measure.data)) {
           if (!selectedAnimals.has(fileId)) continue;
@@ -609,7 +645,7 @@ export function BehaviorImportDialog({
               measures: { ...existingMeasures },
             });
           }
-          entriesMap.get(animal.id)!.measures[measure.key] = value;
+          entriesMap.get(animal.id)!.measures[targetMeasureKey] = value;
         }
       }
 
@@ -646,8 +682,15 @@ export function BehaviorImportDialog({
         if (onImportComplete && parsed) {
           const importedMeasures = parsed
             .filter((m) => selectedMeasures.has(m.key))
-            .map((m) => ({ key: m.key, name: m.name, unit: m.unit }));
-          onImportComplete(experimentType, importedMeasures);
+            .map((m) => {
+              const mappedField = targetFieldByMeasureName.get(m.name);
+              return {
+                key: mappedField?.key || m.key,
+                name: mappedField?.name || m.name,
+                unit: mappedField?.unit || m.unit,
+              };
+            });
+          onImportComplete(experimentType, tp, importedMeasures);
         }
         onClose();
       }
@@ -667,6 +710,7 @@ export function BehaviorImportDialog({
     colonyResults,
     batchUpsertColonyResults,
     resolveImportTarget,
+    resolveImportSchemaSnapshot,
     onImportComplete,
     onClose,
   ]);

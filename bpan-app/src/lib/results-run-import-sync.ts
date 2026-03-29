@@ -5,6 +5,39 @@ export function normalizeLooseKey(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+function stripTrailingParenthetical(value: string) {
+  return value.replace(/\s*\([^)]*\)\s*$/g, "").trim();
+}
+
+function stripCommonUnitSuffixes(value: string) {
+  return value
+    .replace(/(?:_m_s|_cm_s|_mm_s|_ng_ml|_ul|_pct|_percent|_percentage|_sec|_secs|_seconds|_second|_s|_ms|_min|_mins|_minutes|_minute|_hrs|_hr|_m)$/g, "")
+    .trim();
+}
+
+function buildAliasVariants(values: Array<string | null | undefined>) {
+  const aliases = new Set<string>();
+  for (const rawValue of values) {
+    if (!rawValue) continue;
+    const value = String(rawValue).trim();
+    if (!value) continue;
+    aliases.add(value);
+
+    const withoutParen = stripTrailingParenthetical(value);
+    if (withoutParen && withoutParen !== value) aliases.add(withoutParen);
+
+    const normalized = value.replace(/['']/g, "").replace(/\s+/g, " ").trim();
+    if (normalized && normalized !== value) aliases.add(normalized);
+
+    const unitlessKey = stripCommonUnitSuffixes(value);
+    if (unitlessKey && unitlessKey !== value) aliases.add(unitlessKey);
+
+    const unitlessParen = stripCommonUnitSuffixes(withoutParen);
+    if (unitlessParen && unitlessParen !== value) aliases.add(unitlessParen);
+  }
+  return Array.from(aliases);
+}
+
 export function serializeDatasetCellValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (Array.isArray(value)) {
@@ -106,7 +139,7 @@ export function buildSyncableRunFields(snapshot: unknown): SyncableRunField[] {
   return normalizeSchemaSnapshot(snapshot)
     .filter((column) => column.is_enabled !== false && column.isEnabled !== false)
     .map((column) => {
-      const aliasCandidates = [column.label, column.name, column.key].filter(
+      const aliasCandidates = buildAliasVariants([column.label, column.name, column.key]).filter(
         (value): value is string => typeof value === "string" && value.trim().length > 0
       );
 
