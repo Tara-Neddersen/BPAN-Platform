@@ -482,3 +482,111 @@ export async function deleteColonyResultMeasureColumn(
   await syncColonyMirrorsBestEffort(user.id);
   return { success: true, updated };
 }
+
+export async function bulkDeleteColonyResults(args: {
+  timepointAgeDays: number;
+  experimentType: string;
+  animalIds?: string[];
+  statusAfterDelete?: "skipped" | "pending" | "scheduled" | "completed" | "leave";
+  options?: {
+    experimentRunId?: string | null;
+    runTimepointId?: string | null;
+    runTimepointExperimentId?: string | null;
+  };
+}) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const animalIds = Array.from(new Set((args.animalIds || []).map((value) => String(value).trim()).filter(Boolean)));
+  const statusAfterDelete = args.statusAfterDelete || "scheduled";
+
+  let query = supabase
+    .from("colony_results")
+    .select("id, animal_id, timepoint_age_days, experiment_type")
+    .eq("user_id", user.id);
+
+  if (args.options?.experimentRunId && args.options?.runTimepointExperimentId) {
+    query = query
+      .eq("experiment_run_id", args.options.experimentRunId)
+      .eq("run_timepoint_experiment_id", args.options.runTimepointExperimentId);
+  } else {
+    query = query
+      .eq("timepoint_age_days", args.timepointAgeDays)
+      .eq("experiment_type", args.experimentType);
+  }
+
+  if (animalIds.length > 0) {
+    query = query.in("animal_id", animalIds);
+  }
+
+  const { data: rows, error } = await query;
+  if (error) return { error: error.message };
+
+  const typedRows = rows || [];
+  if (typedRows.length === 0) {
+    return { success: true, deleted: 0, affectedAnimals: 0 };
+  }
+
+  const idsToDelete = typedRows.map((row) => row.id);
+  const { error: deleteError } = await supabase
+    .from("colony_results")
+    .delete()
+    .in("id", idsToDelete)
+    .eq("user_id", user.id);
+  if (deleteError) return { error: deleteError.message };
+
+  const affectedPairs = new Map<string, { animalId: string; timepointAgeDays: number; experimentType: string }>();
+  for (const row of typedRows) {
+    affectedPairs.set(
+      `${row.animal_id}-${row.timepoint_age_days}-${row.experiment_type}`,
+      {
+        animalId: row.animal_id,
+        timepointAgeDays: row.timepoint_age_days,
+        experimentType: row.experiment_type,
+      }
+    );
+  }
+
+  if (statusAfterDelete !== "leave") {
+    for (const pair of affectedPairs.values()) {
+      if (statusAfterDelete === "completed") {
+        await markExperimentCompleted(
+          supabase,
+          user.id,
+          pair.animalId,
+          pair.timepointAgeDays,
+          pair.experimentType
+        );
+      } else if (statusAfterDelete === "skipped") {
+        await markExperimentSkipped(
+          supabase,
+          user.id,
+          pair.animalId,
+          pair.timepointAgeDays,
+          pair.experimentType
+        );
+      } else {
+        await markExperimentWithStatus(
+          supabase,
+          user.id,
+          pair.animalId,
+          pair.timepointAgeDays,
+          pair.experimentType,
+          statusAfterDelete
+        );
+      }
+    }
+  }
+
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  await syncColonyMirrorsBestEffort(user.id);
+  return {
+    success: true,
+    deleted: typedRows.length,
+    affectedAnimals: new Set(typedRows.map((row) => row.animal_id)).size,
+  };
+}

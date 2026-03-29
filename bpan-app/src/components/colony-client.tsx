@@ -198,6 +198,17 @@ interface ColonyClientProps {
       runTimepointExperimentId?: string | null;
     }
   ) => Promise<{ success?: boolean; error?: string; updated?: number }>;
+  bulkDeleteColonyResults: (
+    timepointAgeDays: number,
+    experimentType: string,
+    animalIds: string[],
+    statusAfterDelete: "skipped" | "pending" | "scheduled" | "completed" | "leave",
+    options?: {
+      experimentRunId?: string | null;
+      runTimepointId?: string | null;
+      runTimepointExperimentId?: string | null;
+    }
+  ) => Promise<{ success?: boolean; error?: string; deleted?: number; affectedAnimals?: number }>;
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -305,6 +316,7 @@ export function ColonyClient({
   batchUpsertColonyResults,
   reconcileTrackerFromExistingColonyResults,
   deleteColonyResultMeasureColumn,
+  bulkDeleteColonyResults,
   actions,
 }: ColonyClientProps) {
   const router = useRouter();
@@ -1630,6 +1642,11 @@ export function ColonyClient({
             }}
             deleteColonyResultMeasureColumn={async (tp, exp, fieldKey, options) => {
               const result = await deleteColonyResultMeasureColumn(tp, exp, fieldKey, options);
+              if (result.success) await refetchAll();
+              return result;
+            }}
+            bulkDeleteColonyResults={async (tp, exp, animalIds, statusAfterDelete, options) => {
+              const result = await bulkDeleteColonyResults(tp, exp, animalIds, statusAfterDelete, options);
               if (result.success) await refetchAll();
               return result;
             }}
