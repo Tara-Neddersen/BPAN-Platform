@@ -843,55 +843,53 @@ export function ColonyResultsTab({
     [editData, getExistingResult, getNormalizedMeasures]
   );
 
-  // Auto-detect extra measure fields from existing colony results (e.g. from tracking imports)
-  const detectedFields = useMemo(() => {
-    const detected: Record<string, MeasureField[]> = {};
-
-    for (const result of colonyResults) {
-      const exp = result.experiment_type;
-      const defaultKeys = new Set((DEFAULT_MEASURES[exp] || []).map((f) => f.key));
-      const customKeys = new Set((customFields[exp] || []).map((f) => f.key));
-      if (!detected[exp]) detected[exp] = [];
-      const detectedKeys = new Set(detected[exp].map((f) => f.key));
-
-      const measures = getNormalizedMeasures(exp, (result.measures as MeasureMap) || {}) as Record<string, unknown>;
-      for (const key of Object.keys(measures)) {
-        if (!isVisibleMeasureKey(key)) continue;
-        if (measures[key] === null) continue;
-        if (defaultKeys.has(key) || customKeys.has(key) || detectedKeys.has(key)) continue;
-
-        detected[exp].push({
-          key,
-          label: key
-            .replace(/_/g, " ")
-            .replace(/\b\w/g, (c) => c.toUpperCase()),
-          type:
-            typeof measures[key] === "number"
-              ? "number"
-              : typeof measures[key] === "boolean"
-                ? "boolean"
-                : "text",
-        });
-        detectedKeys.add(key);
-      }
-    }
-
-    return detected;
-  }, [colonyResults, customFields]);
-
   // Get ALL fields for an experiment (before hiding), with data-filled first
   const getAllFields = useCallback(
     (exp: string): MeasureField[] => {
       const runSchemaFields = getSchemaFieldsForExperiment(exp);
       const defaults = runSchemaFields.length > 0 ? runSchemaFields : (DEFAULT_MEASURES[exp] || []);
-      const custom =
-        selectedRun && runSchemaFields.length > 0
-          ? []
-          : (customFields[exp] || []);
-      const autoDetected =
-        selectedRun && runSchemaFields.length > 0
-          ? []
-          : (detectedFields[exp] || []);
+      const scopedRunExperimentRow =
+        selectedRun && selectedRunTimepointRow
+          ? selectedRunTimepointExperimentRows.find(
+              (experiment) =>
+                experiment.run_timepoint_id === selectedRunTimepointRow.id &&
+                experiment.experiment_key === exp
+            ) || null
+          : null;
+      const scopedResults = selectedRun && scopedRunExperimentRow
+        ? colonyResults.filter(
+            (result) =>
+              result.experiment_run_id === selectedRun.id &&
+              result.run_timepoint_experiment_id === scopedRunExperimentRow.id
+          )
+        : colonyResults.filter((result) => result.experiment_type === exp);
+      const custom = customFields[exp] || [];
+      const customKeys = new Set(custom.map((field) => field.key));
+      const defaultKeys = new Set(defaults.map((field) => field.key));
+      const autoDetected: MeasureField[] = [];
+      const detectedKeys = new Set<string>();
+
+      for (const result of scopedResults) {
+        const measures = getNormalizedMeasures(exp, (result.measures as MeasureMap) || {}) as Record<string, unknown>;
+        for (const key of Object.keys(measures)) {
+          if (!isVisibleMeasureKey(key)) continue;
+          if (measures[key] === null) continue;
+          if (defaultKeys.has(key) || customKeys.has(key) || detectedKeys.has(key)) continue;
+          autoDetected.push({
+            key,
+            label: key
+              .replace(/_/g, " ")
+              .replace(/\b\w/g, (c) => c.toUpperCase()),
+            type:
+              typeof measures[key] === "number"
+                ? "number"
+                : typeof measures[key] === "boolean"
+                  ? "boolean"
+                  : "text",
+          });
+          detectedKeys.add(key);
+        }
+      }
       const allFields = [...defaults, ...custom, ...autoDetected];
 
       // De-duplicate by key (imported fields may overlap with defaults)
@@ -905,8 +903,7 @@ export function ColonyResultsTab({
 
       // Determine which field keys actually have data in any colonyResult for the active experiment
       const keysWithData = new Set<string>();
-      for (const r of colonyResults) {
-        if (r.experiment_type !== exp) continue;
+      for (const r of scopedResults) {
         const m = getNormalizedMeasures(exp, (r.measures as MeasureMap) || {}) as Record<string, unknown>;
         for (const [k, v] of Object.entries(m)) {
           if (!isVisibleMeasureKey(k)) continue;
@@ -919,7 +916,15 @@ export function ColonyResultsTab({
       const withoutData = unique.filter((f) => !keysWithData.has(f.key));
       return [...withData, ...withoutData];
     },
-    [colonyResults, customFields, detectedFields, getNormalizedMeasures, getSchemaFieldsForExperiment, selectedRun]
+    [
+      colonyResults,
+      customFields,
+      getNormalizedMeasures,
+      getSchemaFieldsForExperiment,
+      selectedRun,
+      selectedRunTimepointExperimentRows,
+      selectedRunTimepointRow,
+    ]
   );
 
   // Get visible fields (filter out hidden)
