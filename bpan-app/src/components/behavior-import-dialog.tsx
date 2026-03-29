@@ -359,11 +359,14 @@ interface BehaviorImportDialogProps {
     saved?: number;
     errors?: string[];
   }>;
-  importTarget?: {
+  resolveImportTarget?: (
+    timepointAgeDays: number,
+    experimentType: string
+  ) => {
     experimentRunId?: string | null;
     runTimepointId?: string | null;
     runTimepointExperimentId?: string | null;
-  };
+  } | null;
   onImportComplete?: (
     experimentType: string,
     importedMeasures: { key: string; name: string; unit?: string }[]
@@ -382,7 +385,7 @@ export function BehaviorImportDialog({
   defaultTimepointAge,
   defaultExperimentType,
   batchUpsertColonyResults,
-  importTarget,
+  resolveImportTarget,
   onImportComplete,
 }: BehaviorImportDialogProps) {
   const [rawText, setRawText] = useState("");
@@ -562,6 +565,7 @@ export function BehaviorImportDialog({
 
     try {
       const tp = Number(timepointAge);
+      const importTarget = resolveImportTarget?.(tp, experimentType) || null;
 
       // Build one entry per matched animal, merging with any existing results
       const entriesMap = new Map<
@@ -662,7 +666,7 @@ export function BehaviorImportDialog({
     experimentType,
     colonyResults,
     batchUpsertColonyResults,
-    importTarget,
+    resolveImportTarget,
     onImportComplete,
     onClose,
   ]);
