@@ -28,6 +28,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 import { maybeDecodeRtf, parseMetricReportPreview } from "@/lib/results-import";
+import { parseDelimitedDatasetPreview } from "@/lib/dataset-preview";
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,107 @@ type ParseBehaviorTrackingResult = {
   measures: ParsedMeasure[];
   errors: string[];
 };
+
+function normalizeLooseKey(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function isBehaviorIdentityColumn(columnName: string) {
+  const key = normalizeLooseKey(columnName);
+  return [
+    "animal",
+    "animalnumber",
+    "animalid",
+    "cohort",
+    "cohortnumber",
+    "bpancohortnumber",
+    "bpancohort",
+    "bpannumber",
+    "bpananimalnumber",
+    "genotype",
+    "sex",
+    "eartag",
+    "id",
+    "identifier",
+  ].includes(key);
+}
+
+function extractCohortNumber(rawValue: unknown) {
+  const value = String(rawValue ?? "").trim();
+  if (!value) return "";
+  const match = value.match(/\d+/);
+  return match ? match[0] : "";
+}
+
+function buildBehaviorFileAnimalId(row: Record<string, unknown>) {
+  const animalNumber =
+    row["Animal number"] ??
+    row["Animal"] ??
+    row["animal"] ??
+    row["animal_number"] ??
+    row["animal_id"];
+  const cohortNumber =
+    row["BPAN cohort number"] ??
+    row["Cohort"] ??
+    row["cohort"] ??
+    row["bpan_cohort_number"];
+
+  const animalValue = String(animalNumber ?? "").trim();
+  const cohortValue = extractCohortNumber(cohortNumber);
+
+  if (!animalValue) return "";
+  if (/^\d+-\d+$/.test(animalValue)) return animalValue;
+  if (cohortValue && /^\d+$/.test(animalValue)) return `${cohortValue}-${animalValue}`;
+  return animalValue;
+}
+
+export function parseBehaviorTrackingTable(rawText: string): ParseBehaviorTrackingResult | null {
+  const preview = parseDelimitedDatasetPreview(maybeDecodeRtf(rawText));
+  if (!preview.columns.length || preview.data.length === 0) return null;
+
+  const hasAnimalIdentity = preview.columns.some((column) => {
+    const key = normalizeLooseKey(column.name);
+    return ["animal", "animalnumber", "animalid"].includes(key);
+  });
+  if (!hasAnimalIdentity) return null;
+
+  const measures: ParsedMeasure[] = preview.columns
+    .filter((column) => !isBehaviorIdentityColumn(column.name))
+    .map((column) => {
+      const metricName = column.name.trim();
+      const unitMatch = metricName.match(/\(([^)]+)\)\s*$/);
+      const unit = unitMatch ? unitMatch[1] : undefined;
+      const name = unitMatch
+        ? metricName.slice(0, metricName.lastIndexOf(`(${unit})`)).trim()
+        : metricName;
+
+      const data = Object.fromEntries(
+        preview.data.flatMap((row) => {
+          const fileAnimalId = buildBehaviorFileAnimalId(row);
+          const value = row[column.name];
+          if (!fileAnimalId || value === null || value === undefined || value === "") return [];
+          if (typeof value !== "number" && typeof value !== "string") return [];
+          return [[fileAnimalId, value]];
+        })
+      ) as Record<string, number | string>;
+
+      return {
+        key: measureNameToKey(name),
+        name,
+        unit,
+        type: (column.type === "numeric" ? "numeric" : "text") as "numeric" | "text",
+        data,
+      };
+    })
+    .filter((measure) => Object.keys(measure.data).length > 0);
+
+  if (measures.length === 0) return null;
+
+  return {
+    measures,
+    errors: preview.parseError ? [preview.parseError] : [],
+  };
+}
 
 function measureNameToKey(name: string): string {
   return name
@@ -198,6 +300,11 @@ export function parseBehaviorTrackingOutput(rawText: string): ParseBehaviorTrack
       measures,
       errors: reportPreview.errors,
     };
+  }
+
+  const tablePreview = parseBehaviorTrackingTable(rawText);
+  if (tablePreview) {
+    return tablePreview;
   }
 
   return {
