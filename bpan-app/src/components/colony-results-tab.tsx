@@ -1692,128 +1692,130 @@ export function ColonyResultsTab({
 
   return (
     <div className="space-y-4">
-      <Dialog open={showBulkDelete} onOpenChange={(open) => !bulkDeleting && setShowBulkDelete(open)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Bulk clear colony results</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Remove saved result data for a selected scope, then choose what tracker status those tests should have afterward.
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <Label className="text-xs mb-1 block">Clear Scope</Label>
-                <Select value={bulkDeleteScope} onValueChange={(value) => setBulkDeleteScope(value as typeof bulkDeleteScope)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all_visible">All animals in current scope</SelectItem>
-                    <SelectItem value="cohort">Specific cohort</SelectItem>
-                    <SelectItem value="animal">Specific animal</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs mb-1 block">Tracker Status After Delete</Label>
-                <Select value={bulkDeleteStatus} onValueChange={(value) => setBulkDeleteStatus(value as typeof bulkDeleteStatus)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="scheduled">Scheduled</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="skipped">Skipped</SelectItem>
-                    <SelectItem value="completed">Done / Completed</SelectItem>
-                    <SelectItem value="leave">Leave unchanged</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs mb-1 block">Test</Label>
-                <Select value={bulkDeleteExperiment} onValueChange={setBulkDeleteExperiment}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {bulkDeleteExperimentOptions.map((experiment) => (
-                      <SelectItem key={experiment} value={experiment}>
-                        {selectedRun
-                          ? getRunExperimentRowForTab(String(bulkDeleteTimepoint), experiment)?.label || EXPERIMENT_LABELS[experiment] || experiment
-                          : EXPERIMENT_LABELS[experiment] || experiment}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs mb-1 block">Timepoint</Label>
-                <Select value={bulkDeleteTimepoint} onValueChange={setBulkDeleteTimepoint}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {bulkDeleteTimepointOptions.map((timepoint) => (
-                      <SelectItem key={timepoint.value} value={timepoint.value}>
-                        {timepoint.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            {bulkDeleteScope === "cohort" && (
-              <div>
-                <Label className="text-xs mb-1 block">Cohort</Label>
-                <Select value={bulkDeleteCohortId} onValueChange={setBulkDeleteCohortId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Choose a cohort" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__all__">Choose a cohort</SelectItem>
-                    {bulkDeleteCohortOptions.map((cohort) => (
-                      <SelectItem key={cohort.id} value={cohort.id}>
-                        {cohort.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {bulkDeleteScope === "animal" && (
-              <div>
-                <Label className="text-xs mb-1 block">Animal</Label>
-                <Select value={bulkDeleteAnimalId} onValueChange={setBulkDeleteAnimalId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Choose an animal" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__all__">Choose an animal</SelectItem>
-                    {bulkDeleteAnimalOptions.map((animal) => {
-                      const cohort = cohorts.find((entry) => entry.id === animal.cohort_id);
-                      return (
-                        <SelectItem key={animal.id} value={animal.id}>
-                          {`${cohort?.name || "Unknown"} • ${animal.identifier}`}
+      {showBulkDelete && (
+        <Dialog open={showBulkDelete} onOpenChange={(open) => !bulkDeleting && setShowBulkDelete(open)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Bulk clear colony results</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Remove saved result data for a selected scope, then choose what tracker status those tests should have afterward.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label className="text-xs mb-1 block">Clear Scope</Label>
+                  <Select value={bulkDeleteScope} onValueChange={(value) => setBulkDeleteScope(value as typeof bulkDeleteScope)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all_visible">All animals in current scope</SelectItem>
+                      <SelectItem value="cohort">Specific cohort</SelectItem>
+                      <SelectItem value="animal">Specific animal</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs mb-1 block">Tracker Status After Delete</Label>
+                  <Select value={bulkDeleteStatus} onValueChange={(value) => setBulkDeleteStatus(value as typeof bulkDeleteStatus)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="scheduled">Scheduled</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="skipped">Skipped</SelectItem>
+                      <SelectItem value="completed">Done / Completed</SelectItem>
+                      <SelectItem value="leave">Leave unchanged</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs mb-1 block">Test</Label>
+                  <Select value={bulkDeleteExperiment} onValueChange={setBulkDeleteExperiment}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {bulkDeleteExperimentOptions.map((experiment) => (
+                        <SelectItem key={experiment} value={experiment}>
+                          {selectedRun
+                            ? getRunExperimentRowForTab(String(bulkDeleteTimepoint), experiment)?.label || EXPERIMENT_LABELS[experiment] || experiment
+                            : EXPERIMENT_LABELS[experiment] || experiment}
                         </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs mb-1 block">Timepoint</Label>
+                  <Select value={bulkDeleteTimepoint} onValueChange={setBulkDeleteTimepoint}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {bulkDeleteTimepointOptions.map((timepoint) => (
+                        <SelectItem key={timepoint.value} value={timepoint.value}>
+                          {timepoint.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" type="button" disabled={bulkDeleting} onClick={() => setShowBulkDelete(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" type="button" disabled={bulkDeleting} onClick={handleBulkDeleteResults}>
-              {bulkDeleting ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Trash2 className="w-3.5 h-3.5 mr-1" />}
-              Clear Results
-            </Button>
-          </DialogFooter>
-      </DialogContent>
-      </Dialog>
+              {bulkDeleteScope === "cohort" && (
+                <div>
+                  <Label className="text-xs mb-1 block">Cohort</Label>
+                  <Select value={bulkDeleteCohortId} onValueChange={setBulkDeleteCohortId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Choose a cohort" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">Choose a cohort</SelectItem>
+                      {bulkDeleteCohortOptions.map((cohort) => (
+                        <SelectItem key={cohort.id} value={cohort.id}>
+                          {cohort.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {bulkDeleteScope === "animal" && (
+                <div>
+                  <Label className="text-xs mb-1 block">Animal</Label>
+                  <Select value={bulkDeleteAnimalId} onValueChange={setBulkDeleteAnimalId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Choose an animal" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">Choose an animal</SelectItem>
+                      {bulkDeleteAnimalOptions.map((animal) => {
+                        const cohort = cohorts.find((entry) => entry.id === animal.cohort_id);
+                        return (
+                          <SelectItem key={animal.id} value={animal.id}>
+                            {`${cohort?.name || "Unknown"} • ${animal.identifier}`}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" type="button" disabled={bulkDeleting} onClick={() => setShowBulkDelete(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" type="button" disabled={bulkDeleting} onClick={handleBulkDeleteResults}>
+                {bulkDeleting ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Trash2 className="w-3.5 h-3.5 mr-1" />}
+                Clear Results
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       <Dialog
         open={showEmptyStatusDialog}
