@@ -346,13 +346,24 @@ interface BehaviorImportDialogProps {
       animalId: string;
       measures: Record<string, string | number | null | string[]>;
       notes?: string;
-    }[]
+    }[],
+    options?: {
+      emptyResultStatus?: "skipped" | "pending" | "scheduled" | "leave";
+      experimentRunId?: string | null;
+      runTimepointId?: string | null;
+      runTimepointExperimentId?: string | null;
+    }
   ) => Promise<{
     success?: boolean;
     error?: string;
     saved?: number;
     errors?: string[];
   }>;
+  importTarget?: {
+    experimentRunId?: string | null;
+    runTimepointId?: string | null;
+    runTimepointExperimentId?: string | null;
+  };
   onImportComplete?: (
     experimentType: string,
     importedMeasures: { key: string; name: string; unit?: string }[]
@@ -371,6 +382,7 @@ export function BehaviorImportDialog({
   defaultTimepointAge,
   defaultExperimentType,
   batchUpsertColonyResults,
+  importTarget,
   onImportComplete,
 }: BehaviorImportDialogProps) {
   const [rawText, setRawText] = useState("");
@@ -573,8 +585,17 @@ export function BehaviorImportDialog({
             const existing = colonyResults.find(
               (r) =>
                 r.animal_id === animal.id &&
-                r.timepoint_age_days === tp &&
-                r.experiment_type === experimentType
+                (
+                  importTarget?.experimentRunId && importTarget?.runTimepointExperimentId
+                    ? (
+                        r.experiment_run_id === importTarget.experimentRunId &&
+                        r.run_timepoint_experiment_id === importTarget.runTimepointExperimentId
+                      )
+                    : (
+                        r.timepoint_age_days === tp &&
+                        r.experiment_type === experimentType
+                      )
+                )
             );
             const existingMeasures = existing
               ? (existing.measures as Record<string, string | number | null>)
@@ -598,10 +619,21 @@ export function BehaviorImportDialog({
       const result = await batchUpsertColonyResults(
         tp,
         experimentType,
-        entries
+        entries,
+        {
+          experimentRunId: importTarget?.experimentRunId || null,
+          runTimepointId: importTarget?.runTimepointId || null,
+          runTimepointExperimentId: importTarget?.runTimepointExperimentId || null,
+        }
       );
       if (result.error) {
         toast.error(result.error);
+      } else if ((result.saved || 0) === 0) {
+        toast.error(result.errors?.[0] || "Import failed to save any matching animals");
+      } else if (result.errors && result.errors.length > 0) {
+        toast.warning(
+          `Imported ${selectedMeasures.size} measures for ${result.saved} animals. ${result.errors.length} row${result.errors.length === 1 ? "" : "s"} failed.`
+        );
       } else {
         toast.success(
           `Imported ${selectedMeasures.size} measures for ${result.saved} animals`
@@ -630,6 +662,7 @@ export function BehaviorImportDialog({
     experimentType,
     colonyResults,
     batchUpsertColonyResults,
+    importTarget,
     onImportComplete,
     onClose,
   ]);

@@ -1999,6 +1999,12 @@ export function ColonyResultsTab({
           defaultTimepointAge={selectedRun ? (selectedRunTimepoint?.age ?? 0) : Number(activeTimepoint)}
           defaultExperimentType={activeExperiment}
           batchUpsertColonyResults={batchUpsertColonyResults}
+          importTarget={{
+            experimentRunId: selectedRun?.id || null,
+            runTimepointId: selectedRunTimepointRow?.id || null,
+            runTimepointExperimentId:
+              selectedRunExperimentRows.find((experiment) => experiment.experiment_key === activeExperiment)?.id || null,
+          }}
           onImportComplete={handleImportComplete}
         />
       )}
