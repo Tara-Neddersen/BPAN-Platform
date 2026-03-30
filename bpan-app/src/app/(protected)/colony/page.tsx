@@ -290,15 +290,7 @@ export async function renderColonyPageView({
           batchUpsertColonyResults={batchUpsertColonyResults}
           reconcileTrackerFromExistingColonyResults={reconcileTrackerFromExistingColonyResults}
           deleteColonyResultMeasureColumn={deleteColonyResultMeasureColumn}
-          bulkDeleteColonyResults={(timepointAgeDays, experimentType, animalIds, statusAfterDelete, options) =>
-            bulkDeleteColonyResults({
-              timepointAgeDays,
-              experimentType,
-              animalIds,
-              statusAfterDelete,
-              options,
-            })
-          }
+          bulkDeleteColonyResults={bulkDeleteColonyResults}
           actions={{
             createBreederCage,
             updateBreederCage,
