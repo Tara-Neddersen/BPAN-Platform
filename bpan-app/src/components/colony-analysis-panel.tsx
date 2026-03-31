@@ -250,6 +250,382 @@ function lgamma(x: number): number {
   return -tmp + Math.log((2.5066282746310005 * ser) / x);
 }
 
+function regularizedGammaP(a: number, x: number): number {
+  if (x <= 0) return 0;
+  if (x < a + 1) {
+    let ap = a;
+    let sum = 1 / a;
+    let del = sum;
+    for (let n = 1; n <= 200; n++) {
+      ap += 1;
+      del *= x / ap;
+      sum += del;
+      if (Math.abs(del) < Math.abs(sum) * 1e-10) break;
+    }
+    return sum * Math.exp(-x + a * Math.log(x) - lgamma(a));
+  }
+
+  let b = x + 1 - a;
+  let c = 1 / 1e-30;
+  let d = 1 / b;
+  let h = d;
+  for (let i = 1; i <= 200; i++) {
+    const an = -i * (i - a);
+    b += 2;
+    d = an * d + b;
+    if (Math.abs(d) < 1e-30) d = 1e-30;
+    c = b + an / c;
+    if (Math.abs(c) < 1e-30) c = 1e-30;
+    d = 1 / d;
+    const del = d * c;
+    h *= del;
+    if (Math.abs(del - 1) < 1e-10) break;
+  }
+  return 1 - Math.exp(-x + a * Math.log(x) - lgamma(a)) * h;
+}
+
+function approxChiSquareCDF(x: number, df: number): number {
+  if (x <= 0) return 0;
+  return regularizedGammaP(df / 2, x / 2);
+}
+
+function kruskalWallisTest(groups: number[][]): { H: number; df: number; p: number; epsilonSq: number } {
+  const validGroups = groups.filter((group) => group.length > 0);
+  const k = validGroups.length;
+  const pooled = validGroups.flat();
+  const N = pooled.length;
+  if (k < 2 || N === 0) return { H: 0, df: Math.max(0, k - 1), p: 1, epsilonSq: 0 };
+
+  const ranked = validGroups
+    .flatMap((group, groupIndex) => group.map((value) => ({ value, groupIndex })))
+    .sort((a, b) => a.value - b.value);
+
+  const ranks = new Array<number>(ranked.length).fill(0);
+  let i = 0;
+  while (i < ranked.length) {
+    let j = i;
+    while (j + 1 < ranked.length && ranked[j + 1].value === ranked[i].value) j++;
+    const avgRank = (i + j + 2) / 2;
+    for (let kIndex = i; kIndex <= j; kIndex++) ranks[kIndex] = avgRank;
+    i = j + 1;
+  }
+
+  const rankSums = new Array<number>(k).fill(0);
+  const counts = new Array<number>(k).fill(0);
+  ranked.forEach((entry, index) => {
+    rankSums[entry.groupIndex] += ranks[index];
+    counts[entry.groupIndex] += 1;
+  });
+
+  let h = 0;
+  for (let groupIndex = 0; groupIndex < k; groupIndex++) {
+    if (counts[groupIndex] === 0) continue;
+    h += (rankSums[groupIndex] ** 2) / counts[groupIndex];
+  }
+  h = (12 / (N * (N + 1))) * h - 3 * (N + 1);
+
+  const df = k - 1;
+  const p = 1 - approxChiSquareCDF(h, df);
+  const epsilonSq = df > 0 ? Math.max(0, (h - df) / Math.max(N - df, 1)) : 0;
+  return { H: round(h), df, p: round(p, 6), epsilonSq: round(epsilonSq) };
+}
+
+function rankWithTies(values: number[]): number[] {
+  const ordered = values.map((value, index) => ({ value, index })).sort((a, b) => a.value - b.value);
+  const ranks = new Array<number>(values.length).fill(0);
+  let i = 0;
+  while (i < ordered.length) {
+    let j = i;
+    while (j + 1 < ordered.length && ordered[j + 1].value === ordered[i].value) j++;
+    const avgRank = (i + j + 2) / 2;
+    for (let k = i; k <= j; k++) ranks[ordered[k].index] = avgRank;
+    i = j + 1;
+  }
+  return ranks;
+}
+
+function pearsonCorrelation(x: number[], y: number[]): { r: number; t: number; df: number; p: number; r2: number } {
+  if (x.length !== y.length || x.length < 3) return { r: 0, t: 0, df: 0, p: 1, r2: 0 };
+  const mx = mean(x);
+  const my = mean(y);
+  let numerator = 0;
+  let dx2 = 0;
+  let dy2 = 0;
+  for (let i = 0; i < x.length; i++) {
+    const dx = x[i] - mx;
+    const dy = y[i] - my;
+    numerator += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  if (dx2 === 0 || dy2 === 0) return { r: 0, t: 0, df: x.length - 2, p: 1, r2: 0 };
+  const r = numerator / Math.sqrt(dx2 * dy2);
+  const df = x.length - 2;
+  const t = r * Math.sqrt(df / Math.max(1e-12, 1 - r * r));
+  const p = 1 - approxFCDF(t * t, 1, df);
+  return { r: round(r), t: round(t), df, p: round(p, 6), r2: round(r * r) };
+}
+
+function spearmanCorrelation(x: number[], y: number[]): { rho: number; t: number; df: number; p: number; r2: number } {
+  if (x.length !== y.length || x.length < 3) return { rho: 0, t: 0, df: 0, p: 1, r2: 0 };
+  const rx = rankWithTies(x);
+  const ry = rankWithTies(y);
+  const pearson = pearsonCorrelation(rx, ry);
+  return {
+    rho: pearson.r,
+    t: pearson.t,
+    df: pearson.df,
+    p: pearson.p,
+    r2: pearson.r2,
+  };
+}
+
+function getFactorValue(row: FlatRow, factor: AnalysisFactor): string {
+  switch (factor) {
+    case "sex":
+      return row.sex;
+    case "genotype":
+      return row.genotype;
+    case "cohort":
+      return row.cohort;
+    case "timepoint":
+      return `${row.timepoint} Day`;
+    case "group":
+    default:
+      return row.group;
+  }
+}
+
+function getFactorLabel(factor: AnalysisFactor): string {
+  switch (factor) {
+    case "sex":
+      return "Sex";
+    case "genotype":
+      return "Genotype";
+    case "cohort":
+      return "Cohort";
+    case "timepoint":
+      return "Timepoint";
+    case "group":
+    default:
+      return "Genotype × Sex";
+  }
+}
+
+function solveLinearSystem(matrix: number[][], vector: number[]): number[] | null {
+  const n = matrix.length;
+  if (n === 0) return [];
+  const augmented = matrix.map((row, index) => [...row, vector[index]]);
+
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let row = col + 1; row < n; row++) {
+      if (Math.abs(augmented[row][col]) > Math.abs(augmented[pivot][col])) pivot = row;
+    }
+    if (Math.abs(augmented[pivot][col]) < 1e-10) return null;
+    if (pivot !== col) [augmented[pivot], augmented[col]] = [augmented[col], augmented[pivot]];
+
+    const pivotValue = augmented[col][col];
+    for (let j = col; j <= n; j++) augmented[col][j] /= pivotValue;
+
+    for (let row = 0; row < n; row++) {
+      if (row === col) continue;
+      const factor = augmented[row][col];
+      for (let j = col; j <= n; j++) augmented[row][j] -= factor * augmented[col][j];
+    }
+  }
+
+  return augmented.map((row) => row[n]);
+}
+
+function fitLinearModel(design: number[][], y: number[]): { sse: number; dfResidual: number; coefficients: number[] } | null {
+  if (design.length !== y.length || design.length === 0) return null;
+  const columns = design[0].length;
+  const xtx = Array.from({ length: columns }, () => Array.from({ length: columns }, () => 0));
+  const xty = Array.from({ length: columns }, () => 0);
+
+  for (let row = 0; row < design.length; row++) {
+    for (let i = 0; i < columns; i++) {
+      xty[i] += design[row][i] * y[row];
+      for (let j = 0; j < columns; j++) {
+        xtx[i][j] += design[row][i] * design[row][j];
+      }
+    }
+  }
+
+  for (let i = 0; i < columns; i++) xtx[i][i] += 1e-8;
+  const coefficients = solveLinearSystem(xtx, xty);
+  if (!coefficients) return null;
+
+  let sse = 0;
+  for (let row = 0; row < design.length; row++) {
+    let predicted = 0;
+    for (let i = 0; i < columns; i++) predicted += design[row][i] * coefficients[i];
+    sse += (y[row] - predicted) ** 2;
+  }
+
+  return { sse, dfResidual: Math.max(0, y.length - columns), coefficients };
+}
+
+function buildTwoWayDesign(
+  rows: FlatRow[],
+  measureKey: string,
+  factorA: AnalysisFactor,
+  factorB: AnalysisFactor,
+  includeA: boolean,
+  includeB: boolean,
+  includeInteraction: boolean,
+) {
+  const prepared = rows
+    .map((row) => ({
+      y: Number(row[measureKey]),
+      a: getFactorValue(row, factorA),
+      b: getFactorValue(row, factorB),
+    }))
+    .filter((row) => !Number.isNaN(row.y) && row.a && row.b);
+
+  const levelsA = Array.from(new Set(prepared.map((row) => row.a))).sort();
+  const levelsB = Array.from(new Set(prepared.map((row) => row.b))).sort();
+  const baseA = levelsA[0];
+  const baseB = levelsB[0];
+
+  const design = prepared.map((row) => {
+    const cols = [1];
+    const aDummies = levelsA.slice(1).map((level) => (row.a === level ? 1 : 0));
+    const bDummies = levelsB.slice(1).map((level) => (row.b === level ? 1 : 0));
+    if (includeA) cols.push(...aDummies);
+    if (includeB) cols.push(...bDummies);
+    if (includeInteraction) {
+      for (const aDummy of aDummies) {
+        for (const bDummy of bDummies) cols.push(aDummy * bDummy);
+      }
+    }
+    return cols;
+  });
+
+  return {
+    y: prepared.map((row) => row.y),
+    design,
+    levelsA,
+    levelsB,
+    baseA,
+    baseB,
+  };
+}
+
+function twoWayAnova(
+  rows: FlatRow[],
+  measureKey: string,
+  factorA: AnalysisFactor,
+  factorB: AnalysisFactor,
+): {
+  factorA: string;
+  factorB: string;
+  levelsA: string[];
+  levelsB: string[];
+  n: number;
+  table: Array<Record<string, unknown>>;
+  cellCounts: Array<{ levelA: string; levelB: string; n: number }>;
+  warning?: string;
+} | { error: string } {
+  if (factorA === factorB) return { error: "Choose two different factors for 2-way ANOVA." };
+
+  const validRows = rows.filter((row) => !Number.isNaN(Number(row[measureKey])));
+  const levelsA = Array.from(new Set(validRows.map((row) => getFactorValue(row, factorA)))).sort();
+  const levelsB = Array.from(new Set(validRows.map((row) => getFactorValue(row, factorB)))).sort();
+  if (levelsA.length < 2 || levelsB.length < 2) {
+    return { error: "Each factor needs at least 2 levels in the included data." };
+  }
+
+  const cellCounts = levelsA.flatMap((levelA) =>
+    levelsB.map((levelB) => ({
+      levelA,
+      levelB,
+      n: validRows.filter((row) => getFactorValue(row, factorA) === levelA && getFactorValue(row, factorB) === levelB).length,
+    })),
+  );
+
+  if (cellCounts.some((cell) => cell.n === 0)) {
+    return { error: "2-way ANOVA needs at least one included animal in every factor combination." };
+  }
+
+  const modelA = buildTwoWayDesign(validRows, measureKey, factorA, factorB, true, false, false);
+  const modelB = buildTwoWayDesign(validRows, measureKey, factorA, factorB, false, true, false);
+  const modelAdd = buildTwoWayDesign(validRows, measureKey, factorA, factorB, true, true, false);
+  const modelFull = buildTwoWayDesign(validRows, measureKey, factorA, factorB, true, true, true);
+
+  const fitA = fitLinearModel(modelA.design, modelA.y);
+  const fitB = fitLinearModel(modelB.design, modelB.y);
+  const fitAdd = fitLinearModel(modelAdd.design, modelAdd.y);
+  const fitFull = fitLinearModel(modelFull.design, modelFull.y);
+  if (!fitA || !fitB || !fitAdd || !fitFull) {
+    return { error: "Could not fit the 2-way ANOVA model with the current data." };
+  }
+
+  const dfA = levelsA.length - 1;
+  const dfB = levelsB.length - 1;
+  const dfInteraction = dfA * dfB;
+  const msErrorAdd = fitAdd.dfResidual > 0 ? fitAdd.sse / fitAdd.dfResidual : NaN;
+  const msErrorFull = fitFull.dfResidual > 0 ? fitFull.sse / fitFull.dfResidual : NaN;
+
+  const ssA = Math.max(0, fitB.sse - fitAdd.sse);
+  const ssB = Math.max(0, fitA.sse - fitAdd.sse);
+  const ssInteraction = Math.max(0, fitAdd.sse - fitFull.sse);
+
+  const fA = dfA > 0 && msErrorAdd > 0 ? (ssA / dfA) / msErrorAdd : 0;
+  const fB = dfB > 0 && msErrorAdd > 0 ? (ssB / dfB) / msErrorAdd : 0;
+  const fInteraction = dfInteraction > 0 && msErrorFull > 0 ? (ssInteraction / dfInteraction) / msErrorFull : 0;
+
+  const pA = dfA > 0 && fitAdd.dfResidual > 0 ? 1 - approxFCDF(fA, dfA, fitAdd.dfResidual) : 1;
+  const pB = dfB > 0 && fitAdd.dfResidual > 0 ? 1 - approxFCDF(fB, dfB, fitAdd.dfResidual) : 1;
+  const pInteraction = dfInteraction > 0 && fitFull.dfResidual > 0 ? 1 - approxFCDF(fInteraction, dfInteraction, fitFull.dfResidual) : 1;
+
+  return {
+    factorA: getFactorLabel(factorA),
+    factorB: getFactorLabel(factorB),
+    levelsA,
+    levelsB,
+    n: validRows.length,
+    table: [
+      {
+        source: getFactorLabel(factorA),
+        ss: round(ssA),
+        df: dfA,
+        ms: round(dfA > 0 ? ssA / dfA : 0),
+        F: round(fA),
+        p: round(pA, 6),
+        partial_eta_sq: round(ssA / Math.max(ssA + fitAdd.sse, 1e-12)),
+      },
+      {
+        source: getFactorLabel(factorB),
+        ss: round(ssB),
+        df: dfB,
+        ms: round(dfB > 0 ? ssB / dfB : 0),
+        F: round(fB),
+        p: round(pB, 6),
+        partial_eta_sq: round(ssB / Math.max(ssB + fitAdd.sse, 1e-12)),
+      },
+      {
+        source: `${getFactorLabel(factorA)} × ${getFactorLabel(factorB)}`,
+        ss: round(ssInteraction),
+        df: dfInteraction,
+        ms: round(dfInteraction > 0 ? ssInteraction / dfInteraction : 0),
+        F: round(fInteraction),
+        p: round(pInteraction, 6),
+        partial_eta_sq: round(ssInteraction / Math.max(ssInteraction + fitFull.sse, 1e-12)),
+      },
+      {
+        source: "Residual",
+        ss: round(fitFull.sse),
+        df: fitFull.dfResidual,
+        ms: round(fitFull.dfResidual > 0 ? fitFull.sse / fitFull.dfResidual : 0),
+      },
+    ],
+    cellCounts,
+    warning: "Main effects are estimated from the additive model, and the interaction is tested separately against the full factorial model.",
+  };
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface FlatRow {
@@ -274,6 +650,19 @@ interface GroupStats {
   min: number;
   max: number;
   values: number[];
+}
+
+type AnalysisFactor = "group" | "sex" | "genotype" | "cohort" | "timepoint";
+
+interface AnalysisAnimalRow {
+  animal_id: string;
+  identifier: string;
+  cohort: string;
+  sex: string;
+  genotype: string;
+  group: string;
+  rowCount: number;
+  included: boolean;
 }
 
 // ─── Props ──────────────────────────────────────────────────────────────────
@@ -306,6 +695,8 @@ export function ColonyAnalysisPanel({
   );
   const [selectedTimepoint, setSelectedTimepoint] = useState<string>("__all__");
   const [selectedCohort, setSelectedCohort] = useState<string>("__all__");
+  const [excludedAnimalIds, setExcludedAnimalIds] = useState<Set<string>>(new Set());
+  const [animalSearch, setAnimalSearch] = useState("");
 
   const visibleRuns = useMemo(() => experimentRuns.filter((run) => run.status !== "cancelled"), [experimentRuns]);
   const resolvedRunId =
@@ -386,7 +777,7 @@ export function ColonyAnalysisPanel({
       : selectedTimepoint;
 
   // ── Build flat dataset ──
-  const { flatData, measureKeys, measureLabels } = useMemo(() => {
+  const { scopedFlatData, scopedMeasureKeys, scopedMeasureLabels } = useMemo(() => {
     let results = filteredResults;
 
     if (effectiveSelectedExperiment !== "__all__") {
@@ -446,11 +837,74 @@ export function ColonyAnalysisPanel({
     }
 
     return {
-      flatData: rows,
+      scopedFlatData: rows,
+      scopedMeasureKeys: Array.from(keySet).sort(),
+      scopedMeasureLabels: labels,
+    };
+  }, [animals, cohorts, effectiveSelectedExperiment, effectiveSelectedTimepoint, filteredResults, selectedCohort, selectedRun, selectedRunAssignments, selectedRunExperiments]);
+
+  const analysisAnimals = useMemo<AnalysisAnimalRow[]>(() => {
+    const animalMap = new Map<string, AnalysisAnimalRow>();
+    for (const row of scopedFlatData) {
+      const existing = animalMap.get(row.animal_id);
+      if (existing) {
+        existing.rowCount += 1;
+        existing.included = !excludedAnimalIds.has(row.animal_id);
+        continue;
+      }
+      animalMap.set(row.animal_id, {
+        animal_id: row.animal_id,
+        identifier: row.identifier,
+        cohort: row.cohort,
+        sex: row.sex,
+        genotype: row.genotype,
+        group: row.group,
+        rowCount: 1,
+        included: !excludedAnimalIds.has(row.animal_id),
+      });
+    }
+    return Array.from(animalMap.values()).sort((a, b) =>
+      a.cohort === b.cohort
+        ? a.identifier.localeCompare(b.identifier, undefined, { numeric: true })
+        : a.cohort.localeCompare(b.cohort, undefined, { numeric: true }),
+    );
+  }, [excludedAnimalIds, scopedFlatData]);
+
+  const visibleAnalysisAnimals = useMemo(() => {
+    const query = animalSearch.trim().toLowerCase();
+    if (!query) return analysisAnimals;
+    return analysisAnimals.filter((animal) =>
+      [
+        animal.identifier,
+        animal.cohort,
+        animal.sex,
+        animal.genotype,
+        animal.group,
+      ].some((value) => value.toLowerCase().includes(query)),
+    );
+  }, [analysisAnimals, animalSearch]);
+
+  const includedFlatData = useMemo(
+    () => scopedFlatData.filter((row) => !excludedAnimalIds.has(row.animal_id)),
+    [excludedAnimalIds, scopedFlatData],
+  );
+
+  const { flatData, measureKeys, measureLabels } = useMemo(() => {
+    const keySet = new Set<string>();
+    const labels: Record<string, string> = {};
+    for (const row of includedFlatData) {
+      for (const key of scopedMeasureKeys) {
+        if (row[key] === null || row[key] === undefined || row[key] === "") continue;
+        keySet.add(key);
+        labels[key] = scopedMeasureLabels[key] || key;
+      }
+    }
+    return {
+      flatData: includedFlatData,
       measureKeys: Array.from(keySet).sort(),
       measureLabels: labels,
     };
-  }, [animals, cohorts, effectiveSelectedExperiment, effectiveSelectedTimepoint, filteredResults, selectedCohort, selectedRun, selectedRunAssignments, selectedRunExperiments]);
+  }, [includedFlatData, scopedMeasureKeys, scopedMeasureLabels]);
 
   // Numeric measure keys only
   const numericMeasureKeys = useMemo(() => {
@@ -466,6 +920,9 @@ export function ColonyAnalysisPanel({
     const groups = new Set(flatData.map((r) => r.group));
     return GROUP_ORDER.filter((g) => groups.has(g));
   }, [flatData]);
+
+  const includedAnimalCount = analysisAnimals.filter((animal) => animal.included).length;
+  const excludedAnimalCount = analysisAnimals.length - includedAnimalCount;
 
   if (colonyResults.length === 0) {
     return (
@@ -498,6 +955,7 @@ export function ColonyAnalysisPanel({
               <Badge variant="outline" className="text-[11px]">{flatData.length} rows</Badge>
               <Badge variant="outline" className="text-[11px]">{numericMeasureKeys.length} measures</Badge>
               <Badge variant="outline" className="text-[11px]">{availableGroups.length} groups</Badge>
+              <Badge variant="outline" className="text-[11px]">{includedAnimalCount}/{analysisAnimals.length || 0} animals included</Badge>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -573,10 +1031,122 @@ export function ColonyAnalysisPanel({
         </CardContent>
       </Card>
 
+      {analysisAnimals.length > 0 && (
+        <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
+          <CardHeader className="border-b bg-slate-50/70 py-3 px-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-sm font-semibold">Analysis Set</CardTitle>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Choose which animals are included before running stats, graphs, or exports.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Badge variant="outline" className="text-[11px]">{includedAnimalCount} included</Badge>
+                {excludedAnimalCount > 0 && (
+                  <Badge variant="outline" className="text-[11px] text-amber-700">{excludedAnimalCount} excluded</Badge>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3 pt-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={animalSearch}
+                onChange={(event) => setAnimalSearch(event.target.value)}
+                placeholder="Search animal, cohort, sex, genotype..."
+                className="h-9 max-w-sm"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setExcludedAnimalIds(new Set())}
+                disabled={excludedAnimalCount === 0}
+              >
+                Include all
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setExcludedAnimalIds((current) => {
+                    const next = new Set(current);
+                    visibleAnalysisAnimals.forEach((animal) => next.add(animal.animal_id));
+                    return next;
+                  })
+                }
+                disabled={visibleAnalysisAnimals.length === 0}
+              >
+                Exclude visible
+              </Button>
+            </div>
+
+            <div className="max-h-64 overflow-auto rounded-md border border-slate-200">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-slate-50/95">
+                  <tr className="border-b">
+                    <th className="px-2 py-2 text-left font-medium text-muted-foreground">Include</th>
+                    <th className="px-2 py-2 text-left font-medium text-muted-foreground">Animal</th>
+                    <th className="px-2 py-2 text-left font-medium text-muted-foreground">Cohort</th>
+                    <th className="px-2 py-2 text-left font-medium text-muted-foreground">Sex</th>
+                    <th className="px-2 py-2 text-left font-medium text-muted-foreground">Genotype</th>
+                    <th className="px-2 py-2 text-left font-medium text-muted-foreground">Group</th>
+                    <th className="px-2 py-2 text-right font-medium text-muted-foreground">Rows</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleAnalysisAnimals.map((animal) => (
+                    <tr key={animal.animal_id} className="border-b last:border-0">
+                      <td className="px-2 py-2">
+                        <label className="flex items-center gap-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={animal.included}
+                            onChange={(event) =>
+                              setExcludedAnimalIds((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked) next.delete(animal.animal_id);
+                                else next.add(animal.animal_id);
+                                return next;
+                              })
+                            }
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          <span>{animal.included ? "Included" : "Excluded"}</span>
+                        </label>
+                      </td>
+                      <td className="px-2 py-2 font-medium">{animal.identifier}</td>
+                      <td className="px-2 py-2">{animal.cohort}</td>
+                      <td className="px-2 py-2">{animal.sex}</td>
+                      <td className="px-2 py-2">{animal.genotype}</td>
+                      <td className="px-2 py-2" style={{ color: GROUP_COLORS[animal.group] || undefined }}>
+                        {animal.group}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums">{animal.rowCount}</td>
+                    </tr>
+                  ))}
+                  {visibleAnalysisAnimals.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                        No animals match the current search.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {flatData.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center">
           <Info className="h-8 w-8 mx-auto text-muted-foreground/30 mb-3" />
-          <p className="text-sm text-muted-foreground">No data matches the current filters.</p>
+          <p className="text-sm text-muted-foreground">
+            {scopedFlatData.length > 0
+              ? "All matching animals are currently excluded from this analysis set."
+              : "No data matches the current filters."}
+          </p>
         </div>
       ) : (
         <Tabs defaultValue="summary" className="space-y-4">
@@ -1027,29 +1597,63 @@ function StatisticsPanel({
 }) {
   const [testType, setTestType] = useState("t_test");
   const [measureKey, setMeasureKey] = useState(numericKeys[0] || "");
-  const [group1, setGroup1] = useState(groups[0] || "");
-  const [group2, setGroup2] = useState(groups[1] || "");
+  const [measureKey2, setMeasureKey2] = useState(numericKeys[1] || numericKeys[0] || "");
+  const [groupingFactor, setGroupingFactor] = useState<AnalysisFactor>("group");
+  const [factorA, setFactorA] = useState<AnalysisFactor>("genotype");
+  const [factorB, setFactorB] = useState<AnalysisFactor>("sex");
+  const [group1, setGroup1] = useState("");
+  const [group2, setGroup2] = useState("");
   const [currentResult, setCurrentResult] = useState<Record<string, unknown> | null>(null);
   const [copied, setCopied] = useState(false);
 
   const TEST_OPTIONS = [
-    { value: "descriptive", label: "Descriptive Statistics", desc: "Mean, SD, SEM, median for each group" },
-    { value: "t_test", label: "t-Test (2 groups)", desc: "Compare two groups (Welch's t-test)" },
-    { value: "anova", label: "ANOVA (all groups)", desc: "Compare all groups at once" },
-    { value: "multi_compare", label: "All Pairwise Comparisons", desc: "t-tests between every pair of groups" },
+    { value: "descriptive", label: "Descriptive Statistics", desc: "Mean, SD, SEM, median for each selected factor level" },
+    { value: "t_test", label: "Welch t-test", desc: "Compare two selected groups with unequal-variance t-test" },
+    { value: "mann_whitney", label: "Mann-Whitney U", desc: "Non-parametric comparison between two selected groups" },
+    { value: "anova", label: "1-way ANOVA", desc: "Compare all levels of one factor at once" },
+    { value: "kruskal_wallis", label: "Kruskal-Wallis", desc: "Non-parametric alternative to 1-way ANOVA" },
+    { value: "two_way_anova", label: "2-way ANOVA", desc: "Test two factors plus their interaction" },
+    { value: "multi_compare", label: "All Pairwise Comparisons", desc: "Run pairwise Welch t-tests across factor levels" },
+    { value: "pearson", label: "Pearson Correlation", desc: "Linear association between two measures" },
+    { value: "spearman", label: "Spearman Correlation", desc: "Rank-based association between two measures" },
   ];
 
+  const factorOptions: Array<{ value: AnalysisFactor; label: string }> = [
+    { value: "group", label: "Genotype × Sex" },
+    { value: "sex", label: "Sex" },
+    { value: "genotype", label: "Genotype" },
+    { value: "cohort", label: "Cohort" },
+    { value: "timepoint", label: "Timepoint" },
+  ];
+
+  const factorLevels = useMemo(() => {
+    const levels = Array.from(new Set(flatData.map((row) => getFactorValue(row, groupingFactor)))).sort();
+    return levels;
+  }, [flatData, groupingFactor]);
+
+  useEffect(() => {
+    if (!numericKeys.includes(measureKey)) setMeasureKey(numericKeys[0] || "");
+    if (!numericKeys.includes(measureKey2)) setMeasureKey2(numericKeys[1] || numericKeys[0] || "");
+  }, [measureKey, measureKey2, numericKeys]);
+
+  useEffect(() => {
+    if (!factorLevels.includes(group1)) setGroup1(factorLevels[0] || "");
+    if (!factorLevels.includes(group2) || group2 === group1) {
+      setGroup2(factorLevels.find((level) => level !== (factorLevels[0] || "")) || factorLevels[0] || "");
+    }
+  }, [factorLevels, group1, group2]);
+
   const runTest = useCallback(() => {
-    const getValues = (group: string) =>
+    const getValues = (group: string, key = measureKey) =>
       flatData
-        .filter((r) => r.group === group)
-        .map((r) => Number(r[measureKey]))
+        .filter((r) => getFactorValue(r, groupingFactor) === group)
+        .map((r) => Number(r[key]))
         .filter((v) => !isNaN(v));
 
     switch (testType) {
       case "descriptive": {
         const results: Record<string, unknown> = {};
-        for (const g of groups) {
+        for (const g of factorLevels) {
           const vals = getValues(g);
           if (vals.length === 0) continue;
           results[g] = {
@@ -1062,7 +1666,12 @@ function StatisticsPanel({
             max: round(Math.max(...vals)),
           };
         }
-        setCurrentResult({ test: "Descriptive Statistics", measure: measureLabels[measureKey] || measureKey, ...results });
+        setCurrentResult({
+          test: "Descriptive Statistics",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          ...results,
+        });
         break;
       }
       case "t_test": {
@@ -1076,6 +1685,7 @@ function StatisticsPanel({
         setCurrentResult({
           test: "Welch's t-test (two-tailed)",
           measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
           groups_compared: `${group1} vs ${group2}`,
           ...result,
           significant_005: result.p < 0.05,
@@ -1085,14 +1695,34 @@ function StatisticsPanel({
         });
         break;
       }
+      case "mann_whitney": {
+        const a = getValues(group1);
+        const b = getValues(group2);
+        if (a.length < 2 || b.length < 2) {
+          toast.error("Each group needs at least 2 values");
+          return;
+        }
+        const result = mannWhitneyUTest(a, b);
+        setCurrentResult({
+          test: "Mann-Whitney U (two-tailed)",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          groups_compared: `${group1} vs ${group2}`,
+          ...result,
+          significant_005: result.p < 0.05,
+          group1_stats: { name: group1, n: a.length, median: round(median(a)), mean_rank_proxy: round(mean(rankWithTies(a))) },
+          group2_stats: { name: group2, n: b.length, median: round(median(b)), mean_rank_proxy: round(mean(rankWithTies(b))) },
+        });
+        break;
+      }
       case "anova": {
-        const allGroups = groups.map((g) => getValues(g)).filter((g) => g.length >= 2);
+        const allGroups = factorLevels.map((g) => getValues(g)).filter((g) => g.length >= 2);
         if (allGroups.length < 2) {
           toast.error("Need at least 2 groups with ≥ 2 values each");
           return;
         }
         const result = oneWayAnova(allGroups);
-        const groupStats = groups.map((g) => {
+        const groupStats = factorLevels.map((g) => {
           const vals = getValues(g);
           return { group: g, n: vals.length, mean: round(mean(vals)), sd: round(stdDev(vals)) };
         }).filter((g) => g.n > 0);
@@ -1100,6 +1730,7 @@ function StatisticsPanel({
         setCurrentResult({
           test: "One-way ANOVA",
           measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
           ...result,
           significant_005: result.p < 0.05,
           significant_001: result.p < 0.01,
@@ -1107,16 +1738,58 @@ function StatisticsPanel({
         });
         break;
       }
+      case "kruskal_wallis": {
+        const allGroups = factorLevels.map((g) => getValues(g)).filter((g) => g.length >= 2);
+        if (allGroups.length < 2) {
+          toast.error("Need at least 2 groups with ≥ 2 values each");
+          return;
+        }
+        const result = kruskalWallisTest(allGroups);
+        setCurrentResult({
+          test: "Kruskal-Wallis",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          ...result,
+          significant_005: result.p < 0.05,
+          group_stats: factorLevels
+            .map((g) => {
+              const vals = getValues(g);
+              return { group: g, n: vals.length, median: round(median(vals)), mean: round(mean(vals)) };
+            })
+            .filter((g) => g.n > 0),
+        });
+        break;
+      }
+      case "two_way_anova": {
+        const result = twoWayAnova(flatData, measureKey, factorA, factorB);
+        if ("error" in result) {
+          toast.error(result.error);
+          return;
+        }
+        setCurrentResult({
+          test: "Two-way ANOVA",
+          measure: measureLabels[measureKey] || measureKey,
+          factor_a: result.factorA,
+          factor_b: result.factorB,
+          n: result.n,
+          levels_a: result.levelsA,
+          levels_b: result.levelsB,
+          anova_table: result.table,
+          cell_counts: result.cellCounts,
+          warning: result.warning,
+        });
+        break;
+      }
       case "multi_compare": {
         const comparisons: { comparison: string; t: number; p: number; cohenD: number; significant: boolean }[] = [];
-        for (let i = 0; i < groups.length; i++) {
-          for (let j = i + 1; j < groups.length; j++) {
-            const a = getValues(groups[i]);
-            const b = getValues(groups[j]);
+        for (let i = 0; i < factorLevels.length; i++) {
+          for (let j = i + 1; j < factorLevels.length; j++) {
+            const a = getValues(factorLevels[i]);
+            const b = getValues(factorLevels[j]);
             if (a.length < 2 || b.length < 2) continue;
             const result = welchTTest(a, b);
             comparisons.push({
-              comparison: `${groups[i]} vs ${groups[j]}`,
+              comparison: `${factorLevels[i]} vs ${factorLevels[j]}`,
               t: result.t,
               p: result.p,
               cohenD: result.cohenD,
@@ -1135,13 +1808,46 @@ function StatisticsPanel({
         setCurrentResult({
           test: "All Pairwise Comparisons (Welch's t-test with Bonferroni correction)",
           measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
           n_comparisons: nComparisons,
           comparisons: corrected,
         });
         break;
       }
+      case "pearson":
+      case "spearman": {
+        const pairs = flatData
+          .map((row) => ({ x: Number(row[measureKey]), y: Number(row[measureKey2]) }))
+          .filter((pair) => !Number.isNaN(pair.x) && !Number.isNaN(pair.y));
+        if (pairs.length < 3) {
+          toast.error("Need at least 3 animals with both measures present");
+          return;
+        }
+        const xs = pairs.map((pair) => pair.x);
+        const ys = pairs.map((pair) => pair.y);
+        if (testType === "pearson") {
+          const result = pearsonCorrelation(xs, ys);
+          setCurrentResult({
+            test: "Pearson Correlation",
+            measure: `${measureLabels[measureKey] || measureKey} vs ${measureLabels[measureKey2] || measureKey2}`,
+            n: pairs.length,
+            ...result,
+            significant_005: result.p < 0.05,
+          });
+        } else {
+          const result = spearmanCorrelation(xs, ys);
+          setCurrentResult({
+            test: "Spearman Correlation",
+            measure: `${measureLabels[measureKey] || measureKey} vs ${measureLabels[measureKey2] || measureKey2}`,
+            n: pairs.length,
+            ...result,
+            significant_005: result.p < 0.05,
+          });
+        }
+        break;
+      }
     }
-  }, [testType, measureKey, group1, group2, groups, flatData, measureLabels]);
+  }, [testType, measureKey, measureKey2, group1, group2, factorLevels, groupingFactor, factorA, factorB, flatData, measureLabels]);
 
   const handleCopyResults = useCallback(() => {
     if (!currentResult) return;
@@ -1150,7 +1856,10 @@ function StatisticsPanel({
     setTimeout(() => setCopied(false), 2000);
   }, [currentResult]);
 
-  const needsGroups = testType === "t_test";
+  const needsGroups = testType === "t_test" || testType === "mann_whitney";
+  const needsFactor = ["descriptive", "t_test", "mann_whitney", "anova", "kruskal_wallis", "multi_compare"].includes(testType);
+  const needsTwoFactors = testType === "two_way_anova";
+  const needsSecondMeasure = testType === "pearson" || testType === "spearman";
 
   return (
     <div className="space-y-4">
@@ -1190,6 +1899,69 @@ function StatisticsPanel({
               </Select>
             </div>
 
+            {needsSecondMeasure && (
+              <div className="min-w-0 sm:col-span-2 lg:col-span-4">
+                <Label className="text-xs mb-1 block">Second Measure</Label>
+                <Select value={measureKey2} onValueChange={setMeasureKey2}>
+                  <SelectTrigger className="w-full min-w-0">
+                    <SelectValue placeholder="Select measure" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {numericKeys.filter((k) => k !== measureKey).map((k) => (
+                      <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {needsFactor && (
+              <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                <Label className="text-xs mb-1 block">Group By</Label>
+                <Select value={groupingFactor} onValueChange={(value) => setGroupingFactor(value as AnalysisFactor)}>
+                  <SelectTrigger className="w-full min-w-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {factorOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {needsTwoFactors && (
+              <>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Factor A</Label>
+                  <Select value={factorA} onValueChange={(value) => setFactorA(value as AnalysisFactor)}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {factorOptions.filter((option) => option.value !== "group").map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Factor B</Label>
+                  <Select value={factorB} onValueChange={(value) => setFactorB(value as AnalysisFactor)}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {factorOptions.filter((option) => option.value !== "group" && option.value !== factorA).map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+
             {needsGroups && (
               <>
                 <div className="min-w-0 sm:col-span-1 lg:col-span-2">
@@ -1199,7 +1971,7 @@ function StatisticsPanel({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {groups.map((g) => (
+                      {factorLevels.map((g) => (
                         <SelectItem key={g} value={g}>{g}</SelectItem>
                       ))}
                     </SelectContent>
@@ -1212,7 +1984,7 @@ function StatisticsPanel({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {groups.filter((g) => g !== group1).map((g) => (
+                      {factorLevels.filter((g) => g !== group1).map((g) => (
                         <SelectItem key={g} value={g}>{g}</SelectItem>
                       ))}
                     </SelectContent>
@@ -1258,12 +2030,24 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
   const pValue = result.p as number | undefined;
   const isSignificant = pValue !== undefined && pValue < 0.05;
   const comparisons = result.comparisons as Array<Record<string, unknown>> | undefined;
+  const anovaTable = result.anova_table as Array<Record<string, unknown>> | undefined;
+  const cellCounts = result.cell_counts as Array<Record<string, unknown>> | undefined;
 
   return (
     <div className="space-y-3">
       <div className="text-xs text-slate-600">
         <span className="font-medium">Measure:</span> {String(result.measure)}
       </div>
+      {result.grouped_by != null && (
+        <div className="text-xs text-slate-600">
+          <span className="font-medium">Grouped by:</span> {String(result.grouped_by)}
+        </div>
+      )}
+      {result.warning != null && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {String(result.warning)}
+        </div>
+      )}
 
       {pValue !== undefined && (
         <div
@@ -1280,10 +2064,10 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
       )}
 
       {/* Key stats cards */}
-      {comparisons == null && (
+      {comparisons == null && anovaTable == null && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           {Object.entries(result)
-            .filter(([k]) => !["test", "measure", "group_stats", "group1_stats", "group2_stats", "comparisons", "significant_005", "significant_001", "groups_compared"].includes(k) && typeof result[k] !== "object")
+            .filter(([k]) => !["test", "measure", "grouped_by", "group_stats", "group1_stats", "group2_stats", "comparisons", "anova_table", "cell_counts", "warning", "significant_005", "significant_001", "groups_compared", "levels_a", "levels_b", "factor_a", "factor_b"].includes(k) && typeof result[k] !== "object")
             .map(([key, value]) => (
               <div key={key} className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
                 <div className="text-[10px] uppercase tracking-wide text-slate-500">{key.replace(/_/g, " ")}</div>
@@ -1292,6 +2076,70 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
                 </div>
               </div>
             ))}
+        </div>
+      )}
+
+      {anovaTable && (
+        <div className="space-y-2">
+          {(result.factor_a != null || result.factor_b != null) && (
+            <div className="text-xs text-slate-600">
+              <span className="font-medium">Factors:</span> {String(result.factor_a)} and {String(result.factor_b)}
+            </div>
+          )}
+          <div className="overflow-x-auto rounded-md border border-slate-200">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50/70">
+                  <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Source</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">SS</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">df</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">MS</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">F</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">p</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Partial η²</th>
+                </tr>
+              </thead>
+              <tbody>
+                {anovaTable.map((row, index) => (
+                  <tr key={index} className="border-b last:border-0">
+                    <td className="px-2 py-1.5 font-medium">{String(row.source)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{row.ss == null ? "—" : formatNum(Number(row.ss), 4)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{row.df == null ? "—" : String(row.df)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{row.ms == null ? "—" : formatNum(Number(row.ms), 4)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{row.F == null ? "—" : formatNum(Number(row.F), 4)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">
+                      {row.p == null ? "—" : Number(row.p) < 0.001 ? "< .001" : Number(row.p).toFixed(4)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">
+                      {row.partial_eta_sq == null ? "—" : formatNum(Number(row.partial_eta_sq), 4)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {cellCounts && (
+            <div className="overflow-x-auto rounded-md border border-slate-200">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b bg-slate-50/70">
+                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Factor A</th>
+                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Factor B</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Included n</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cellCounts.map((cell, index) => (
+                    <tr key={index} className="border-b last:border-0">
+                      <td className="px-2 py-1.5">{String(cell.levelA)}</td>
+                      <td className="px-2 py-1.5">{String(cell.levelB)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{String(cell.n)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -1307,7 +2155,7 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
                   <th className="text-right py-1 px-2 font-medium text-muted-foreground">N</th>
                   <th className="text-right py-1 px-2 font-medium text-muted-foreground">Mean</th>
                   <th className="text-right py-1 px-2 font-medium text-muted-foreground">SD</th>
-                  {(result.group1_stats as Record<string, unknown>)?.sem !== undefined && (
+                  {((result.group1_stats as Record<string, unknown>)?.sem !== undefined || (result.group1_stats as Record<string, unknown>)?.mean_rank_proxy !== undefined) && (
                     <th className="text-right py-1 px-2 font-medium text-muted-foreground">SEM</th>
                   )}
                 </tr>
@@ -1318,8 +2166,8 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
                       <tr key={i} className="border-b last:border-0">
                         <td className="py-1 px-2 font-medium" style={{ color: GROUP_COLORS[g.group as string] }}>{String(g.group)}</td>
                         <td className="text-right py-1 px-2 tabular-nums">{String(g.n)}</td>
-                        <td className="text-right py-1 px-2 tabular-nums">{formatNum(g.mean as number)}</td>
-                        <td className="text-right py-1 px-2 tabular-nums">{formatNum(g.sd as number)}</td>
+                        <td className="text-right py-1 px-2 tabular-nums">{g.mean == null ? "—" : formatNum(g.mean as number)}</td>
+                        <td className="text-right py-1 px-2 tabular-nums">{g.sd == null ? "—" : formatNum(g.sd as number)}</td>
                       </tr>
                     ))
                   : [result.group1_stats, result.group2_stats].filter(Boolean).map((g, i) => {
@@ -1328,10 +2176,12 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
                         <tr key={i} className="border-b last:border-0">
                           <td className="py-1 px-2 font-medium" style={{ color: GROUP_COLORS[gs.name as string] }}>{String(gs.name)}</td>
                           <td className="text-right py-1 px-2 tabular-nums">{String(gs.n)}</td>
-                          <td className="text-right py-1 px-2 tabular-nums">{formatNum(gs.mean as number)}</td>
-                          <td className="text-right py-1 px-2 tabular-nums">{formatNum(gs.sd as number)}</td>
-                          {gs.sem !== undefined && (
-                            <td className="text-right py-1 px-2 tabular-nums">{formatNum(gs.sem as number)}</td>
+                          <td className="text-right py-1 px-2 tabular-nums">{gs.mean == null ? "—" : formatNum(gs.mean as number)}</td>
+                          <td className="text-right py-1 px-2 tabular-nums">{gs.sd == null ? "—" : formatNum(gs.sd as number)}</td>
+                          {(gs.sem !== undefined || gs.mean_rank_proxy !== undefined) && (
+                            <td className="text-right py-1 px-2 tabular-nums">
+                              {gs.sem !== undefined ? formatNum(gs.sem as number) : formatNum(gs.mean_rank_proxy as number)}
+                            </td>
                           )}
                         </tr>
                       );
