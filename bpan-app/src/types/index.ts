@@ -268,7 +268,7 @@ export interface Dataset {
   columns: DatasetColumn[];
   data: Record<string, unknown>[];
   row_count: number;
-  source: "csv" | "excel" | "paste";
+  source: "csv" | "excel" | "paste" | "google_sheets" | "colony_analysis" | string;
   tags: string[];
   created_at: string;
   updated_at: string;
@@ -279,7 +279,32 @@ export interface Analysis {
   user_id: string;
   dataset_id: string;
   name: string;
-  test_type: "t_test" | "anova" | "mann_whitney" | "chi_square" | "correlation" | "descriptive";
+  test_type: string;
+  config: Record<string, unknown>;
+  results: Record<string, unknown>;
+  ai_interpretation: string | null;
+  created_at: string;
+}
+
+export interface ColonySavedAnalysis {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string | null;
+  dataset_id: string;
+  latest_revision_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ColonySavedAnalysisRevision {
+  id: string;
+  analysis_id: string;
+  dataset_id: string;
+  user_id: string;
+  name: string;
+  revision_number: number;
+  test_type: string;
   config: Record<string, unknown>;
   results: Record<string, unknown>;
   ai_interpretation: string | null;

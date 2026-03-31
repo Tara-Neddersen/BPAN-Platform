@@ -30,6 +30,7 @@ import type {
   ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange, ColonyPhoto,
   HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AdvisorPortalAccessLog,
   ExperimentRun, RunAssignment, RunExperimentScheduleStep, RunScheduleBlock, RunTimepoint, RunTimepointExperiment,
+  Dataset, Analysis,
 } from "@/types";
 import { ColonyResultsTab } from "@/components/colony-results-tab";
 import { ColonyAnalysisPanel } from "@/components/colony-analysis-panel";
@@ -170,6 +171,8 @@ interface ColonyClientProps {
   runAssignments: RunAssignment[];
   runTimepoints: RunTimepoint[];
   runTimepointExperiments: RunTimepointExperiment[];
+  colonyAnalysisDatasets: Dataset[];
+  colonyAnalysisRevisions: Analysis[];
   runExperimentScheduleSteps: RunExperimentScheduleStep[];
   runScheduleBlocks: RunScheduleBlock[];
   batchUpsertColonyResults: (
@@ -209,6 +212,15 @@ interface ColonyClientProps {
       runTimepointExperimentId?: string | null;
     };
   }) => Promise<{ success?: boolean; error?: string; deleted?: number; affectedAnimals?: number }>;
+  saveColonyAnalysisRevision: (payload: {
+    analysisId?: string | null;
+    name: string;
+    description?: string | null;
+    config: Record<string, unknown>;
+    results: Record<string, unknown>;
+    summaryText?: string | null;
+  }) => Promise<{ success?: boolean; analysisId?: string; revisionId?: string; revisionNumber?: number }>;
+  deleteColonyAnalysis: (analysisId: string) => Promise<{ success?: boolean }>;
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -311,12 +323,16 @@ export function ColonyClient({
   runAssignments,
   runTimepoints,
   runTimepointExperiments,
+  colonyAnalysisDatasets,
+  colonyAnalysisRevisions,
   runExperimentScheduleSteps,
   runScheduleBlocks,
   batchUpsertColonyResults,
   reconcileTrackerFromExistingColonyResults,
   deleteColonyResultMeasureColumn,
   bulkDeleteColonyResults,
+  saveColonyAnalysisRevision,
+  deleteColonyAnalysis,
   actions,
 }: ColonyClientProps) {
   const router = useRouter();
@@ -1669,6 +1685,18 @@ export function ColonyClient({
             runAssignments={runAssignments}
             runTimepoints={runTimepoints}
             runTimepointExperiments={runTimepointExperiments}
+            savedAnalysisDatasets={colonyAnalysisDatasets}
+            savedAnalysisRevisions={colonyAnalysisRevisions}
+            saveAnalysisRevision={async (payload) => {
+              const result = await saveColonyAnalysisRevision(payload);
+              if (result.success) await refetchAll();
+              return result;
+            }}
+            deleteAnalysis={async (analysisId) => {
+              const result = await deleteColonyAnalysis(analysisId);
+              if (result.success) await refetchAll();
+              return result;
+            }}
           />
         </TabsContent>
 

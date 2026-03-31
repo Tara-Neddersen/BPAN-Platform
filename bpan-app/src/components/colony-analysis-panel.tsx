@@ -11,6 +11,9 @@ import {
   Filter,
   TrendingUp,
   Info,
+  Save,
+  FolderOpen,
+  Trash2,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -30,7 +33,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import type { Animal, Cohort, ColonyResult, ExperimentRun, RunAssignment, RunTimepoint, RunTimepointExperiment } from "@/types";
+import type { Animal, Cohort, ColonyResult, ExperimentRun, RunAssignment, RunTimepoint, RunTimepointExperiment, Dataset, Analysis } from "@/types";
 
 // Dynamically import Plotly
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -665,6 +668,56 @@ interface AnalysisAnimalRow {
   included: boolean;
 }
 
+interface ColonyAnalysisStatsDraft {
+  testType: string;
+  measureKey: string;
+  measureKey2: string;
+  groupingFactor: AnalysisFactor;
+  factorA: AnalysisFactor;
+  factorB: AnalysisFactor;
+  group1: string;
+  group2: string;
+}
+
+interface ColonyAnalysisVisualizationDraft {
+  chartType: string;
+  measureKey: string;
+  measureKey2: string;
+  groupBy: "group" | "sex" | "genotype" | "cohort";
+  title: string;
+  showPoints: boolean;
+  sigAnnotations: Array<{ group1: string; group2: string; label: string }>;
+  autoRunSigStars: boolean;
+  autoStatsMethod: "welch_t" | "mann_whitney";
+  autoPAdjust: "none" | "bonferroni";
+  includeNsAnnotations: boolean;
+}
+
+interface SavedColonyAnalysisRoot {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface SavedColonyAnalysisRevision {
+  id: string;
+  analysisId: string;
+  name: string;
+  revisionNumber: number;
+  createdAt: string;
+  config: Record<string, unknown>;
+  results: Record<string, unknown>;
+  summaryText: string | null;
+}
+
+interface AnalysisSuggestion {
+  testType: ColonyAnalysisStatsDraft["testType"];
+  label: string;
+  reason: string;
+}
+
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 interface ColonyAnalysisPanelProps {
@@ -675,6 +728,140 @@ interface ColonyAnalysisPanelProps {
   runAssignments: RunAssignment[];
   runTimepoints: RunTimepoint[];
   runTimepointExperiments: RunTimepointExperiment[];
+  savedAnalysisDatasets: Dataset[];
+  savedAnalysisRevisions: Analysis[];
+  saveAnalysisRevision: (payload: {
+    analysisId?: string | null;
+    name: string;
+    description?: string | null;
+    config: Record<string, unknown>;
+    results: Record<string, unknown>;
+    summaryText?: string | null;
+  }) => Promise<{ success?: boolean; analysisId?: string; revisionId?: string; revisionNumber?: number }>;
+  deleteAnalysis: (analysisId: string) => Promise<{ success?: boolean }>;
+}
+
+function defaultStatsDraft(): ColonyAnalysisStatsDraft {
+  return {
+    testType: "t_test",
+    measureKey: "",
+    measureKey2: "",
+    groupingFactor: "group",
+    factorA: "genotype",
+    factorB: "sex",
+    group1: "",
+    group2: "",
+  };
+}
+
+function defaultVisualizationDraft(): ColonyAnalysisVisualizationDraft {
+  return {
+    chartType: "bar_sem",
+    measureKey: "",
+    measureKey2: "",
+    groupBy: "group",
+    title: "",
+    showPoints: true,
+    sigAnnotations: [],
+    autoRunSigStars: false,
+    autoStatsMethod: "welch_t",
+    autoPAdjust: "none",
+    includeNsAnnotations: false,
+  };
+}
+
+function summarizeAnalysisResult(result: Record<string, unknown> | null, included: number, excluded: number) {
+  if (!result) return null;
+  const pieces = [
+    `Included animals: ${included}`,
+    `Excluded animals: ${excluded}`,
+    `Test: ${String(result.test || "Analysis")}`,
+    `Measure: ${String(result.measure || "—")}`,
+  ];
+  if (result.groups_compared) pieces.push(`Comparison: ${String(result.groups_compared)}`);
+  if (typeof result.p === "number") {
+    pieces.push(`p = ${result.p < 0.001 ? "< 0.001" : Number(result.p).toFixed(4)}`);
+  }
+  if (typeof result.F === "number") pieces.push(`F = ${formatNum(Number(result.F), 4)}`);
+  if (typeof result.t === "number") pieces.push(`t = ${formatNum(Number(result.t), 4)}`);
+  if (typeof result.H === "number") pieces.push(`H = ${formatNum(Number(result.H), 4)}`);
+  if (typeof result.r === "number") pieces.push(`r = ${formatNum(Number(result.r), 4)}`);
+  if (typeof result.rho === "number") pieces.push(`rho = ${formatNum(Number(result.rho), 4)}`);
+  return pieces.join(" | ");
+}
+
+function suggestAnalysisTests(params: {
+  flatData: FlatRow[];
+  numericKeys: string[];
+  hasMultipleTimepoints: boolean;
+}): AnalysisSuggestion[] {
+  const { flatData, numericKeys, hasMultipleTimepoints } = params;
+  const suggestions: AnalysisSuggestion[] = [];
+  const groups = Array.from(new Set(flatData.map((row) => row.group))).filter(Boolean);
+  const sexes = Array.from(new Set(flatData.map((row) => row.sex))).filter(Boolean);
+  const genotypes = Array.from(new Set(flatData.map((row) => row.genotype))).filter(Boolean);
+
+  if (numericKeys.length >= 2) {
+    suggestions.push({
+      testType: "pearson",
+      label: "Pearson Correlation",
+      reason: "Two or more numeric outcomes are available, so you can test linear associations.",
+    });
+    suggestions.push({
+      testType: "spearman",
+      label: "Spearman Correlation",
+      reason: "Useful when the relationship may be monotonic or less normally distributed.",
+    });
+  }
+
+  if (sexes.length >= 2 && genotypes.length >= 2) {
+    suggestions.unshift({
+      testType: "two_way_anova",
+      label: "2-way ANOVA",
+      reason: "Both sex and genotype vary here, so a factor-based model can test main effects plus interaction.",
+    });
+  }
+
+  if (groups.length === 2) {
+    suggestions.unshift({
+      testType: "t_test",
+      label: "Welch t-test",
+      reason: "Exactly two groups are present, which fits the standard 2-group comparison flow.",
+    });
+    suggestions.push({
+      testType: "mann_whitney",
+      label: "Mann-Whitney U",
+      reason: "A good non-parametric fallback for the same 2-group comparison.",
+    });
+  } else if (groups.length > 2) {
+    suggestions.unshift({
+      testType: "anova",
+      label: "1-way ANOVA",
+      reason: "More than two groups are present, so a multi-group comparison is appropriate.",
+    });
+    suggestions.push({
+      testType: "kruskal_wallis",
+      label: "Kruskal-Wallis",
+      reason: "Non-parametric alternative when distribution assumptions look shaky.",
+    });
+    suggestions.push({
+      testType: "multi_compare",
+      label: "Pairwise Comparisons",
+      reason: "Useful after group-level screening when you need pairwise follow-up tests.",
+    });
+  }
+
+  if (hasMultipleTimepoints) {
+    suggestions.push({
+      testType: "descriptive",
+      label: "Repeated / Longitudinal Review",
+      reason: "Multiple timepoints are present. This release supports timepoint-aware summaries and line graphs; repeated-measures modeling is the next expansion area.",
+    });
+  }
+
+  return suggestions.filter(
+    (suggestion, index, arr) => arr.findIndex((entry) => entry.testType === suggestion.testType) === index,
+  );
 }
 
 // ─── Main Component ─────────────────────────────────────────────────────────
@@ -687,6 +874,10 @@ export function ColonyAnalysisPanel({
   runAssignments,
   runTimepoints,
   runTimepointExperiments,
+  savedAnalysisDatasets,
+  savedAnalysisRevisions,
+  saveAnalysisRevision,
+  deleteAnalysis,
 }: ColonyAnalysisPanelProps) {
   // ── Filter state ──
   const [activeRunId, setActiveRunId] = useState<string>("__all__");
@@ -696,7 +887,17 @@ export function ColonyAnalysisPanel({
   const [selectedTimepoint, setSelectedTimepoint] = useState<string>("__all__");
   const [selectedCohort, setSelectedCohort] = useState<string>("__all__");
   const [excludedAnimalIds, setExcludedAnimalIds] = useState<Set<string>>(new Set());
+  const [exclusionReasons, setExclusionReasons] = useState<Record<string, string>>({});
   const [animalSearch, setAnimalSearch] = useState("");
+  const [analysisName, setAnalysisName] = useState("Untitled Colony Analysis");
+  const [analysisDescription, setAnalysisDescription] = useState("");
+  const [selectedSavedAnalysisId, setSelectedSavedAnalysisId] = useState<string>("__new__");
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string>("__latest__");
+  const [statsDraft, setStatsDraft] = useState<ColonyAnalysisStatsDraft>(defaultStatsDraft());
+  const [visualizationDraft, setVisualizationDraft] = useState<ColonyAnalysisVisualizationDraft>(defaultVisualizationDraft());
+  const [savedResult, setSavedResult] = useState<Record<string, unknown> | null>(null);
+  const [loadedRevisionKey, setLoadedRevisionKey] = useState<string>("draft");
+  const [activeTab, setActiveTab] = useState("summary");
 
   const visibleRuns = useMemo(() => experimentRuns.filter((run) => run.status !== "cancelled"), [experimentRuns]);
   const resolvedRunId =
@@ -727,6 +928,47 @@ export function ColonyAnalysisPanel({
         .sort((a, b) => a.sort_order - b.sort_order),
     [runTimepointExperiments, selectedRunTimepointIds],
   );
+  const savedAnalysisRoots = useMemo<SavedColonyAnalysisRoot[]>(
+    () =>
+      savedAnalysisDatasets
+        .map((dataset) => ({
+          id: dataset.id,
+          name: dataset.name,
+          description: dataset.description,
+          created_at: dataset.created_at,
+          updated_at: dataset.updated_at,
+        }))
+        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
+    [savedAnalysisDatasets],
+  );
+  const revisionsByAnalysisId = useMemo(() => {
+    const map = new Map<string, SavedColonyAnalysisRevision[]>();
+    for (const analysis of savedAnalysisRevisions) {
+      const revisionNumber =
+        typeof analysis.config?.revision_number === "number"
+          ? Number(analysis.config.revision_number)
+          : 1;
+      const list = map.get(analysis.dataset_id) || [];
+      list.push({
+        id: analysis.id,
+        analysisId: analysis.dataset_id,
+        name: analysis.name,
+        revisionNumber,
+        createdAt: analysis.created_at,
+        config: analysis.config || {},
+        results: analysis.results || {},
+        summaryText: analysis.ai_interpretation || null,
+      });
+      map.set(analysis.dataset_id, list);
+    }
+    for (const [key, revisions] of map.entries()) {
+      map.set(
+        key,
+        revisions.sort((a, b) => b.revisionNumber - a.revisionNumber || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+      );
+    }
+    return map;
+  }, [savedAnalysisRevisions]);
   const filteredResults = useMemo(() => {
     let results = colonyResults.filter(resultHasData);
     if (selectedRun) {
@@ -734,6 +976,14 @@ export function ColonyAnalysisPanel({
     }
     return results;
   }, [colonyResults, selectedRun]);
+  const currentSavedRevisions =
+    selectedSavedAnalysisId !== "__new__" ? revisionsByAnalysisId.get(selectedSavedAnalysisId) || [] : [];
+  const selectedSavedRevision =
+    selectedSavedAnalysisId === "__new__"
+      ? null
+      : selectedRevisionId === "__latest__"
+      ? currentSavedRevisions[0] || null
+      : currentSavedRevisions.find((revision) => revision.id === selectedRevisionId) || null;
 
   // Available experiment types from results
   const availableExperiments = useMemo(() => {
@@ -923,6 +1173,232 @@ export function ColonyAnalysisPanel({
 
   const includedAnimalCount = analysisAnimals.filter((animal) => animal.included).length;
   const excludedAnimalCount = analysisAnimals.length - includedAnimalCount;
+  const excludedFlatData = useMemo(
+    () => scopedFlatData.filter((row) => excludedAnimalIds.has(row.animal_id)),
+    [excludedAnimalIds, scopedFlatData],
+  );
+  const suggestedTests = useMemo(
+    () =>
+      suggestAnalysisTests({
+        flatData,
+        numericKeys: numericMeasureKeys,
+        hasMultipleTimepoints: Array.from(new Set(flatData.map((row) => row.timepoint))).length > 1,
+      }),
+    [flatData, numericMeasureKeys],
+  );
+  const workflowSteps = useMemo(
+    () => [
+      {
+        title: "Choose scope",
+        done:
+          resolvedRunId !== "__all__" ||
+          effectiveSelectedExperiment !== "__all__" ||
+          effectiveSelectedTimepoint !== "__all__" ||
+          selectedCohort !== "__all__",
+      },
+      { title: "Review animals", done: analysisAnimals.length > 0 },
+      { title: "Handle exclusions", done: excludedAnimalCount > 0 || flatData.length > 0 },
+      { title: "Pick a test", done: Boolean(statsDraft.measureKey) && suggestedTests.length > 0 },
+      { title: "Run statistics", done: Boolean(savedResult) },
+      { title: "Save revision", done: selectedSavedAnalysisId !== "__new__" },
+    ],
+    [
+      analysisAnimals.length,
+      effectiveSelectedExperiment,
+      effectiveSelectedTimepoint,
+      excludedAnimalCount,
+      flatData.length,
+      resolvedRunId,
+      savedResult,
+      selectedCohort,
+      selectedSavedAnalysisId,
+      statsDraft.measureKey,
+      suggestedTests.length,
+    ],
+  );
+
+  useEffect(() => {
+    if (savedAnalysisRoots.length === 0) return;
+    if (selectedSavedAnalysisId === "__new__") return;
+    if (savedAnalysisRoots.some((root) => root.id === selectedSavedAnalysisId)) return;
+    setSelectedSavedAnalysisId(savedAnalysisRoots[0]?.id || "__new__");
+  }, [savedAnalysisRoots, selectedSavedAnalysisId]);
+
+  useEffect(() => {
+    if (!selectedSavedRevision) return;
+    const scope = (selectedSavedRevision.config.scope || {}) as Record<string, unknown>;
+    const exclusions = Array.isArray(selectedSavedRevision.config.excludedAnimals)
+      ? (selectedSavedRevision.config.excludedAnimals as Array<Record<string, unknown>>)
+      : [];
+    const stats = (selectedSavedRevision.config.statistics || {}) as Partial<ColonyAnalysisStatsDraft>;
+    const visualization = (selectedSavedRevision.config.visualization || {}) as Partial<ColonyAnalysisVisualizationDraft>;
+
+    setAnalysisName(selectedSavedRevision.name || "Untitled Colony Analysis");
+    setAnalysisDescription(String(selectedSavedRevision.config.description || ""));
+    setActiveRunId(typeof scope.runId === "string" ? scope.runId : "__all__");
+    setSelectedExperiment(typeof scope.experiment === "string" ? scope.experiment : "__all__");
+    setSelectedTimepoint(typeof scope.timepoint === "string" ? scope.timepoint : "__all__");
+    setSelectedCohort(typeof scope.cohort === "string" ? scope.cohort : "__all__");
+    setExcludedAnimalIds(new Set(exclusions.map((entry) => String(entry.animalId || "")).filter(Boolean)));
+    setExclusionReasons(
+      exclusions.reduce<Record<string, string>>((acc, entry) => {
+        const animalId = String(entry.animalId || "").trim();
+        if (!animalId) return acc;
+        acc[animalId] = String(entry.reason || "");
+        return acc;
+      }, {}),
+    );
+    setStatsDraft({
+      ...defaultStatsDraft(),
+      ...stats,
+    });
+    setVisualizationDraft({
+      ...defaultVisualizationDraft(),
+      ...visualization,
+      sigAnnotations: Array.isArray(visualization.sigAnnotations)
+        ? (visualization.sigAnnotations as Array<{ group1: string; group2: string; label: string }>)
+        : [],
+    });
+    setSavedResult(selectedSavedRevision.results || null);
+    setLoadedRevisionKey(selectedSavedRevision.id);
+  }, [selectedSavedRevision]);
+
+  useEffect(() => {
+    if (selectedSavedAnalysisId !== "__new__") return;
+    setSelectedRevisionId("__latest__");
+  }, [selectedSavedAnalysisId]);
+
+  const exportAnalysisRows = useCallback(
+    (rows: FlatRow[], fileLabel: string) => {
+      const headers = ["Identifier", "Sex", "Genotype", "Group", "Cohort", "Timepoint", "Experiment", ...measureKeys];
+      const csv = Papa.unparse({
+        fields: headers,
+        data: rows.map((row) => [
+          row.identifier,
+          row.sex,
+          row.genotype,
+          row.group,
+          row.cohort,
+          row.timepoint,
+          row.experiment,
+          ...measureKeys.map((key) => row[key] ?? ""),
+        ]),
+      });
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${fileLabel}-${new Date().toISOString().split("T")[0]}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    },
+    [measureKeys],
+  );
+
+  const handleExportSummary = useCallback(() => {
+    const summary = summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount);
+    const payload = {
+      name: analysisName,
+      description: analysisDescription,
+      scope: {
+        runId: resolvedRunId,
+        experiment: effectiveSelectedExperiment,
+        timepoint: effectiveSelectedTimepoint,
+        cohort: selectedCohort,
+      },
+      summary,
+      results: savedResult,
+      includedAnimals: includedAnimalCount,
+      excludedAnimals: excludedAnimalCount,
+      exclusions: Object.entries(exclusionReasons)
+        .filter(([animalId]) => excludedAnimalIds.has(animalId))
+        .map(([animalId, reason]) => ({ animalId, reason })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${analysisName.replace(/\s+/g, "-").toLowerCase() || "colony-analysis"}-summary.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast.success("Analysis summary exported.");
+  }, [analysisDescription, analysisName, effectiveSelectedExperiment, effectiveSelectedTimepoint, exclusionReasons, excludedAnimalCount, excludedAnimalIds, includedAnimalCount, resolvedRunId, savedResult, selectedCohort]);
+
+  const handleSaveAnalysis = useCallback(
+    async (mode: "new" | "revision") => {
+      if (!savedResult) {
+        toast.error("Run an analysis first so there is something meaningful to save.");
+        return;
+      }
+      const payload = {
+        analysisId: mode === "revision" && selectedSavedAnalysisId !== "__new__" ? selectedSavedAnalysisId : null,
+        name: analysisName.trim() || "Untitled Colony Analysis",
+        description: analysisDescription.trim() || null,
+        config: {
+          description: analysisDescription.trim() || null,
+          scope: {
+            runId: resolvedRunId,
+            experiment: effectiveSelectedExperiment,
+            timepoint: effectiveSelectedTimepoint,
+            cohort: selectedCohort,
+          },
+          excludedAnimals: Array.from(excludedAnimalIds).map((animalId) => ({
+            animalId,
+            reason: exclusionReasons[animalId] || "",
+          })),
+          statistics: statsDraft,
+          visualization: visualizationDraft,
+          includedAnimalCount,
+          excludedAnimalCount,
+        },
+        results: savedResult,
+        summaryText: summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
+      };
+      try {
+        const result = await saveAnalysisRevision(payload);
+        if (result.success) {
+          toast.success(mode === "new" ? "Saved as a new Colony Analysis." : `Saved revision ${result.revisionNumber ?? ""}.`.trim());
+          if (result.analysisId) setSelectedSavedAnalysisId(result.analysisId);
+          if (result.revisionId) {
+            setSelectedRevisionId(result.revisionId);
+            setLoadedRevisionKey(result.revisionId);
+          }
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to save Colony Analysis.");
+      }
+    },
+    [
+      analysisDescription,
+      analysisName,
+      effectiveSelectedExperiment,
+      effectiveSelectedTimepoint,
+      excludedAnimalCount,
+      excludedAnimalIds,
+      exclusionReasons,
+      includedAnimalCount,
+      resolvedRunId,
+      saveAnalysisRevision,
+      savedResult,
+      selectedCohort,
+      selectedSavedAnalysisId,
+      statsDraft,
+      visualizationDraft,
+    ],
+  );
+
+  const handleDeleteAnalysis = useCallback(async () => {
+    if (selectedSavedAnalysisId === "__new__") return;
+    if (!confirm(`Delete "${analysisName}" and all of its revisions?`)) return;
+    try {
+      await deleteAnalysis(selectedSavedAnalysisId);
+      toast.success("Saved analysis deleted.");
+      setSelectedSavedAnalysisId("__new__");
+      setSelectedRevisionId("__latest__");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete saved analysis.");
+    }
+  }, [analysisName, deleteAnalysis, selectedSavedAnalysisId]);
 
   if (colonyResults.length === 0) {
     return (
@@ -938,6 +1414,94 @@ export function ColonyAnalysisPanel({
 
   return (
     <div className="space-y-5">
+      <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
+        <CardContent className="pt-4">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <FolderOpen className="mt-0.5 h-4 w-4 text-slate-700" />
+              <div>
+                <p className="text-sm font-semibold leading-none text-slate-900">Saved Analyses</p>
+                <p className="mt-1 text-xs text-slate-600">
+                  Save this analysis as a reusable, versioned workflow with its own exclusions and outputs.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => exportAnalysisRows(flatData, "colony-analysis-included")}>
+                <Download className="h-3.5 w-3.5" /> Included CSV
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => exportAnalysisRows(excludedFlatData, "colony-analysis-excluded")}>
+                <Download className="h-3.5 w-3.5" /> Excluded CSV
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportSummary}>
+                <Download className="h-3.5 w-3.5" /> Summary
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => handleSaveAnalysis("new")}>
+                <Save className="h-3.5 w-3.5" /> Save as New
+              </Button>
+              <Button
+                size="sm"
+                className="gap-1.5"
+                disabled={selectedSavedAnalysisId === "__new__"}
+                onClick={() => handleSaveAnalysis("revision")}
+              >
+                <Save className="h-3.5 w-3.5" /> Save Revision
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={selectedSavedAnalysisId === "__new__"}
+                onClick={handleDeleteAnalysis}
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Delete
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <Label className="text-xs mb-1 block">Analysis</Label>
+              <Select value={selectedSavedAnalysisId} onValueChange={setSelectedSavedAnalysisId}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__new__">New unsaved analysis</SelectItem>
+                  {savedAnalysisRoots.map((root) => (
+                    <SelectItem key={root.id} value={root.id}>{root.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Revision</Label>
+              <Select value={selectedRevisionId} onValueChange={setSelectedRevisionId} disabled={selectedSavedAnalysisId === "__new__"}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__latest__">Latest revision</SelectItem>
+                  {currentSavedRevisions.map((revision) => (
+                    <SelectItem key={revision.id} value={revision.id}>
+                      Rev {revision.revisionNumber} · {new Date(revision.createdAt).toLocaleString()}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Analysis Name</Label>
+              <Input value={analysisName} onChange={(event) => setAnalysisName(event.target.value)} placeholder="e.g. Run 1 30D Y-Maze" />
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Description</Label>
+              <Input value={analysisDescription} onChange={(event) => setAnalysisDescription(event.target.value)} placeholder="Optional methods / scope note" />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* ─── Filters ─── */}
       <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
         <CardContent className="pt-4">
@@ -1079,6 +1643,76 @@ export function ColonyAnalysisPanel({
               >
                 Exclude visible
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!statsDraft.measureKey}
+                onClick={() =>
+                  setExcludedAnimalIds((current) => {
+                    const next = new Set(current);
+                    scopedFlatData
+                      .filter((row) => row[statsDraft.measureKey] == null || row[statsDraft.measureKey] === "")
+                      .forEach((row) => next.add(row.animal_id));
+                    return next;
+                  })
+                }
+              >
+                Exclude missing selected outcome
+              </Button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              {Array.from(new Set(analysisAnimals.map((animal) => animal.cohort))).map((cohort) => (
+                <Button
+                  key={cohort}
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 border"
+                  onClick={() =>
+                    setExcludedAnimalIds((current) => {
+                      const next = new Set(current);
+                      analysisAnimals.filter((animal) => animal.cohort === cohort).forEach((animal) => next.add(animal.animal_id));
+                      return next;
+                    })
+                  }
+                >
+                  Exclude {cohort}
+                </Button>
+              ))}
+              {["Male", "Female"].map((sex) => (
+                <Button
+                  key={sex}
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 border"
+                  onClick={() =>
+                    setExcludedAnimalIds((current) => {
+                      const next = new Set(current);
+                      analysisAnimals.filter((animal) => animal.sex === sex).forEach((animal) => next.add(animal.animal_id));
+                      return next;
+                    })
+                  }
+                >
+                  Exclude {sex}
+                </Button>
+              ))}
+              {["Hemi", "Het", "WT"].map((genotype) => (
+                <Button
+                  key={genotype}
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 border"
+                  onClick={() =>
+                    setExcludedAnimalIds((current) => {
+                      const next = new Set(current);
+                      analysisAnimals.filter((animal) => animal.genotype === genotype).forEach((animal) => next.add(animal.animal_id));
+                      return next;
+                    })
+                  }
+                >
+                  Exclude {genotype}
+                </Button>
+              ))}
             </div>
 
             <div className="max-h-64 overflow-auto rounded-md border border-slate-200">
@@ -1091,6 +1725,7 @@ export function ColonyAnalysisPanel({
                     <th className="px-2 py-2 text-left font-medium text-muted-foreground">Sex</th>
                     <th className="px-2 py-2 text-left font-medium text-muted-foreground">Genotype</th>
                     <th className="px-2 py-2 text-left font-medium text-muted-foreground">Group</th>
+                    <th className="px-2 py-2 text-left font-medium text-muted-foreground">Reason</th>
                     <th className="px-2 py-2 text-right font-medium text-muted-foreground">Rows</th>
                   </tr>
                 </thead>
@@ -1122,12 +1757,29 @@ export function ColonyAnalysisPanel({
                       <td className="px-2 py-2" style={{ color: GROUP_COLORS[animal.group] || undefined }}>
                         {animal.group}
                       </td>
+                      <td className="px-2 py-2">
+                        {!animal.included ? (
+                          <Input
+                            value={exclusionReasons[animal.animal_id] || ""}
+                            onChange={(event) =>
+                              setExclusionReasons((current) => ({
+                                ...current,
+                                [animal.animal_id]: event.target.value,
+                              }))
+                            }
+                            placeholder="Reason"
+                            className="h-7 min-w-[140px]"
+                          />
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
                       <td className="px-2 py-2 text-right tabular-nums">{animal.rowCount}</td>
                     </tr>
                   ))}
                   {visibleAnalysisAnimals.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                      <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
                         No animals match the current search.
                       </td>
                     </tr>
@@ -1149,7 +1801,70 @@ export function ColonyAnalysisPanel({
           </p>
         </div>
       ) : (
-        <Tabs defaultValue="summary" className="space-y-4">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+          <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
+            <CardContent className="space-y-4 pt-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Guided Workflow</p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Build an analysis set first, then let the panel suggest the most sensible behavioral tests for the data that remains.
+                  </p>
+                </div>
+                <Badge variant="secondary" className="border border-slate-200 bg-slate-50 text-slate-700">
+                  {includedAnimalCount} included / {excludedAnimalCount} excluded
+                </Badge>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+                {workflowSteps.map((step, index) => (
+                  <div
+                    key={step.title}
+                    className={`rounded-xl border px-3 py-2 text-xs ${
+                      step.done ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-slate-200 bg-slate-50 text-slate-600"
+                    }`}
+                  >
+                    <div className="font-medium">Step {index + 1}</div>
+                    <div className="mt-1">{step.title}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-medium text-slate-700">Suggested tests for this analysis set</p>
+                  <p className="text-[11px] text-slate-500">
+                    Suggestions update from the current scope, included animals, and available measures.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {suggestedTests.map((suggestion) => (
+                    <Button
+                      key={suggestion.testType}
+                      variant={statsDraft.testType === suggestion.testType ? "default" : "outline"}
+                      size="sm"
+                      className="h-auto max-w-full whitespace-normal text-left"
+                      onClick={() => {
+                        setStatsDraft((current) => ({ ...current, testType: suggestion.testType }));
+                        setActiveTab("analyze");
+                      }}
+                    >
+                      <span className="flex flex-col items-start py-0.5">
+                        <span>{suggestion.label}</span>
+                        <span className="text-[10px] opacity-80">{suggestion.reason}</span>
+                      </span>
+                    </Button>
+                  ))}
+                  {suggestedTests.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-xs text-slate-500">
+                      Add more included animals or numeric measures to unlock guided test suggestions.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           <TabsList className="h-auto w-full justify-start gap-1 rounded-xl border border-slate-200 bg-slate-50/70 p-1">
             <TabsTrigger value="summary" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <TrendingUp className="h-3.5 w-3.5" /> Summary
@@ -1184,19 +1899,27 @@ export function ColonyAnalysisPanel({
 
           <TabsContent value="analyze">
             <StatisticsPanel
+              key={`stats-${loadedRevisionKey}`}
               flatData={flatData}
               numericKeys={numericMeasureKeys}
               measureLabels={measureLabels}
               groups={availableGroups}
+              initialConfig={statsDraft}
+              initialResult={savedResult}
+              onConfigChange={setStatsDraft}
+              onResultChange={setSavedResult}
             />
           </TabsContent>
 
           <TabsContent value="visualize">
             <VisualizationPanel
+              key={`viz-${loadedRevisionKey}`}
               flatData={flatData}
               numericKeys={numericMeasureKeys}
               measureLabels={measureLabels}
               groups={availableGroups}
+              initialConfig={visualizationDraft}
+              onConfigChange={setVisualizationDraft}
             />
           </TabsContent>
         </Tabs>
@@ -1589,21 +2312,29 @@ function StatisticsPanel({
   numericKeys,
   measureLabels,
   groups,
+  initialConfig,
+  initialResult,
+  onConfigChange,
+  onResultChange,
 }: {
   flatData: FlatRow[];
   numericKeys: string[];
   measureLabels: Record<string, string>;
   groups: string[];
+  initialConfig?: ColonyAnalysisStatsDraft;
+  initialResult?: Record<string, unknown> | null;
+  onConfigChange?: (next: ColonyAnalysisStatsDraft) => void;
+  onResultChange?: (next: Record<string, unknown> | null) => void;
 }) {
-  const [testType, setTestType] = useState("t_test");
-  const [measureKey, setMeasureKey] = useState(numericKeys[0] || "");
-  const [measureKey2, setMeasureKey2] = useState(numericKeys[1] || numericKeys[0] || "");
-  const [groupingFactor, setGroupingFactor] = useState<AnalysisFactor>("group");
-  const [factorA, setFactorA] = useState<AnalysisFactor>("genotype");
-  const [factorB, setFactorB] = useState<AnalysisFactor>("sex");
-  const [group1, setGroup1] = useState("");
-  const [group2, setGroup2] = useState("");
-  const [currentResult, setCurrentResult] = useState<Record<string, unknown> | null>(null);
+  const [testType, setTestType] = useState(initialConfig?.testType || "t_test");
+  const [measureKey, setMeasureKey] = useState(initialConfig?.measureKey || numericKeys[0] || "");
+  const [measureKey2, setMeasureKey2] = useState(initialConfig?.measureKey2 || numericKeys[1] || numericKeys[0] || "");
+  const [groupingFactor, setGroupingFactor] = useState<AnalysisFactor>(initialConfig?.groupingFactor || "group");
+  const [factorA, setFactorA] = useState<AnalysisFactor>(initialConfig?.factorA || "genotype");
+  const [factorB, setFactorB] = useState<AnalysisFactor>(initialConfig?.factorB || "sex");
+  const [group1, setGroup1] = useState(initialConfig?.group1 || "");
+  const [group2, setGroup2] = useState(initialConfig?.group2 || "");
+  const [currentResult, setCurrentResult] = useState<Record<string, unknown> | null>(initialResult || null);
   const [copied, setCopied] = useState(false);
 
   const TEST_OPTIONS = [
@@ -1635,6 +2366,23 @@ function StatisticsPanel({
     if (!numericKeys.includes(measureKey)) setMeasureKey(numericKeys[0] || "");
     if (!numericKeys.includes(measureKey2)) setMeasureKey2(numericKeys[1] || numericKeys[0] || "");
   }, [measureKey, measureKey2, numericKeys]);
+
+  useEffect(() => {
+    onConfigChange?.({
+      testType,
+      measureKey,
+      measureKey2,
+      groupingFactor,
+      factorA,
+      factorB,
+      group1,
+      group2,
+    });
+  }, [factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, onConfigChange, testType]);
+
+  useEffect(() => {
+    onResultChange?.(currentResult);
+  }, [currentResult, onResultChange]);
 
   useEffect(() => {
     if (!factorLevels.includes(group1)) setGroup1(factorLevels[0] || "");
@@ -2288,31 +3036,35 @@ function VisualizationPanel({
   numericKeys,
   measureLabels,
   groups,
+  initialConfig,
+  onConfigChange,
 }: {
   flatData: FlatRow[];
   numericKeys: string[];
   measureLabels: Record<string, string>;
   groups: string[];
+  initialConfig?: ColonyAnalysisVisualizationDraft;
+  onConfigChange?: (next: ColonyAnalysisVisualizationDraft) => void;
 }) {
-  const [chartType, setChartType] = useState("bar_sem");
-  const [measureKey, setMeasureKey] = useState(numericKeys[0] || "");
-  const [measureKey2, setMeasureKey2] = useState(numericKeys[1] || "");
-  const [groupBy, setGroupBy] = useState<"group" | "sex" | "genotype" | "cohort">("group");
-  const [title, setTitle] = useState("");
-  const [showPoints, setShowPoints] = useState(true);
+  const [chartType, setChartType] = useState(initialConfig?.chartType || "bar_sem");
+  const [measureKey, setMeasureKey] = useState(initialConfig?.measureKey || numericKeys[0] || "");
+  const [measureKey2, setMeasureKey2] = useState(initialConfig?.measureKey2 || numericKeys[1] || "");
+  const [groupBy, setGroupBy] = useState<"group" | "sex" | "genotype" | "cohort">(initialConfig?.groupBy || "group");
+  const [title, setTitle] = useState(initialConfig?.title || "");
+  const [showPoints, setShowPoints] = useState(initialConfig?.showPoints ?? true);
   const plotRef = useRef<HTMLDivElement>(null);
 
   // Significance annotations
   type SigAnnotation = { group1: string; group2: string; label: string };
   const SIG_LABELS = ["ns", "*", "**", "***", "****"];
-  const [sigAnnotations, setSigAnnotations] = useState<SigAnnotation[]>([]);
+  const [sigAnnotations, setSigAnnotations] = useState<SigAnnotation[]>(initialConfig?.sigAnnotations || []);
   const [pendingGroup1, setPendingGroup1] = useState("");
   const [pendingGroup2, setPendingGroup2] = useState("");
   const [pendingLabel, setPendingLabel] = useState("*");
-  const [autoRunSigStars, setAutoRunSigStars] = useState(false);
-  const [autoStatsMethod, setAutoStatsMethod] = useState<"welch_t" | "mann_whitney">("welch_t");
-  const [autoPAdjust, setAutoPAdjust] = useState<"none" | "bonferroni">("none");
-  const [includeNsAnnotations, setIncludeNsAnnotations] = useState(false);
+  const [autoRunSigStars, setAutoRunSigStars] = useState(initialConfig?.autoRunSigStars ?? false);
+  const [autoStatsMethod, setAutoStatsMethod] = useState<"welch_t" | "mann_whitney">(initialConfig?.autoStatsMethod || "welch_t");
+  const [autoPAdjust, setAutoPAdjust] = useState<"none" | "bonferroni">(initialConfig?.autoPAdjust || "none");
+  const [includeNsAnnotations, setIncludeNsAnnotations] = useState(initialConfig?.includeNsAnnotations ?? false);
   const [showManualSigControls, setShowManualSigControls] = useState(false);
   const [autoStatsSummary, setAutoStatsSummary] = useState<{
     tested: number;
@@ -2330,6 +3082,42 @@ function VisualizationPanel({
     { value: "dot_plot", label: "Dot Plot" },
     { value: "timepoint_line", label: "Timepoints (line)" },
   ];
+
+  useEffect(() => {
+    if (!numericKeys.includes(measureKey)) setMeasureKey(numericKeys[0] || "");
+    if (measureKey2 && !numericKeys.includes(measureKey2)) {
+      setMeasureKey2(numericKeys.find((key) => key !== measureKey) || numericKeys[1] || "");
+    }
+  }, [measureKey, measureKey2, numericKeys]);
+
+  useEffect(() => {
+    onConfigChange?.({
+      chartType,
+      measureKey,
+      measureKey2,
+      groupBy,
+      title,
+      showPoints,
+      sigAnnotations,
+      autoRunSigStars,
+      autoStatsMethod,
+      autoPAdjust,
+      includeNsAnnotations,
+    });
+  }, [
+    autoPAdjust,
+    autoRunSigStars,
+    autoStatsMethod,
+    chartType,
+    groupBy,
+    includeNsAnnotations,
+    measureKey,
+    measureKey2,
+    onConfigChange,
+    showPoints,
+    sigAnnotations,
+    title,
+  ]);
 
   const autoGenerateSigAnnotations = useCallback((): {
     annotations: SigAnnotation[];

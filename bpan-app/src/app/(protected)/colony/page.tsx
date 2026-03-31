@@ -21,6 +21,8 @@ import type {
   RunScheduleBlock,
   RunTimepoint,
   RunTimepointExperiment,
+  Dataset,
+  Analysis,
 } from "@/types";
 import {
   createBreederCage,
@@ -68,6 +70,7 @@ import {
   deleteColonyResultMeasureColumn,
   bulkDeleteColonyResults,
 } from "./result-actions";
+import { deleteColonyAnalysis, saveColonyAnalysisRevision } from "./analysis-actions";
 
 /**
  * Fetch ALL rows from a table using cursor-based pagination.
@@ -224,6 +227,8 @@ export async function renderColonyPageView({
     runTimepointExperiments,
     runExperimentScheduleSteps,
     { data: runScheduleBlocks },
+    { data: colonyAnalysisDatasets },
+    { data: colonyAnalysisRevisions },
   ] = await Promise.all([
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
@@ -253,6 +258,17 @@ export async function renderColonyPageView({
       { column: "sort_order" },
     ]),
     supabase.from("run_schedule_blocks").select("*").order("day_index", { ascending: true }).order("sort_order", { ascending: true }),
+    supabase
+      .from("datasets")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("source", "colony_analysis")
+      .order("updated_at", { ascending: false }),
+    supabase
+      .from("analyses")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false }),
   ]);
 
   return (
@@ -285,12 +301,18 @@ export async function renderColonyPageView({
           runAssignments={(runAssignments || []) as RunAssignment[]}
           runTimepoints={(runTimepoints || []) as RunTimepoint[]}
           runTimepointExperiments={(runTimepointExperiments || []) as RunTimepointExperiment[]}
+          colonyAnalysisDatasets={((colonyAnalysisDatasets || []) as Dataset[]) || []}
+          colonyAnalysisRevisions={(((colonyAnalysisRevisions || []) as Analysis[]) || []).filter((analysis) =>
+            ((colonyAnalysisDatasets || []) as Dataset[]).some((dataset) => dataset.id === analysis.dataset_id),
+          )}
           runExperimentScheduleSteps={(runExperimentScheduleSteps || []) as RunExperimentScheduleStep[]}
           runScheduleBlocks={(runScheduleBlocks || []) as RunScheduleBlock[]}
           batchUpsertColonyResults={batchUpsertColonyResults}
           reconcileTrackerFromExistingColonyResults={reconcileTrackerFromExistingColonyResults}
           deleteColonyResultMeasureColumn={deleteColonyResultMeasureColumn}
           bulkDeleteColonyResults={bulkDeleteColonyResults}
+          saveColonyAnalysisRevision={saveColonyAnalysisRevision}
+          deleteColonyAnalysis={deleteColonyAnalysis}
           actions={{
             createBreederCage,
             updateBreederCage,

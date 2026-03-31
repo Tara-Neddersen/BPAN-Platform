@@ -150,11 +150,20 @@ export async function renderResultsView(params?: ResultsSearchParams) {
       .order("sort_order", { ascending: true }),
   ]);
 
+  const visibleDatasets = ((datasets as ResultsDatasetRecord[]) || []).filter((dataset) => dataset.source !== "colony_analysis");
+  const hiddenDatasetIds = new Set(
+    (((datasets as ResultsDatasetRecord[]) || []) as ResultsDatasetRecord[])
+      .filter((dataset) => dataset.source === "colony_analysis")
+      .map((dataset) => dataset.id),
+  );
+  const visibleAnalyses = ((analyses as Analysis[]) || []).filter((analysis) => !hiddenDatasetIds.has(analysis.dataset_id));
+  const visibleFigures = ((figures as Figure[]) || []).filter((figure) => !hiddenDatasetIds.has(figure.dataset_id));
+
   return (
     <ResultsClient
-      initialDatasets={(datasets as ResultsDatasetRecord[]) || []}
-      initialAnalyses={(analyses as Analysis[]) || []}
-      initialFigures={(figures as Figure[]) || []}
+      initialDatasets={visibleDatasets}
+      initialAnalyses={visibleAnalyses}
+      initialFigures={visibleFigures}
       experiments={(experiments as Pick<Experiment, "id" | "title">[]) || []}
       runs={(runs as ExperimentRunOption[]) || []}
       animals={(animals as Animal[]) || []}
