@@ -1042,46 +1042,79 @@ export async function batchUpdateExperimentStatus(
 
   const animalIds = animals.map(a => a.id);
 
-  // Step 2: For each combination of tp × expType, query matching experiment IDs
-  let allMatchingIds: string[] = [];
-  for (const tp of timepointAgeDays) {
-    for (const expType of experimentTypes) {
-      for (let i = 0; i < animalIds.length; i += 50) {
-        const batch = animalIds.slice(i, i + 50);
-        const { data: exps, error: expErr } = await supabase
-          .from("animal_experiments")
-          .select("id")
-          .eq("user_id", user.id)
-          .eq("experiment_type", expType)
-          .eq("timepoint_age_days", tp)
-          .in("animal_id", batch);
-        if (expErr) return { error: `Experiment fetch: ${expErr.message}` };
-        if (exps) allMatchingIds = allMatchingIds.concat(exps.map(e => e.id));
+  // Step 2: Load any existing experiment rows for the selected animals/timepoints/types.
+  // If some matrix cells do not have rows yet, create them so batch updates work against
+  // run/template-backed tracker columns too.
+  const existingRows: Array<{
+    id: string;
+    animal_id: string;
+    experiment_type: string;
+    timepoint_age_days: number | null;
+  }> = [];
+  for (let i = 0; i < animalIds.length; i += 50) {
+    const batch = animalIds.slice(i, i + 50);
+    const { data: exps, error: expErr } = await supabase
+      .from("animal_experiments")
+      .select("id,animal_id,experiment_type,timepoint_age_days")
+      .eq("user_id", user.id)
+      .in("experiment_type", experimentTypes)
+      .in("timepoint_age_days", timepointAgeDays)
+      .in("animal_id", batch);
+    if (expErr) return { error: `Experiment fetch: ${expErr.message}` };
+    if (exps) existingRows.push(...exps);
+  }
+
+  const existingByKey = new Map(
+    existingRows.map((row) => [`${row.animal_id}::${row.experiment_type}::${row.timepoint_age_days ?? "__none__"}`, row.id]),
+  );
+  const allMatchingIds = [...existingByKey.values()];
+
+  const today = new Date().toISOString().split("T")[0];
+  const rowsToInsert: Array<Record<string, unknown>> = [];
+  for (const animalId of animalIds) {
+    for (const tp of timepointAgeDays) {
+      for (const expType of experimentTypes) {
+        const key = `${animalId}::${expType}::${tp}`;
+        if (existingByKey.has(key)) continue;
+        const row: Record<string, unknown> = {
+          user_id: user.id,
+          animal_id: animalId,
+          experiment_type: expType,
+          timepoint_age_days: tp,
+          status: newStatus,
+        };
+        if (newStatus === "completed") row.completed_date = today;
+        if (notes) row.notes = notes;
+        rowsToInsert.push(row);
       }
     }
   }
 
-  if (allMatchingIds.length === 0) {
-    return { error: `No matching experiments found (${animalIds.length} animals, ${experimentTypes.length} types, ${timepointAgeDays.length} timepoints).` };
-  }
-
   // Step 3: Build update payload
-  const today = new Date().toISOString().split("T")[0];
   const update: Record<string, unknown> = { status: newStatus };
   if (newStatus === "completed") update.completed_date = today;
   if (newStatus === "scheduled" || newStatus === "pending") update.completed_date = null;
+  if (newStatus === "skipped" || newStatus === "in_progress") update.completed_date = null;
   if (notes) update.notes = notes;
 
-  // Step 4: Update in batches
+  // Step 4: Update any existing rows
   for (let i = 0; i < allMatchingIds.length; i += 100) {
     const batch = allMatchingIds.slice(i, i + 100);
     const { error } = await supabase.from("animal_experiments").update(update).in("id", batch);
     if (error) return { error: error.message };
   }
 
+  // Step 5: Insert missing rows for selected matrix cells that did not exist yet
+  for (let i = 0; i < rowsToInsert.length; i += 100) {
+    const batch = rowsToInsert.slice(i, i + 100);
+    const { error } = await supabase.from("animal_experiments").insert(batch);
+    if (error) return { error: error.message };
+  }
+
   revalidatePath("/colony");
+  revalidatePath("/tracker");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
-  return { success: true, updated: allMatchingIds.length };
+  return { success: true, updated: allMatchingIds.length + rowsToInsert.length };
 }
 
 export async function deleteAnimalExperiment(id: string) {
