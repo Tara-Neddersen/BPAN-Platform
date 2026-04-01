@@ -1690,7 +1690,7 @@ function rocAucFromBinaryGroups(groupA: number[], groupB: number[]) {
   return { auc: round(auc, 4), p: mw.p };
 }
 
-function estimateSampleSizeForTwoGroup(effectSize: number, alpha = 0.05, power = 0.8) {
+function estimateSampleSizeForTwoGroup(effectSize: number, power = 0.8) {
   if (effectSize <= 0) return null;
   const zAlpha = 1.96;
   const zPower = power >= 0.9 ? 1.28 : power >= 0.8 ? 0.84 : 0.52;
@@ -2178,10 +2178,7 @@ export function ColonyAnalysisPanel({
       })),
     [analysisAnimals, excludedAnimalIds, exclusionReasons, exclusionSources, outlierFlags, outlierModes, outlierScores],
   );
-  const revisionDiff = useMemo(
-    () => summarizeRevisionDiff(compareRevision, selectedSavedRevision),
-    [compareRevision, selectedSavedRevision],
-  );
+  const revisionDiff = summarizeRevisionDiff(compareRevision, selectedSavedRevision);
   const currentReportPayload = useMemo(
     () =>
       generateAnalysisReport({
@@ -2214,37 +2211,23 @@ export function ColonyAnalysisPanel({
       }),
     [flatData, numericMeasureKeys],
   );
-  const workflowSteps = useMemo(
-    () => [
-      {
-        title: "Choose scope",
-        done:
-          resolvedRunId !== "__all__" ||
-          effectiveSelectedExperiment !== "__all__" ||
-          effectiveSelectedTimepoint !== "__all__" ||
-          selectedCohort !== "__all__",
-      },
-      { title: "Review animals", done: analysisAnimals.length > 0 },
-      { title: "Handle exclusions", done: excludedAnimalCount > 0 || flatData.length > 0 },
-      { title: "Pick a test", done: Boolean(statsDraft.measureKey) && suggestedTests.length > 0 },
-      { title: "Run statistics", done: Boolean(savedResult) },
-      { title: "Save revision", done: selectedSavedAnalysisId !== "__new__" },
-    ],
-    [
-      analysisAnimals.length,
-      effectiveSelectedExperiment,
-      effectiveSelectedTimepoint,
-      excludedAnimalCount,
-      flatData.length,
-      resolvedRunId,
-      savedResult,
-      selectedCohort,
-      selectedSavedAnalysisId,
-      statsDraft.measureKey,
-      suggestedTests.length,
-    ],
-  );
+  const workflowSteps = [
+    {
+      title: "Choose scope",
+      done:
+        resolvedRunId !== "__all__" ||
+        effectiveSelectedExperiment !== "__all__" ||
+        effectiveSelectedTimepoint !== "__all__" ||
+        selectedCohort !== "__all__",
+    },
+    { title: "Review animals", done: analysisAnimals.length > 0 },
+    { title: "Handle exclusions", done: excludedAnimalCount > 0 || flatData.length > 0 },
+    { title: "Pick a test", done: Boolean(statsDraft.measureKey) && suggestedTests.length > 0 },
+    { title: "Run statistics", done: Boolean(savedResult) },
+    { title: "Save revision", done: selectedSavedAnalysisId !== "__new__" },
+  ];
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (savedAnalysisRoots.length === 0) return;
     if (selectedSavedAnalysisId === "__new__") return;
@@ -2343,6 +2326,7 @@ export function ColonyAnalysisPanel({
     setSelectedRevisionId("__latest__");
     setCompareRevisionId("__none__");
   }, [selectedSavedAnalysisId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const exportAnalysisRows = useCallback(
     (rows: FlatRow[], fileLabel: string) => {
@@ -2457,92 +2441,69 @@ export function ColonyAnalysisPanel({
     toast.success("Figure packet exported.");
   }, [analysisName, currentReportPayload]);
 
-  const handleSaveAnalysis = useCallback(
-    async (mode: "new" | "revision") => {
-      if (!savedResult) {
-        toast.error("Run an analysis first so there is something meaningful to save.");
-        return;
-      }
-      const payload = {
-        reportPayload: currentReportPayload,
-        analysisId: mode === "revision" && selectedSavedAnalysisId !== "__new__" ? selectedSavedAnalysisId : null,
-        name: analysisName.trim() || "Untitled Colony Analysis",
+  const handleSaveAnalysis = async (mode: "new" | "revision") => {
+    if (!savedResult) {
+      toast.error("Run an analysis first so there is something meaningful to save.");
+      return;
+    }
+    const payload = {
+      reportPayload: currentReportPayload,
+      analysisId: mode === "revision" && selectedSavedAnalysisId !== "__new__" ? selectedSavedAnalysisId : null,
+      name: analysisName.trim() || "Untitled Colony Analysis",
+      description: analysisDescription.trim() || null,
+      config: {
         description: analysisDescription.trim() || null,
-        config: {
-          description: analysisDescription.trim() || null,
-          scope: {
-            runId: resolvedRunId,
-            experiment: effectiveSelectedExperiment,
-            timepoint: effectiveSelectedTimepoint,
-            cohort: selectedCohort,
-          },
-          excludedAnimals: Array.from(excludedAnimalIds).map((animalId) => ({
-            animalId,
-            reason: exclusionReasons[animalId] || "",
-          })),
-          analysisSetEntries: currentAnalysisSetEntries,
-          analysisSetPreset: {
-            runId: resolvedRunId,
-            experiment: effectiveSelectedExperiment,
-            timepoint: effectiveSelectedTimepoint,
-            cohort: selectedCohort,
-            search: animalSearch,
-          },
-          statistics: statsDraft,
-          visualization: visualizationDraft,
-          reportWarnings: currentReportPayload?.reportWarnings || [],
-          figureMetadata: currentReportPayload?.figureMetadata || null,
-          includedAnimalCount,
-          excludedAnimalCount,
-          finalized: selectedSavedRevision?.config?.finalized || false,
+        scope: {
+          runId: resolvedRunId,
+          experiment: effectiveSelectedExperiment,
+          timepoint: effectiveSelectedTimepoint,
+          cohort: selectedCohort,
         },
-        results: {
-          ...savedResult,
-          reportSummary: currentReportPayload?.reportSummary || "",
-          reportResultsText: currentReportPayload?.reportResultsText || "",
-          reportMethodsText: currentReportPayload?.reportMethodsText || "",
-          reportCaption: currentReportPayload?.reportCaption || "",
-          reportWarnings: currentReportPayload?.reportWarnings || [],
-          figureMetadata: currentReportPayload?.figureMetadata || null,
+        excludedAnimals: Array.from(excludedAnimalIds).map((animalId) => ({
+          animalId,
+          reason: exclusionReasons[animalId] || "",
+        })),
+        analysisSetEntries: currentAnalysisSetEntries,
+        analysisSetPreset: {
+          runId: resolvedRunId,
+          experiment: effectiveSelectedExperiment,
+          timepoint: effectiveSelectedTimepoint,
+          cohort: selectedCohort,
+          search: animalSearch,
         },
-        summaryText: currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
-      };
-      try {
-        const result = await saveAnalysisRevision(payload);
-        if (result.success) {
-          toast.success(mode === "new" ? "Saved as a new Colony Analysis." : `Saved revision ${result.revisionNumber ?? ""}.`.trim());
-          if (result.analysisId) setSelectedSavedAnalysisId(result.analysisId);
-          if (result.revisionId) {
-            setSelectedRevisionId(result.revisionId);
-            setLoadedRevisionKey(result.revisionId);
-          }
+        statistics: statsDraft,
+        visualization: visualizationDraft,
+        reportWarnings: currentReportPayload?.reportWarnings || [],
+        figureMetadata: currentReportPayload?.figureMetadata || null,
+        includedAnimalCount,
+        excludedAnimalCount,
+        finalized: selectedSavedRevision?.config?.finalized || false,
+      },
+      results: {
+        ...savedResult,
+        reportSummary: currentReportPayload?.reportSummary || "",
+        reportResultsText: currentReportPayload?.reportResultsText || "",
+        reportMethodsText: currentReportPayload?.reportMethodsText || "",
+        reportCaption: currentReportPayload?.reportCaption || "",
+        reportWarnings: currentReportPayload?.reportWarnings || [],
+        figureMetadata: currentReportPayload?.figureMetadata || null,
+      },
+      summaryText: currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
+    };
+    try {
+      const result = await saveAnalysisRevision(payload);
+      if (result.success) {
+        toast.success(mode === "new" ? "Saved as a new Colony Analysis." : `Saved revision ${result.revisionNumber ?? ""}.`.trim());
+        if (result.analysisId) setSelectedSavedAnalysisId(result.analysisId);
+        if (result.revisionId) {
+          setSelectedRevisionId(result.revisionId);
+          setLoadedRevisionKey(result.revisionId);
         }
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Failed to save Colony Analysis.");
       }
-    },
-    [
-      analysisDescription,
-      analysisName,
-      animalSearch,
-      currentAnalysisSetEntries,
-      currentReportPayload,
-      effectiveSelectedExperiment,
-      effectiveSelectedTimepoint,
-      excludedAnimalCount,
-      excludedAnimalIds,
-      exclusionReasons,
-      includedAnimalCount,
-      resolvedRunId,
-      saveAnalysisRevision,
-      savedResult,
-      selectedCohort,
-      selectedSavedRevision?.config,
-      selectedSavedAnalysisId,
-      statsDraft,
-      visualizationDraft,
-    ],
-  );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save Colony Analysis.");
+    }
+  };
 
   const handleDeleteAnalysis = useCallback(async () => {
     if (selectedSavedAnalysisId === "__new__") return;
@@ -2612,7 +2573,7 @@ export function ColonyAnalysisPanel({
     [flatData, markAnimalExclusion, statsDraft.measureKey, statsDraft.outlierMethod, statsDraft.outlierThreshold],
   );
 
-  const handleDuplicateAnalysis = useCallback(async () => {
+  const handleDuplicateAnalysis = async () => {
     if (!savedResult) {
       toast.error("Run or load an analysis first.");
       return;
@@ -2659,9 +2620,9 @@ export function ColonyAnalysisPanel({
       setSelectedRevisionId(result.revisionId || "__latest__");
       toast.success("Saved analysis duplicated.");
     }
-  }, [analysisDescription, analysisName, currentAnalysisSetEntries, currentReportPayload, effectiveSelectedExperiment, effectiveSelectedTimepoint, excludedAnimalCount, excludedAnimalIds, exclusionReasons, includedAnimalCount, resolvedRunId, saveAnalysisRevision, savedResult, selectedCohort, selectedSavedRevision?.id, statsDraft, visualizationDraft]);
+  };
 
-  const handleToggleFinalizeRevision = useCallback(async () => {
+  const handleToggleFinalizeRevision = async () => {
     if (!selectedSavedRevision) return;
     try {
       await updateAnalysisRevisionMetadata({
@@ -2675,7 +2636,7 @@ export function ColonyAnalysisPanel({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update revision status.");
     }
-  }, [selectedRevisionFinalized, selectedSavedRevision, updateAnalysisRevisionMetadata]);
+  };
 
   const handleExportResultTables = useCallback(() => {
     if (!savedResult) {
@@ -3331,7 +3292,6 @@ export function ColonyAnalysisPanel({
               flatData={flatData}
               numericKeys={numericMeasureKeys}
               measureLabels={measureLabels}
-              groups={availableGroups}
               includedCount={includedAnimalCount}
               excludedCount={excludedAnimalCount}
               initialConfig={statsDraft}
@@ -3750,7 +3710,6 @@ function StatisticsPanel({
   flatData,
   numericKeys,
   measureLabels,
-  groups,
   includedCount,
   excludedCount,
   initialConfig,
@@ -3761,7 +3720,6 @@ function StatisticsPanel({
   flatData: FlatRow[];
   numericKeys: string[];
   measureLabels: Record<string, string>;
-  groups: string[];
   includedCount: number;
   excludedCount: number;
   initialConfig?: ColonyAnalysisStatsDraft;
@@ -3788,8 +3746,8 @@ function StatisticsPanel({
   const [controlGroup, setControlGroup] = useState(normalizedInitialConfig.controlGroup || "");
   const [binaryGroupA, setBinaryGroupA] = useState(normalizedInitialConfig.binaryGroupA || "");
   const [binaryGroupB, setBinaryGroupB] = useState(normalizedInitialConfig.binaryGroupB || "");
-  const [outlierMethod, setOutlierMethod] = useState<OutlierMethod>(normalizedInitialConfig.outlierMethod);
-  const [outlierThreshold, setOutlierThreshold] = useState<number>(normalizedInitialConfig.outlierThreshold);
+  const [outlierMethod] = useState<OutlierMethod>(normalizedInitialConfig.outlierMethod);
+  const [outlierThreshold] = useState<number>(normalizedInitialConfig.outlierThreshold);
   const [tableExportMode, setTableExportMode] = useState<"long" | "wide">(normalizedInitialConfig.tableExportMode);
   const [currentResult, setCurrentResult] = useState<Record<string, unknown> | null>(initialResult || null);
   const [copied, setCopied] = useState(false);
@@ -3829,6 +3787,7 @@ function StatisticsPanel({
     return levels;
   }, [flatData, groupingFactor]);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!numericKeys.includes(measureKey)) setMeasureKey(numericKeys[0] || "");
     if (!numericKeys.includes(measureKey2)) setMeasureKey2(numericKeys[1] || numericKeys[0] || "");
@@ -3881,7 +3840,8 @@ function StatisticsPanel({
     if (!factorLevels.includes(binaryGroupB) || binaryGroupB === binaryGroupA) {
       setBinaryGroupB(factorLevels.find((level) => level !== (factorLevels[0] || "")) || factorLevels[0] || "");
     }
-  }, [factorLevels, group1, group2]);
+  }, [binaryGroupA, binaryGroupB, controlGroup, factorLevels, group1, group2]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const runTest = useCallback(() => {
     const getValues = (group: string, key = measureKey) =>
@@ -4257,7 +4217,6 @@ function StatisticsPanel({
           const group = getFactorValue(row, groupingFactor);
           return (group === binaryGroupA || group === binaryGroupB) && row[measureKey] != null && row[measureKey] !== "";
         });
-        const levels = ["Positive", "Negative"];
         const countFor = (group: string, positive: boolean) =>
           validRows.filter((row) => {
             if (getFactorValue(row, groupingFactor) !== group) return false;
