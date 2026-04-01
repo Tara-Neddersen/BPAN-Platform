@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { defaultStatsDraft, defaultVisualizationDraft, normalizeSavedResult } from "@/lib/colony-analysis/config";
 import { buildStructuredResultTables, generateAnalysisReport, renderAnalysisReportMarkdown } from "@/lib/colony-analysis/reporting";
-import { deriveVisualizationDraftFromResult } from "@/lib/colony-analysis/visualization";
+import { deriveSignificanceAnnotationsFromResult, deriveVisualizationDraftFromResult } from "@/lib/colony-analysis/visualization";
 
 const measureLabels = {
   average_speed: "Average Speed",
@@ -126,6 +126,8 @@ function run() {
   assert.ok(anovaReport.resultTables.length >= 2);
   assert.ok(anovaReport.diagnostics.length >= 1);
   assert.equal(anovaReport.figurePacket.figureMetadata.recommendedChartType, "bar_sem");
+  assert.equal(anovaReport.figurePacket.figureMetadata.annotationCount, 1);
+  assert.match(anovaReport.figurePacket.figureMetadata.significanceSource, /Result-driven significance/);
 
   const markdown = renderAnalysisReportMarkdown({
     analysisName: "Smoke Analysis",
@@ -142,9 +144,15 @@ function run() {
   assert.ok(rocTables.some((table) => table.id === "roc-thresholds"));
   assert.ok(rocTables.some((table) => table.id === "roc-points"));
 
-  const normalizedOldRevision = normalizeSavedResult({ test: "Legacy Result" });
+  const resultDrivenAnnotations = deriveSignificanceAnnotationsFromResult(anovaResult);
+  assert.equal(resultDrivenAnnotations.length, 1);
+  assert.equal(resultDrivenAnnotations[0]?.label, "*");
+
+  const normalizedOldRevision = normalizeSavedResult({ test: "Legacy Result", figurePacket: { linkedSummary: "Legacy" } });
   assert.deepEqual(normalizedOldRevision?.reportWarnings, []);
   assert.deepEqual(normalizedOldRevision?.resultTables, []);
+  assert.equal(normalizedOldRevision?.figurePacket.figureMetadata.chartType, "bar_sem");
+  assert.equal(normalizedOldRevision?.figurePacket.linkedSummary, "Legacy");
 
   console.log("colony_analysis_smoke: ok");
 }

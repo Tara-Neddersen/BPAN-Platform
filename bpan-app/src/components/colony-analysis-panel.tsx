@@ -33,6 +33,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
 import type { Animal, Cohort, ColonyResult, ExperimentRun, RunAssignment, RunTimepoint, RunTimepointExperiment, Dataset, Analysis } from "@/types";
 import type {
   AnalysisAnimalRow,
@@ -69,7 +70,7 @@ import {
   renderAnalysisReportMarkdown,
   summarizeAnalysisResult,
 } from "@/lib/colony-analysis/reporting";
-import { deriveVisualizationDraftFromResult } from "@/lib/colony-analysis/visualization";
+import { deriveSignificanceAnnotationsFromResult, deriveVisualizationDraftFromResult } from "@/lib/colony-analysis/visualization";
 
 // Dynamically import Plotly
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -266,6 +267,32 @@ function approxNormCDF(z: number): number {
   const t = 1 / (1 + p * z);
   const y = 1 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-z * z);
   return 0.5 * (1 + sign * y);
+}
+
+function approxNormInv(probability: number): number {
+  const p = Math.min(Math.max(probability, 1e-12), 1 - 1e-12);
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+  const plow = 0.02425;
+  const phigh = 1 - plow;
+
+  if (p < plow) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  if (p > phigh) {
+    const q = Math.sqrt(-2 * Math.log(1 - p));
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+
+  const q = p - 0.5;
+  const r = q * q;
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+    (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
 }
 
 function approxFCDF(f: number, d1: number, d2: number): number {
@@ -620,6 +647,111 @@ function pairwiseGroupComparisons(
   }));
 }
 
+function matchedTimepointComparisons(
+  subjects: Map<
+    string,
+    {
+      identifier: string;
+      between: string;
+      values: Map<number, number>;
+    }
+  >,
+  timepointPairs: Array<{ timepoint: number; label: string; index: number }>,
+  pAdjustMethod: "none" | "bonferroni" | "holm" | "fdr",
+) {
+  const rawComparisons: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < timepointPairs.length; i++) {
+    for (let j = i + 1; j < timepointPairs.length; j++) {
+      const first = timepointPairs[i];
+      const second = timepointPairs[j];
+      const a: number[] = [];
+      const b: number[] = [];
+      subjects.forEach((subject) => {
+        const firstValue = subject.values.get(first.timepoint);
+        const secondValue = subject.values.get(second.timepoint);
+        if (firstValue == null || secondValue == null) return;
+        a.push(Number(firstValue));
+        b.push(Number(secondValue));
+      });
+      if (a.length < 2 || b.length < 2) continue;
+      const result = pairedTTest(a, b);
+      rawComparisons.push({
+        comparison: `${first.label} vs ${second.label}`,
+        group1: first.label,
+        group2: second.label,
+        statistic_label: "t",
+        statistic: result.t,
+        df: result.df,
+        p: result.p,
+        effect_label: "Cohen's dz",
+        effect_size: result.cohenDz,
+        n_pairs: a.length,
+      });
+    }
+  }
+
+  const adjusted = applyPAdjustment(
+    rawComparisons.map((comparison) => Number(comparison.p)),
+    pAdjustMethod,
+  );
+  return rawComparisons.map((comparison, index) => ({
+    ...comparison,
+    adjusted_p: adjusted[index],
+    significant: adjusted[index] < 0.05,
+  }));
+}
+
+function controlGroupComparisons(
+  groups: Array<{ label: string; values: number[] }>,
+  controlLabel: string,
+  pAdjustMethod: "none" | "bonferroni" | "holm" | "fdr",
+) {
+  const filtered = groups.filter((group) => group.values.length >= 2);
+  const control = filtered.find((group) => group.label === controlLabel);
+  if (!control) return [];
+  const comparisonGroups = filtered.filter((group) => group.label !== controlLabel);
+  if (comparisonGroups.length === 0) return [];
+
+  let ssWithin = 0;
+  let totalN = 0;
+  filtered.forEach((group) => {
+    const groupMean = mean(group.values);
+    totalN += group.values.length;
+    group.values.forEach((value) => {
+      ssWithin += (value - groupMean) ** 2;
+    });
+  });
+  const dfWithin = totalN - filtered.length;
+  const mse = dfWithin > 0 ? ssWithin / dfWithin : 0;
+  const pooledSd = mse > 0 ? Math.sqrt(mse) : 0;
+
+  const rawComparisons = comparisonGroups.map((group) => {
+    const meanDiff = mean(control.values) - mean(group.values);
+    const se = mse > 0 ? Math.sqrt(mse * (1 / control.values.length + 1 / group.values.length)) : 0;
+    const t = se === 0 ? 0 : meanDiff / se;
+    const p = dfWithin > 0 ? 1 - approxFCDF(t * t, 1, dfWithin) : 1;
+    return {
+      comparison: `${control.label} vs ${group.label}`,
+      group1: control.label,
+      group2: group.label,
+      statistic_label: "t",
+      statistic: round(t),
+      df: dfWithin,
+      p: round(p, 6),
+      effect_label: "Cohen's d",
+      effect_size: pooledSd > 0 ? round(meanDiff / pooledSd) : 0,
+      mean_difference: round(meanDiff),
+    };
+  });
+
+  const adjusted = applyPAdjustment(rawComparisons.map((entry) => Number(entry.p)), pAdjustMethod);
+  return rawComparisons.map((entry, index) => ({
+    ...entry,
+    adjusted_p: adjusted[index],
+    significant: adjusted[index] < 0.05,
+  }));
+}
+
 function buildLongitudinalDataset(rows: FlatRow[], measureKey: string, betweenFactor: AnalysisFactor | "__none__") {
   const subjects = new Map<
     string,
@@ -731,13 +863,7 @@ function repeatedMeasuresAnova(
     });
   }
 
-  const postHoc = pairwiseGroupComparisons(
-    dataset.timepointPairs.map((timepoint) => ({
-      label: timepoint.label,
-      values: matrix.map((subject) => subject[timepoint.index]),
-    })),
-    { paired: true, pAdjustMethod },
-  );
+  const postHoc = matchedTimepointComparisons(dataset.subjects, dataset.timepointPairs, pAdjustMethod);
 
   return {
     test: "Repeated-measures ANOVA",
@@ -793,6 +919,7 @@ function mixedEffectsApproximation(
       betweenLabel: betweenFactor === "__none__" ? "All animals" : getFactorValue(row, betweenFactor),
     }))
     .filter((row) => !Number.isNaN(row.y));
+  const longitudinalDataset = buildLongitudinalDataset(rows, measureKey, betweenFactor);
 
   const subjectLevels = Array.from(new Set(validRows.map((row) => row.animal_id))).sort();
   const timeLevels = Array.from(new Set(validRows.map((row) => row.timeLabel))).sort((a, b) => Number.parseInt(a) - Number.parseInt(b));
@@ -857,16 +984,6 @@ function mixedEffectsApproximation(
     };
   }
 
-  const postHoc = pairwiseGroupComparisons(
-    timeLevels.map((timeLabel) => ({
-      label: timeLabel,
-      values: validRows
-        .filter((row) => row.timeLabel === timeLabel)
-        .map((row) => row.y),
-    })),
-    { pAdjustMethod },
-  );
-
   const assumptionChecks = [
     ...timeLevels.map((timeLabel) =>
       normalityScreen(
@@ -874,7 +991,15 @@ function mixedEffectsApproximation(
         validRows.filter((row) => row.timeLabel === timeLabel).map((row) => row.y),
       ),
     ),
+    {
+      name: "Subject coverage",
+      status: longitudinalDataset.isComplete ? "info" : "warn",
+      message: longitudinalDataset.isComplete
+        ? "All included animals have complete longitudinal values across the selected timepoints."
+        : "Some animals are missing one or more timepoints, so the mixed-effects path is using incomplete longitudinal coverage.",
+    },
   ];
+  const postHoc = matchedTimepointComparisons(longitudinalDataset.subjects, longitudinalDataset.timepointPairs, pAdjustMethod);
 
   return {
     test: betweenFactor === "__none__" ? "Mixed-effects approximation" : `Mixed-effects approximation with ${getFactorLabel(betweenFactor)}`,
@@ -1333,16 +1458,46 @@ function ancova(rows: FlatRow[], outcomeKey: string, factor: AnalysisFactor, cov
     row.covariate,
     ...levels.slice(1).map((level) => (row.factorLevel === level ? 1 : 0)),
   ]);
+  const interactionDesign = prepared.map((row) => {
+    const factorDummies = levels.slice(1).map((level) => (row.factorLevel === level ? 1 : 0));
+    return [
+      1,
+      row.covariate,
+      ...factorDummies,
+      ...factorDummies.map((dummy) => dummy * row.covariate),
+    ];
+  });
   const y = prepared.map((row) => row.y);
   const reducedFit = fitLinearModel(reducedDesign, y);
   const fullFit = fitLinearModel(fullDesign, y);
-  if (!reducedFit || !fullFit) return { error: "Could not fit ANCOVA with the selected measure and covariate." } as const;
+  const interactionFit = fitLinearModel(interactionDesign, y);
+  if (!reducedFit || !fullFit || !interactionFit) return { error: "Could not fit ANCOVA with the selected measure and covariate." } as const;
   const dfFactor = levels.length - 1;
   const ssFactor = Math.max(0, reducedFit.sse - fullFit.sse);
   const msFactor = dfFactor > 0 ? ssFactor / dfFactor : 0;
   const msError = fullFit.dfResidual > 0 ? fullFit.sse / fullFit.dfResidual : 0;
   const F = msError > 0 ? msFactor / msError : 0;
   const p = dfFactor > 0 && fullFit.dfResidual > 0 ? 1 - approxFCDF(F, dfFactor, fullFit.dfResidual) : 1;
+  const dfSlope = levels.length - 1;
+  const ssSlope = Math.max(0, fullFit.sse - interactionFit.sse);
+  const msSlope = dfSlope > 0 ? ssSlope / dfSlope : 0;
+  const msInteractionError = interactionFit.dfResidual > 0 ? interactionFit.sse / interactionFit.dfResidual : 0;
+  const fSlope = msInteractionError > 0 ? msSlope / msInteractionError : 0;
+  const pSlope = dfSlope > 0 && interactionFit.dfResidual > 0 ? 1 - approxFCDF(fSlope, dfSlope, interactionFit.dfResidual) : 1;
+  const residuals = fullDesign.map((row, index) => {
+    const predicted = row.reduce((sum, coefficient, coefficientIndex) => sum + coefficient * (fullFit.coefficients[coefficientIndex] || 0), 0);
+    return y[index] - predicted;
+  });
+  const coefficients = {
+    intercept: round(fullFit.coefficients[0] || 0),
+    covariate: round(fullFit.coefficients[1] || 0),
+    ...Object.fromEntries(
+      levels.slice(1).map((level, index) => [
+        `factor_${level}`,
+        round(fullFit.coefficients[index + 2] || 0),
+      ]),
+    ),
+  };
   return {
     factor: getFactorLabel(factor),
     covariate: covariateKey,
@@ -1351,6 +1506,25 @@ function ancova(rows: FlatRow[], outcomeKey: string, factor: AnalysisFactor, cov
     dfError: fullFit.dfResidual,
     p: round(p, 6),
     partial_eta_sq: round(ssFactor / Math.max(ssFactor + fullFit.sse, 1e-12)),
+    rmse: round(Math.sqrt(fullFit.sse / Math.max(prepared.length, 1))),
+    coefficients,
+    assumption_checks: [
+      normalityScreen("ANCOVA residuals", residuals),
+      {
+        name: "Homogeneity of regression slopes",
+        status: pSlope < 0.05 ? "warn" : "info",
+        message:
+          pSlope < 0.05
+            ? `Covariate-by-group slope interaction was detected (p = ${pSlope < 0.001 ? "< 0.001" : pSlope.toFixed(4)}), so ANCOVA slope homogeneity may be violated.`
+            : `No strong covariate-by-group slope interaction was detected (p = ${pSlope.toFixed(4)}).`,
+        statistic: round(fSlope),
+        p: round(pSlope, 6),
+      },
+    ],
+    warning:
+      pSlope < 0.05
+        ? "Interpret ANCOVA cautiously because covariate slopes appear to differ across factor levels."
+        : undefined,
   };
 }
 
@@ -1372,9 +1546,11 @@ function rocAucFromBinaryGroups(groupA: number[], groupB: number[]) {
 
 function estimateSampleSizeForTwoGroup(effectSize: number, alpha = 0.05, power = 0.8) {
   if (effectSize <= 0) return null;
-  const zAlpha = alpha <= 0.01 ? 2.58 : alpha <= 0.05 ? 1.96 : 1.64;
-  const zPower = power >= 0.9 ? 1.28 : power >= 0.8 ? 0.84 : 0.52;
-  return Math.ceil((2 * (zAlpha + zPower) ** 2) / (effectSize ** 2));
+  const safeAlpha = Math.min(Math.max(alpha, 1e-6), 0.2);
+  const safePower = Math.min(Math.max(power, 0.5), 0.999);
+  const zAlpha = approxNormInv(1 - safeAlpha / 2);
+  const zPower = approxNormInv(safePower);
+  return Math.max(2, Math.ceil((2 * (zAlpha + zPower) ** 2) / (effectSize ** 2)));
 }
 
 function inferBinaryValue(value: unknown, positiveClass = "Positive") {
@@ -1607,25 +1783,49 @@ function fitNonlinearRegression(
   const maxX = Math.max(...xs);
   const minY = Math.min(...ys);
   const maxY = Math.max(...ys);
-  let best: { midpoint: number; slope: number; sse: number } | null = null;
-  for (let i = 0; i <= 20; i++) {
-    const midpoint = minX + ((maxX - minX) * i) / 20;
-    for (const slope of [0.25, 0.5, 1, 2, 4, 8]) {
-      const sse = points.reduce((sum, point) => {
-        const predicted = minY + (maxY - minY) / (1 + Math.exp(-(point.x - midpoint) / slope));
-        return sum + (point.y - predicted) ** 2;
-      }, 0);
-      if (!best || sse < best.sse) best = { midpoint, slope, sse };
+  const xRange = Math.max(maxX - minX, 1);
+  const yRange = Math.max(maxY - minY, 1e-6);
+  let best: { bottom: number; top: number; midpoint: number; slope: number; sse: number } | null = null;
+  const bottomCandidates = [minY - yRange * 0.15, minY, minY + yRange * 0.1];
+  const topCandidates = [maxY - yRange * 0.1, maxY, maxY + yRange * 0.15];
+  const slopeCandidates = [
+    -xRange,
+    -xRange / 2,
+    -xRange / 4,
+    -xRange / 8,
+    xRange / 8,
+    xRange / 4,
+    xRange / 2,
+    xRange,
+  ].filter((value) => Math.abs(value) > 1e-6);
+  for (const bottom of bottomCandidates) {
+    for (const top of topCandidates) {
+      if (Math.abs(top - bottom) < 1e-6) continue;
+      for (let i = 0; i <= 24; i++) {
+        const midpoint = minX + ((maxX - minX) * i) / 24;
+        for (const slope of slopeCandidates) {
+          const sse = points.reduce((sum, point) => {
+            const predicted = bottom + (top - bottom) / (1 + Math.exp(-(point.x - midpoint) / slope));
+            return sum + (point.y - predicted) ** 2;
+          }, 0);
+          if (!best || sse < best.sse) best = { bottom, top, midpoint, slope, sse };
+        }
+      }
     }
   }
   if (!best) return { error: "Could not fit logistic regression." } as const;
   return {
     model: "Logistic regression",
     family,
-    coefficients: { bottom: round(minY), top: round(maxY), midpoint: round(best.midpoint), slope: round(best.slope) },
+    coefficients: {
+      bottom: round(best.bottom),
+      top: round(best.top),
+      midpoint: round(best.midpoint),
+      slope: round(best.slope),
+    },
     fitted_points: points.map((point) => ({
       x: point.x,
-      y: round(minY + (maxY - minY) / (1 + Math.exp(-(point.x - best.midpoint) / best.slope)), 4),
+      y: round(best.bottom + (best.top - best.bottom) / (1 + Math.exp(-(point.x - best.midpoint) / best.slope)), 4),
     })),
     rmse: round(Math.sqrt(best.sse / Math.max(points.length, 1))),
     r2: round(totalSS > 0 ? 1 - best.sse / totalSS : 1, 4),
@@ -2196,7 +2396,7 @@ export function ColonyAnalysisPanel({
     { title: "Save revision", done: selectedSavedAnalysisId !== "__new__" },
   ];
 
-  /* eslint-disable react-hooks/set-state-in-effect */
+  /* eslint-disable react-hooks/set-state-in-effect -- saved-analysis selection must realign when the available revisions change. */
   useEffect(() => {
     if (savedAnalysisRoots.length === 0) return;
     if (selectedSavedAnalysisId === "__new__") return;
@@ -2637,13 +2837,13 @@ export function ColonyAnalysisPanel({
 
   if (colonyResults.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed p-16 text-center">
-        <BarChart3 className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
-        <h3 className="font-medium text-lg mb-2">No results data yet</h3>
-        <p className="text-sm text-muted-foreground max-w-md mx-auto">
-          Import behavioral tracking data or enter results in the Results tab to start analyzing.
-        </p>
-      </div>
+      <WorkspaceEmptyState
+        icon="analysis"
+        title="No analysis-ready results yet"
+        description="Import or capture colony results first, then come back here to compare cohorts, inspect exclusions, and export analysis-ready summaries."
+        primaryAction={{ label: "Open colony results", href: "/colony/results" }}
+        secondaryAction={{ label: "Open colony tracker", href: "/colony/tracker" }}
+      />
     );
   }
 
@@ -3775,7 +3975,7 @@ function StatisticsPanel({
   }, [flatData, groupingFactor]);
   const binaryMeasureKeys = useMemo(() => detectBinaryLikeKeys(flatData), [flatData]);
 
-  /* eslint-disable react-hooks/set-state-in-effect */
+  /* eslint-disable react-hooks/set-state-in-effect -- dependent controls intentionally snap to valid measure/model selections when source fields change. */
   useEffect(() => {
     if (!numericKeys.includes(measureKey)) setMeasureKey(numericKeys[0] || "");
     if (!numericKeys.includes(measureKey2)) setMeasureKey2(numericKeys[1] || numericKeys[0] || "");
@@ -3790,6 +3990,7 @@ function StatisticsPanel({
     else if (testType === "mixed_effects") setModelKind("mixed_effects");
     else setModelKind("guided");
   }, [testType]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     onConfigChange?.({
@@ -3831,6 +4032,7 @@ function StatisticsPanel({
     onResultChange?.(currentResult);
   }, [currentResult, onResultChange]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- comparison selectors must stay on valid factor levels as the included data changes. */
   useEffect(() => {
     if (!factorLevels.includes(group1)) setGroup1(factorLevels[0] || "");
     if (!factorLevels.includes(group2) || group2 === group1) {
@@ -4150,44 +4352,27 @@ function StatisticsPanel({
         break;
       }
       case "dunnett": {
-        const comparisonGroups = factorLevels
-          .filter((level) => level !== controlGroup)
+        const grouped = factorLevels
           .map((level) => ({
             label: level,
             values: getValues(level),
           }))
           .filter((group) => group.values.length >= 2);
         const controlValues = getValues(controlGroup);
-        if (controlValues.length < 2 || comparisonGroups.length === 0) {
+        if (controlValues.length < 2 || grouped.filter((group) => group.label !== controlGroup).length === 0) {
           toast.error("Need a control group plus at least one comparison group with 2+ values.");
           return;
         }
-        const raw = comparisonGroups.map((group) => {
-          const result = welchTTest(controlValues, group.values);
-          return {
-            comparison: `${controlGroup} vs ${group.label}`,
-            statistic_label: "t",
-            statistic: result.t,
-            df: result.df,
-            p: result.p,
-            effect_label: "Cohen's d",
-            effect_size: result.cohenD,
-          };
-        });
-        const adjusted = applyPAdjustment(raw.map((entry) => Number(entry.p)), pAdjustMethod);
+        const comparisons = controlGroupComparisons(grouped, controlGroup, pAdjustMethod);
         setCurrentResult({
-          test: "Control vs All Comparisons",
+          test: "Dunnett-style Control vs All Comparisons",
           measure: measureLabels[measureKey] || measureKey,
           grouped_by: getFactorLabel(groupingFactor),
           control_group: controlGroup,
           included_animals: includedCount,
           excluded_animals: excludedCount,
-          comparisons: raw.map((entry, index) => ({
-            ...entry,
-            adjusted_p: adjusted[index],
-            significant: adjusted[index] < 0.05,
-          })),
-          posthoc_label: `Control-group follow-up (${pAdjustMethod})`,
+          comparisons,
+          posthoc_label: `Control-group follow-up (${pAdjustMethod}, pooled error)`,
         });
         break;
       }
@@ -5597,6 +5782,36 @@ function VisualizationPanel({
   const showMeasureSelectors = !["survival_curve", "roc_curve", "regression_fit", "paired_slope"].includes(effectiveChartType);
   const allowSecondaryMeasure = effectiveChartType === "scatter";
   const supportsSignificance = !["scatter", "timepoint_line", "survival_curve", "roc_curve", "regression_fit", "paired_slope"].includes(effectiveChartType);
+  const getGrouping = useCallback((row: FlatRow): string => {
+    switch (groupBy) {
+      case "sex":
+        return row.sex;
+      case "genotype":
+        return row.genotype;
+      case "cohort":
+        return row.cohort;
+      case "group":
+      default:
+        return row.group;
+    }
+  }, [groupBy]);
+  const groupLabels = useMemo(
+    () =>
+      groupBy === "group"
+        ? groups
+        : Array.from(new Set(flatData.map(getGrouping))).sort(),
+    [flatData, getGrouping, groupBy, groups],
+  );
+  const resultDrivenSigAnnotations = useMemo(
+    () =>
+      deriveSignificanceAnnotationsFromResult(result, {
+        allowedGroups: groupLabels,
+        includeNs: includeNsAnnotations,
+        maxAnnotations: includeNsAnnotations ? 6 : 4,
+      }),
+    [groupLabels, includeNsAnnotations, result],
+  );
+  const effectiveSigAnnotations = sigAnnotations.length > 0 ? sigAnnotations : resultDrivenSigAnnotations;
 
   useEffect(() => {
     if (safeNumericKeys.length === 0) return;
@@ -5644,19 +5859,6 @@ function VisualizationPanel({
     if (!measureKey) return { annotations: [], tested: 0 };
     if (!supportsSignificance) return { annotations: [], tested: 0 };
 
-    const getGrouping = (row: FlatRow): string => {
-      switch (groupBy) {
-        case "sex": return row.sex;
-        case "genotype": return row.genotype;
-        case "cohort": return row.cohort;
-        default: return row.group;
-      }
-    };
-
-    const groupLabels = groupBy === "group"
-      ? groups
-      : Array.from(new Set(flatData.map(getGrouping))).sort();
-
     const pToLabel = (p: number): string => {
       if (p < 0.0001) return "****";
       if (p < 0.001) return "***";
@@ -5703,7 +5905,7 @@ function VisualizationPanel({
       .map(({ group1, group2, label }) => ({ group1, group2, label }));
 
     return { annotations: autoAnnotations, tested: nComparisons };
-  }, [supportsSignificance, groupBy, groups, flatData, measureKey, autoStatsMethod, autoPAdjust, includeNsAnnotations]);
+  }, [supportsSignificance, groupLabels, flatData, getGrouping, measureKey, autoStatsMethod, autoPAdjust, includeNsAnnotations]);
 
   const applyAutoSigAnnotations = useCallback((showToast: boolean) => {
     const { annotations, tested } = autoGenerateSigAnnotations();
@@ -5736,19 +5938,6 @@ function VisualizationPanel({
     const chartTitle = title || reportPayload?.figureMetadata.title || measureLabel || String(result?.measure || "Analysis Figure");
 
     // Get grouping key values
-    const getGrouping = (row: FlatRow): string => {
-      switch (groupBy) {
-        case "sex": return row.sex;
-        case "genotype": return row.genotype;
-        case "cohort": return row.cohort;
-        default: return row.group;
-      }
-    };
-
-    const groupLabels = groupBy === "group"
-      ? groups
-      : Array.from(new Set(flatData.map(getGrouping))).sort();
-
     switch (effectiveChartType) {
       case "survival_curve": {
         if (!Array.isArray(result?.survival_curves) || result.survival_curves.length === 0) return null;
@@ -6141,33 +6330,20 @@ function VisualizationPanel({
       default:
         return null;
     }
-  }, [effectiveChartType, flatData, groupBy, groups, measureKey, measureKey2, measureLabels, reportPayload?.figureMetadata.title, result, showPoints, title]);
+  }, [effectiveChartType, flatData, getGrouping, groupLabels, measureKey, measureKey2, measureLabels, reportPayload?.figureMetadata.title, result, showPoints, title]);
 
   // Build Plotly shapes + annotations for significance brackets
   const sigShapesAndAnnotations = useMemo(() => {
-    if (!plotData || sigAnnotations.length === 0) {
+    if (!plotData || effectiveSigAnnotations.length === 0) {
       return { shapes: [], annotations: [], yRangeMin: null as number | null, yRangeMax: null as number | null };
     }
     if (!supportsSignificance) {
       return { shapes: [], annotations: [], yRangeMin: null as number | null, yRangeMax: null as number | null };
     }
-    const drawableAnnotations = sigAnnotations.filter((ann) => ann.label !== "ns");
+    const drawableAnnotations = effectiveSigAnnotations.filter((ann) => ann.label !== "ns");
     if (drawableAnnotations.length === 0) {
       return { shapes: [], annotations: [], yRangeMin: null as number | null, yRangeMax: null as number | null };
     }
-
-    const getGrouping = (row: FlatRow): string => {
-      switch (groupBy) {
-        case "sex": return row.sex;
-        case "genotype": return row.genotype;
-        case "cohort": return row.cohort;
-        default: return row.group;
-      }
-    };
-
-    const groupLabels = groupBy === "group"
-      ? groups
-      : Array.from(new Set(flatData.map(getGrouping))).sort();
 
     // Compute max Y per group for bracket positioning
     const groupMaxY: Record<string, number> = {};
@@ -6264,7 +6440,7 @@ function VisualizationPanel({
       yRangeMin: overallMin < 0 ? overallMin * 1.08 : 0,
       yRangeMax,
     };
-  }, [plotData, sigAnnotations, effectiveChartType, supportsSignificance, groupBy, flatData, groups, measureKey]);
+  }, [plotData, effectiveSigAnnotations, effectiveChartType, supportsSignificance, getGrouping, flatData, groupLabels, measureKey]);
 
   const handleExport = useCallback(
     async (format: "svg" | "png") => {
@@ -6467,6 +6643,11 @@ function VisualizationPanel({
                     Last run: {autoStatsSummary.tested} tested, {autoStatsSummary.added} added ({autoStatsSummary.method}, {autoStatsSummary.correction}).
                   </p>
                 )}
+                {sigAnnotations.length === 0 && resultDrivenSigAnnotations.length > 0 && (
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    Using {resultDrivenSigAnnotations.length} saved comparison{resultDrivenSigAnnotations.length === 1 ? "" : "s"} from the current statistical result.
+                  </p>
+                )}
               </div>
 
               {showManualSigControls && (
@@ -6603,7 +6784,7 @@ function VisualizationPanel({
                       paper_bgcolor: "rgba(255,255,255,0.96)",
                       plot_bgcolor: "rgba(248,250,252,0.85)",
                       font: { color: "#0f172a" },
-                      margin: { l: 70, r: 30, t: sigAnnotations.length > 0 ? 80 + sigAnnotations.length * 20 : 60, b: 60 },
+                      margin: { l: 70, r: 30, t: effectiveSigAnnotations.length > 0 ? 80 + effectiveSigAnnotations.length * 20 : 60, b: 60 },
                       yaxis: {
                         ...((plotData.layout as Record<string, unknown>).yaxis as Partial<Plotly.Layout["yaxis"]> || {}),
                         ...(sigShapesAndAnnotations.yRangeMax !== null

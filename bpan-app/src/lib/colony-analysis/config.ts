@@ -169,6 +169,36 @@ export function normalizeVisualizationDraft(
 
 export function normalizeSavedResult(result: Record<string, unknown> | null | undefined) {
   if (!result || typeof result !== "object") return null;
+  const rawFigureMetadata =
+    result.figureMetadata && typeof result.figureMetadata === "object"
+      ? (result.figureMetadata as Record<string, unknown>)
+      : {};
+  const figureMetadata = {
+    chartType: typeof rawFigureMetadata.chartType === "string" ? rawFigureMetadata.chartType : "bar_sem",
+    title: typeof rawFigureMetadata.title === "string" ? rawFigureMetadata.title : "",
+    primaryMeasure: typeof rawFigureMetadata.primaryMeasure === "string" ? rawFigureMetadata.primaryMeasure : "",
+    secondaryMeasure: typeof rawFigureMetadata.secondaryMeasure === "string" ? rawFigureMetadata.secondaryMeasure : undefined,
+    grouping: typeof rawFigureMetadata.grouping === "string" ? rawFigureMetadata.grouping : "Genotype × Sex",
+    significanceSource:
+      typeof rawFigureMetadata.significanceSource === "string"
+        ? rawFigureMetadata.significanceSource
+        : "No significance annotations",
+    annotationCount:
+      typeof rawFigureMetadata.annotationCount === "number"
+        ? rawFigureMetadata.annotationCount
+        : Number.isFinite(Number(rawFigureMetadata.annotationCount))
+          ? Number(rawFigureMetadata.annotationCount)
+          : 0,
+    recommendedChartType:
+      typeof rawFigureMetadata.recommendedChartType === "string"
+        ? rawFigureMetadata.recommendedChartType
+        : undefined,
+    resultFamily: typeof rawFigureMetadata.resultFamily === "string" ? rawFigureMetadata.resultFamily : "general",
+  };
+  const rawFigurePacket =
+    result.figurePacket && typeof result.figurePacket === "object"
+      ? (result.figurePacket as Record<string, unknown>)
+      : {};
   return {
     ...result,
     reportWarnings: Array.isArray(result.reportWarnings) ? result.reportWarnings.map((value) => String(value)) : [],
@@ -176,6 +206,14 @@ export function normalizeSavedResult(result: Record<string, unknown> | null | un
     reportResultsText: typeof result.reportResultsText === "string" ? result.reportResultsText : "",
     reportMethodsText: typeof result.reportMethodsText === "string" ? result.reportMethodsText : "",
     reportCaption: typeof result.reportCaption === "string" ? result.reportCaption : "",
+    figureMetadata,
+    figurePacket: {
+      figureMetadata,
+      caption: typeof rawFigurePacket.caption === "string" ? rawFigurePacket.caption : "",
+      linkedSummary: typeof rawFigurePacket.linkedSummary === "string" ? rawFigurePacket.linkedSummary : "",
+      linkedResultsText: typeof rawFigurePacket.linkedResultsText === "string" ? rawFigurePacket.linkedResultsText : "",
+      warnings: Array.isArray(rawFigurePacket.warnings) ? rawFigurePacket.warnings.map((value) => String(value)) : [],
+    },
     resultTables: Array.isArray(result.resultTables) ? result.resultTables : [],
     diagnostics: Array.isArray(result.diagnostics) ? result.diagnostics : [],
     multiEndpointResults: Array.isArray(result.multiEndpointResults) ? result.multiEndpointResults : [],

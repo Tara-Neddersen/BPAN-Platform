@@ -7,6 +7,7 @@ import type {
   MultiEndpointResultSummary,
   StructuredResultTable,
 } from "@/lib/colony-analysis/types";
+import { deriveSignificanceAnnotationsFromResult, getFigureSignificanceSource } from "@/lib/colony-analysis/visualization";
 
 function round(n: number, d = 4): number {
   return Math.round(n * 10 ** d) / 10 ** d;
@@ -404,14 +405,12 @@ export function generateAnalysisReport(params: {
     visualizationDraft.measureKey2 && (measureLabels[visualizationDraft.measureKey2] || visualizationDraft.measureKey2)
       ? measureLabels[visualizationDraft.measureKey2] || visualizationDraft.measureKey2
       : undefined;
-  const significanceSource =
-    visualizationDraft.chartType === "scatter" || visualizationDraft.chartType === "timepoint_line"
-      ? "No discrete significance brackets applied"
-      : visualizationDraft.autoRunSigStars
-        ? `Auto significance (${visualizationDraft.autoStatsMethod}, ${visualizationDraft.autoPAdjust})`
-        : visualizationDraft.sigAnnotations.length > 0
-          ? "Manual significance annotations"
-          : "No significance annotations";
+  const resultDrivenAnnotations = deriveSignificanceAnnotationsFromResult(result);
+  const significanceSource = getFigureSignificanceSource(result, visualizationDraft);
+  const annotationCount =
+    visualizationDraft.sigAnnotations.length > 0
+      ? visualizationDraft.sigAnnotations.length
+      : resultDrivenAnnotations.length;
 
   const caption = [
     `${figureTitle}.`,
@@ -440,7 +439,7 @@ export function generateAnalysisReport(params: {
     ...(secondaryMeasure ? { secondaryMeasure } : {}),
     grouping: getFigureGroupingLabel(visualizationDraft.groupBy),
     significanceSource,
-    annotationCount: visualizationDraft.sigAnnotations.length,
+    annotationCount,
     recommendedChartType: getRecommendedChartType(result, visualizationDraft),
     resultFamily: getResultFamily(result),
   };
