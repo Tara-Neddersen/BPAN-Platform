@@ -383,6 +383,490 @@ function spearmanCorrelation(x: number[], y: number[]): { rho: number; t: number
   };
 }
 
+function pairedTTest(a: number[], b: number[]): { t: number; df: number; p: number; cohenDz: number } {
+  if (a.length !== b.length || a.length < 2) return { t: 0, df: Math.max(0, a.length - 1), p: 1, cohenDz: 0 };
+  const diffs = a.map((value, index) => value - b[index]);
+  const meanDiff = mean(diffs);
+  const sdDiff = stdDev(diffs);
+  const seDiff = sdDiff / Math.sqrt(diffs.length);
+  if (!Number.isFinite(seDiff) || seDiff === 0) return { t: 0, df: diffs.length - 1, p: 1, cohenDz: 0 };
+  const t = meanDiff / seDiff;
+  const df = diffs.length - 1;
+  const p = 1 - approxFCDF(t * t, 1, df);
+  return { t: round(t), df, p: round(p, 6), cohenDz: round(sdDiff === 0 ? 0 : meanDiff / sdDiff) };
+}
+
+function skewness(values: number[]): number {
+  const n = values.length;
+  if (n < 3) return 0;
+  const m = mean(values);
+  const s = stdDev(values);
+  if (s === 0) return 0;
+  const numerator = values.reduce((sum, value) => sum + ((value - m) / s) ** 3, 0);
+  return (n / ((n - 1) * (n - 2))) * numerator;
+}
+
+function excessKurtosis(values: number[]): number {
+  const n = values.length;
+  if (n < 4) return 0;
+  const m = mean(values);
+  const s = stdDev(values);
+  if (s === 0) return 0;
+  const numerator = values.reduce((sum, value) => sum + ((value - m) / s) ** 4, 0);
+  return (
+    ((n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3))) * numerator -
+    (3 * (n - 1) ** 2) / ((n - 2) * (n - 3))
+  );
+}
+
+function normalityScreen(label: string, values: number[]): AssumptionCheck {
+  if (values.length < 4) {
+    return {
+      name: `Normality (${label})`,
+      status: "info",
+      message: "Too few values for a meaningful normality screen.",
+    };
+  }
+  const s = skewness(values);
+  const k = excessKurtosis(values);
+  const jb = (values.length / 6) * (s ** 2 + (k ** 2) / 4);
+  const p = 1 - approxChiSquareCDF(jb, 2);
+  return {
+    name: `Normality (${label})`,
+    status: p < 0.05 ? "warn" : "pass",
+    message:
+      p < 0.05
+        ? `Jarque-Bera screen suggests non-normality (p = ${p < 0.001 ? "< 0.001" : p.toFixed(4)}).`
+        : `Jarque-Bera screen did not flag a strong normality issue (p = ${p.toFixed(4)}).`,
+    statistic: round(jb),
+    p: round(p, 6),
+  };
+}
+
+function brownForsytheTest(groups: Array<{ label: string; values: number[] }>): AssumptionCheck {
+  const transformed = groups
+    .map((group) => ({
+      label: group.label,
+      values: group.values.map((value) => Math.abs(value - median(group.values))),
+    }))
+    .filter((group) => group.values.length > 0);
+  const result = oneWayAnova(transformed.map((group) => group.values));
+  return {
+    name: "Equal variance",
+    status: result.p < 0.05 ? "warn" : "pass",
+    message:
+      result.p < 0.05
+        ? `Brown-Forsythe screen suggests unequal variances (p = ${result.p < 0.001 ? "< 0.001" : result.p.toFixed(4)}).`
+        : `Brown-Forsythe screen did not flag a strong variance imbalance (p = ${result.p.toFixed(4)}).`,
+    statistic: result.F,
+    p: result.p,
+  };
+}
+
+function applyPAdjustment(pValues: number[], method: "none" | "bonferroni" | "holm" | "fdr"): number[] {
+  if (method === "none") return pValues.map((value) => round(value, 6));
+  if (method === "bonferroni") return pValues.map((value) => round(Math.min(value * pValues.length, 1), 6));
+
+  const indexed = pValues.map((value, index) => ({ value, index })).sort((a, b) => a.value - b.value);
+  const adjusted = new Array<number>(pValues.length).fill(1);
+
+  if (method === "holm") {
+    let runningMax = 0;
+    indexed.forEach((entry, order) => {
+      const candidate = Math.min(entry.value * (pValues.length - order), 1);
+      runningMax = Math.max(runningMax, candidate);
+      adjusted[entry.index] = round(runningMax, 6);
+    });
+    return adjusted;
+  }
+
+  let runningMin = 1;
+  for (let i = indexed.length - 1; i >= 0; i--) {
+    const rank = i + 1;
+    const candidate = Math.min((indexed[i].value * pValues.length) / rank, 1);
+    runningMin = Math.min(runningMin, candidate);
+    adjusted[indexed[i].index] = round(runningMin, 6);
+  }
+  return adjusted;
+}
+
+function pairwiseGroupComparisons(
+  groups: Array<{ label: string; values: number[] }>,
+  options: {
+    pAdjustMethod: "none" | "bonferroni" | "holm" | "fdr";
+    paired?: boolean;
+    pooledVariance?: boolean;
+    errorDf?: number;
+  },
+) {
+  const rawComparisons: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < groups.length; i++) {
+    for (let j = i + 1; j < groups.length; j++) {
+      const a = groups[i];
+      const b = groups[j];
+      if (a.values.length < 2 || b.values.length < 2) continue;
+      if (options.paired) {
+        if (a.values.length !== b.values.length) continue;
+        const paired = pairedTTest(a.values, b.values);
+        rawComparisons.push({
+          comparison: `${a.label} vs ${b.label}`,
+          statistic_label: "t",
+          statistic: paired.t,
+          df: paired.df,
+          p: paired.p,
+          effect_label: "Cohen's dz",
+          effect_size: paired.cohenDz,
+        });
+        continue;
+      }
+
+      if (options.pooledVariance && options.errorDf && options.errorDf > 0) {
+        const pooledVariance =
+          (((a.values.length - 1) * stdDev(a.values) ** 2) + ((b.values.length - 1) * stdDev(b.values) ** 2)) /
+          Math.max(a.values.length + b.values.length - 2, 1);
+        const se = Math.sqrt(pooledVariance * (1 / a.values.length + 1 / b.values.length));
+        const t = se === 0 ? 0 : (mean(a.values) - mean(b.values)) / se;
+        const p = 1 - approxFCDF(t * t, 1, options.errorDf);
+        rawComparisons.push({
+          comparison: `${a.label} vs ${b.label}`,
+          statistic_label: "t",
+          statistic: round(t),
+          df: options.errorDf,
+          p: round(p, 6),
+          effect_label: "Mean diff",
+          effect_size: round(mean(a.values) - mean(b.values)),
+        });
+        continue;
+      }
+
+      const result = welchTTest(a.values, b.values);
+      rawComparisons.push({
+        comparison: `${a.label} vs ${b.label}`,
+        statistic_label: "t",
+        statistic: result.t,
+        df: result.df,
+        p: result.p,
+        effect_label: "Cohen's d",
+        effect_size: result.cohenD,
+      });
+    }
+  }
+
+  const adjusted = applyPAdjustment(
+    rawComparisons.map((comparison) => Number(comparison.p)),
+    options.pAdjustMethod,
+  );
+  return rawComparisons.map((comparison, index) => ({
+    ...comparison,
+    adjusted_p: adjusted[index],
+    significant: adjusted[index] < 0.05,
+  }));
+}
+
+function buildLongitudinalDataset(rows: FlatRow[], measureKey: string, betweenFactor: AnalysisFactor | "__none__") {
+  const subjects = new Map<
+    string,
+    {
+      identifier: string;
+      between: string;
+      values: Map<number, number>;
+    }
+  >();
+  const availableTimepoints = Array.from(
+    new Set(
+      rows
+        .map((row) => ({ timepoint: row.timepoint, value: Number(row[measureKey]) }))
+        .filter((entry) => !Number.isNaN(entry.value))
+        .map((entry) => entry.timepoint),
+    ),
+  ).sort((a, b) => a - b);
+
+  rows.forEach((row) => {
+    const value = Number(row[measureKey]);
+    if (Number.isNaN(value)) return;
+    const entry = subjects.get(row.animal_id) || {
+      identifier: row.identifier,
+      between: betweenFactor === "__none__" ? "All animals" : getFactorValue(row, betweenFactor),
+      values: new Map<number, number>(),
+    };
+    entry.values.set(row.timepoint, value);
+    subjects.set(row.animal_id, entry);
+  });
+
+  const completeSubjects = Array.from(subjects.entries())
+    .filter(([, entry]) => availableTimepoints.every((timepoint) => entry.values.has(timepoint)))
+    .map(([animalId, entry]) => ({
+      animalId,
+      identifier: entry.identifier,
+      between: entry.between,
+      values: availableTimepoints.map((timepoint) => Number(entry.values.get(timepoint))),
+    }));
+
+  const timepointPairs = availableTimepoints.map((timepoint, index) => ({
+    timepoint,
+    label: `${timepoint} Day`,
+    index,
+  }));
+
+  return {
+    availableTimepoints,
+    timepointPairs,
+    subjects,
+    completeSubjects,
+    isComplete: subjects.size > 0 && completeSubjects.length === subjects.size,
+  };
+}
+
+function repeatedMeasuresAnova(
+  rows: FlatRow[],
+  measureKey: string,
+  pAdjustMethod: "none" | "bonferroni" | "holm" | "fdr",
+) {
+  const dataset = buildLongitudinalDataset(rows, measureKey, "__none__");
+  const nSubjects = dataset.completeSubjects.length;
+  const k = dataset.availableTimepoints.length;
+  if (k < 2) return { error: "Repeated-measures ANOVA needs at least 2 timepoints in the included data." } as const;
+  if (!dataset.isComplete) return { error: "Repeated-measures ANOVA needs complete values for every included animal across all selected timepoints." } as const;
+  if (nSubjects < 2) return { error: "Repeated-measures ANOVA needs at least 2 complete animals." } as const;
+
+  const matrix = dataset.completeSubjects.map((subject) => subject.values);
+  const grandMean = mean(matrix.flat());
+  const subjectMeans = matrix.map((values) => mean(values));
+  const timeMeans = dataset.availableTimepoints.map((_, index) => mean(matrix.map((subject) => subject[index])));
+
+  let ssTotal = 0;
+  matrix.forEach((subjectValues) => subjectValues.forEach((value) => { ssTotal += (value - grandMean) ** 2; }));
+  const ssSubjects = k * subjectMeans.reduce((sum, subjectMean) => sum + (subjectMean - grandMean) ** 2, 0);
+  const ssTime = nSubjects * timeMeans.reduce((sum, timeMean) => sum + (timeMean - grandMean) ** 2, 0);
+  const ssError = Math.max(0, ssTotal - ssSubjects - ssTime);
+
+  const dfTime = k - 1;
+  const dfError = (nSubjects - 1) * (k - 1);
+  const msTime = dfTime > 0 ? ssTime / dfTime : 0;
+  const msError = dfError > 0 ? ssError / dfError : 0;
+  const F = msError > 0 ? msTime / msError : 0;
+  const p = dfTime > 0 && dfError > 0 ? 1 - approxFCDF(F, dfTime, dfError) : 1;
+
+  const assumptionChecks = [
+    ...dataset.availableTimepoints.map((timepoint, index) =>
+      normalityScreen(`${timepoint} Day`, matrix.map((subject) => subject[index])),
+    ),
+  ];
+  if (k > 2) {
+    const diffVariances: number[] = [];
+    for (let i = 0; i < k; i++) {
+      for (let j = i + 1; j < k; j++) {
+        const diffs = matrix.map((subject) => subject[i] - subject[j]);
+        diffVariances.push(stdDev(diffs) ** 2);
+      }
+    }
+    const positiveVariances = diffVariances.filter((value) => value > 0);
+    const varianceRatio =
+      positiveVariances.length > 1 ? Math.max(...positiveVariances) / Math.min(...positiveVariances) : 1;
+    assumptionChecks.push({
+      name: "Sphericity",
+      status: varianceRatio > 4 ? "warn" : "info",
+      message:
+        varianceRatio > 4
+          ? "Heuristic sphericity screen suggests uneven difference-score variances across timepoints."
+          : "Sphericity screen is heuristic in this release; no strong variance imbalance was detected.",
+      statistic: round(varianceRatio),
+    });
+  }
+
+  const postHoc = pairwiseGroupComparisons(
+    dataset.timepointPairs.map((timepoint) => ({
+      label: timepoint.label,
+      values: matrix.map((subject) => subject[timepoint.index]),
+    })),
+    { paired: true, pAdjustMethod },
+  );
+
+  return {
+    test: "Repeated-measures ANOVA",
+    n_subjects: nSubjects,
+    n_timepoints: k,
+    F: round(F),
+    df_time: dfTime,
+    df_error: dfError,
+    p: round(p, 6),
+    partial_eta_sq: round(ssTime / Math.max(ssTime + ssError, 1e-12)),
+    anova_table: [
+      {
+        source: "Timepoint",
+        ss: round(ssTime),
+        df: dfTime,
+        ms: round(msTime),
+        F: round(F),
+        p: round(p, 6),
+        partial_eta_sq: round(ssTime / Math.max(ssTime + ssError, 1e-12)),
+      },
+      { source: "Subject", ss: round(ssSubjects), df: nSubjects - 1, ms: round((nSubjects - 1) > 0 ? ssSubjects / (nSubjects - 1) : 0) },
+      { source: "Residual", ss: round(ssError), df: dfError, ms: round(msError) },
+    ],
+    group_stats: dataset.timepointPairs.map((timepoint) => {
+      const values = matrix.map((subject) => subject[timepoint.index]);
+      return {
+        group: timepoint.label,
+        n: values.length,
+        mean: round(mean(values)),
+        sd: round(stdDev(values)),
+        sem: round(sem(values)),
+        median: round(median(values)),
+      };
+    }),
+    posthoc_label: "Pairwise timepoint comparisons",
+    comparisons: postHoc,
+    assumption_checks: assumptionChecks,
+    warning: k > 2 ? "Sphericity is screened heuristically in this release rather than with a full Mauchly test." : undefined,
+  };
+}
+
+function mixedEffectsApproximation(
+  rows: FlatRow[],
+  measureKey: string,
+  betweenFactor: AnalysisFactor | "__none__",
+  pAdjustMethod: "none" | "bonferroni" | "holm" | "fdr",
+) {
+  const validRows = rows
+    .map((row) => ({
+      ...row,
+      y: Number(row[measureKey]),
+      timeLabel: `${row.timepoint} Day`,
+      betweenLabel: betweenFactor === "__none__" ? "All animals" : getFactorValue(row, betweenFactor),
+    }))
+    .filter((row) => !Number.isNaN(row.y));
+
+  const subjectLevels = Array.from(new Set(validRows.map((row) => row.animal_id))).sort();
+  const timeLevels = Array.from(new Set(validRows.map((row) => row.timeLabel))).sort((a, b) => Number.parseInt(a) - Number.parseInt(b));
+  const betweenLevels = Array.from(new Set(validRows.map((row) => row.betweenLabel))).sort();
+  if (timeLevels.length < 2) return { error: "Mixed-effects needs at least 2 timepoints in the included data." } as const;
+  if (subjectLevels.length < 2) return { error: "Mixed-effects needs at least 2 animals with data." } as const;
+
+  const baseDesign = validRows.map((row) => [
+    1,
+    ...subjectLevels.slice(1).map((subject) => (row.animal_id === subject ? 1 : 0)),
+  ]);
+  const timeDesign = validRows.map((row) => [
+    ...baseDesign[validRows.indexOf(row)],
+    ...timeLevels.slice(1).map((level) => (row.timeLabel === level ? 1 : 0)),
+  ]);
+  const interactionDesign = validRows.map((row) => {
+    const base = [
+      ...timeDesign[validRows.indexOf(row)],
+    ];
+    if (betweenFactor === "__none__" || betweenLevels.length < 2) return base;
+    const betweenDummies = betweenLevels.slice(1).map((level) => (row.betweenLabel === level ? 1 : 0));
+    for (const timeLevel of timeLevels.slice(1)) {
+      for (const betweenDummy of betweenDummies) base.push((row.timeLabel === timeLevel ? 1 : 0) * betweenDummy);
+    }
+    return base;
+  });
+
+  const y = validRows.map((row) => row.y);
+  const fitBase = fitLinearModel(baseDesign, y);
+  const fitTime = fitLinearModel(timeDesign, y);
+  const fitInteraction = fitLinearModel(interactionDesign, y);
+  if (!fitBase || !fitTime || !fitInteraction) {
+    return { error: "Could not fit the mixed-effects approximation with the current data." } as const;
+  }
+
+  const dfTime = timeLevels.length - 1;
+  const ssTime = Math.max(0, fitBase.sse - fitTime.sse);
+  const msTime = dfTime > 0 ? ssTime / dfTime : 0;
+  const msError = fitTime.dfResidual > 0 ? fitTime.sse / fitTime.dfResidual : 0;
+  const fTime = msError > 0 ? msTime / msError : 0;
+  const pTime = dfTime > 0 && fitTime.dfResidual > 0 ? 1 - approxFCDF(fTime, dfTime, fitTime.dfResidual) : 1;
+
+  let interactionRow: Record<string, unknown> | null = null;
+  if (betweenFactor !== "__none__" && betweenLevels.length > 1) {
+    const dfInteraction = (timeLevels.length - 1) * (betweenLevels.length - 1);
+    const ssInteraction = Math.max(0, fitTime.sse - fitInteraction.sse);
+    const msInteraction = dfInteraction > 0 ? ssInteraction / dfInteraction : 0;
+    const msInteractionError = fitInteraction.dfResidual > 0 ? fitInteraction.sse / fitInteraction.dfResidual : 0;
+    const fInteraction = msInteractionError > 0 ? msInteraction / msInteractionError : 0;
+    const pInteraction =
+      dfInteraction > 0 && fitInteraction.dfResidual > 0
+        ? 1 - approxFCDF(fInteraction, dfInteraction, fitInteraction.dfResidual)
+        : 1;
+    interactionRow = {
+      source: `Timepoint × ${getFactorLabel(betweenFactor)}`,
+      ss: round(ssInteraction),
+      df: dfInteraction,
+      ms: round(msInteraction),
+      F: round(fInteraction),
+      p: round(pInteraction, 6),
+      partial_eta_sq: round(ssInteraction / Math.max(ssInteraction + fitInteraction.sse, 1e-12)),
+    };
+  }
+
+  const postHoc = pairwiseGroupComparisons(
+    timeLevels.map((timeLabel) => ({
+      label: timeLabel,
+      values: validRows
+        .filter((row) => row.timeLabel === timeLabel)
+        .map((row) => row.y),
+    })),
+    { pAdjustMethod },
+  );
+
+  const assumptionChecks = [
+    ...timeLevels.map((timeLabel) =>
+      normalityScreen(
+        timeLabel,
+        validRows.filter((row) => row.timeLabel === timeLabel).map((row) => row.y),
+      ),
+    ),
+  ];
+
+  return {
+    test: betweenFactor === "__none__" ? "Mixed-effects approximation" : `Mixed-effects approximation with ${getFactorLabel(betweenFactor)}`,
+    n_subjects: subjectLevels.length,
+    n_timepoints: timeLevels.length,
+    F: round(fTime),
+    df_time: dfTime,
+    df_error: fitTime.dfResidual,
+    p: round(pTime, 6),
+    partial_eta_sq: round(ssTime / Math.max(ssTime + fitTime.sse, 1e-12)),
+    anova_table: [
+      {
+        source: "Timepoint",
+        ss: round(ssTime),
+        df: dfTime,
+        ms: round(msTime),
+        F: round(fTime),
+        p: round(pTime, 6),
+        partial_eta_sq: round(ssTime / Math.max(ssTime + fitTime.sse, 1e-12)),
+      },
+      ...(interactionRow ? [interactionRow] : []),
+      {
+        source: "Residual",
+        ss: round(fitInteraction.sse),
+        df: fitInteraction.dfResidual,
+        ms: round(fitInteraction.dfResidual > 0 ? fitInteraction.sse / fitInteraction.dfResidual : 0),
+      },
+    ],
+    group_stats: timeLevels.map((timeLabel) => {
+      const values = validRows.filter((row) => row.timeLabel === timeLabel).map((row) => row.y);
+      return {
+        group: timeLabel,
+        n: values.length,
+        mean: round(mean(values)),
+        sd: round(stdDev(values)),
+        sem: round(sem(values)),
+        median: round(median(values)),
+      };
+    }),
+    comparisons: postHoc,
+    posthoc_label: "Pairwise timepoint comparisons",
+    assumption_checks: assumptionChecks,
+    warning:
+      betweenFactor === "__none__"
+        ? "This mixed-effects result is approximated with per-animal intercept terms so incomplete longitudinal data can still be modeled."
+        : `This mixed-effects result uses per-animal intercept terms; the ${getFactorLabel(betweenFactor)} main effect itself is absorbed by subject intercepts, while timepoint and interaction terms remain testable.`,
+  };
+}
+
 function getFactorValue(row: FlatRow, factor: AnalysisFactor): string {
   switch (factor) {
     case "sex":
@@ -677,6 +1161,12 @@ interface ColonyAnalysisStatsDraft {
   factorB: AnalysisFactor;
   group1: string;
   group2: string;
+  postHocMethod: "none" | "tukey";
+  pAdjustMethod: "none" | "bonferroni" | "holm" | "fdr";
+  modelKind: "guided" | "repeated_measures" | "mixed_effects";
+  subjectFactor: "animal_id";
+  withinSubjectFactor: "timepoint";
+  betweenSubjectFactor: AnalysisFactor | "__none__";
 }
 
 interface ColonyAnalysisVisualizationDraft {
@@ -718,6 +1208,14 @@ interface AnalysisSuggestion {
   reason: string;
 }
 
+interface AssumptionCheck {
+  name: string;
+  status: "pass" | "warn" | "info";
+  message: string;
+  statistic?: number;
+  p?: number;
+}
+
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 interface ColonyAnalysisPanelProps {
@@ -751,6 +1249,12 @@ function defaultStatsDraft(): ColonyAnalysisStatsDraft {
     factorB: "sex",
     group1: "",
     group2: "",
+    postHocMethod: "none",
+    pAdjustMethod: "holm",
+    modelKind: "guided",
+    subjectFactor: "animal_id",
+    withinSubjectFactor: "timepoint",
+    betweenSubjectFactor: "__none__",
   };
 }
 
@@ -800,6 +1304,25 @@ function suggestAnalysisTests(params: {
   const groups = Array.from(new Set(flatData.map((row) => row.group))).filter(Boolean);
   const sexes = Array.from(new Set(flatData.map((row) => row.sex))).filter(Boolean);
   const genotypes = Array.from(new Set(flatData.map((row) => row.genotype))).filter(Boolean);
+  const repeatedSubjectCount = Array.from(
+    flatData.reduce<Map<string, Set<number>>>((map, row) => {
+      const set = map.get(row.animal_id) || new Set<number>();
+      set.add(row.timepoint);
+      map.set(row.animal_id, set);
+      return map;
+    }, new Map()),
+  ).filter(([, timepoints]) => timepoints.size > 1).length;
+  const longitudinalCandidate = repeatedSubjectCount >= 2;
+  const longitudinalComplete =
+    longitudinalCandidate &&
+    Array.from(
+      flatData.reduce<Map<string, Set<number>>>((map, row) => {
+        const set = map.get(row.animal_id) || new Set<number>();
+        set.add(row.timepoint);
+        map.set(row.animal_id, set);
+        return map;
+      }, new Map()),
+    ).every(([, timepoints]) => timepoints.size === new Set(flatData.map((row) => row.timepoint)).size);
 
   if (numericKeys.length >= 2) {
     suggestions.push({
@@ -852,11 +1375,25 @@ function suggestAnalysisTests(params: {
   }
 
   if (hasMultipleTimepoints) {
-    suggestions.push({
-      testType: "descriptive",
-      label: "Repeated / Longitudinal Review",
-      reason: "Multiple timepoints are present. This release supports timepoint-aware summaries and line graphs; repeated-measures modeling is the next expansion area.",
-    });
+    suggestions.unshift(
+      longitudinalComplete
+        ? {
+            testType: "repeated_measures_anova",
+            label: "Repeated-Measures ANOVA",
+            reason: "The same animals appear across multiple timepoints with complete longitudinal values.",
+          }
+        : longitudinalCandidate
+        ? {
+            testType: "mixed_effects",
+            label: "Mixed-Effects",
+            reason: "Animals span multiple timepoints, but some longitudinal values are missing, so the mixed-effects path is safer.",
+          }
+        : {
+            testType: "descriptive",
+            label: "Longitudinal Review",
+            reason: "Multiple timepoints are present, but there are not enough repeated animals yet for longitudinal inference.",
+          },
+    );
   }
 
   return suggestions.filter(
@@ -1904,6 +2441,8 @@ export function ColonyAnalysisPanel({
               numericKeys={numericMeasureKeys}
               measureLabels={measureLabels}
               groups={availableGroups}
+              includedCount={includedAnimalCount}
+              excludedCount={excludedAnimalCount}
               initialConfig={statsDraft}
               initialResult={savedResult}
               onConfigChange={setStatsDraft}
@@ -2312,6 +2851,8 @@ function StatisticsPanel({
   numericKeys,
   measureLabels,
   groups,
+  includedCount,
+  excludedCount,
   initialConfig,
   initialResult,
   onConfigChange,
@@ -2321,6 +2862,8 @@ function StatisticsPanel({
   numericKeys: string[];
   measureLabels: Record<string, string>;
   groups: string[];
+  includedCount: number;
+  excludedCount: number;
   initialConfig?: ColonyAnalysisStatsDraft;
   initialResult?: Record<string, unknown> | null;
   onConfigChange?: (next: ColonyAnalysisStatsDraft) => void;
@@ -2334,6 +2877,12 @@ function StatisticsPanel({
   const [factorB, setFactorB] = useState<AnalysisFactor>(initialConfig?.factorB || "sex");
   const [group1, setGroup1] = useState(initialConfig?.group1 || "");
   const [group2, setGroup2] = useState(initialConfig?.group2 || "");
+  const [postHocMethod, setPostHocMethod] = useState<"none" | "tukey">(initialConfig?.postHocMethod || "none");
+  const [pAdjustMethod, setPAdjustMethod] = useState<"none" | "bonferroni" | "holm" | "fdr">(initialConfig?.pAdjustMethod || "holm");
+  const [modelKind, setModelKind] = useState<"guided" | "repeated_measures" | "mixed_effects">(initialConfig?.modelKind || "guided");
+  const [subjectFactor, setSubjectFactor] = useState<"animal_id">(initialConfig?.subjectFactor || "animal_id");
+  const [withinSubjectFactor, setWithinSubjectFactor] = useState<"timepoint">(initialConfig?.withinSubjectFactor || "timepoint");
+  const [betweenSubjectFactor, setBetweenSubjectFactor] = useState<AnalysisFactor | "__none__">(initialConfig?.betweenSubjectFactor || "__none__");
   const [currentResult, setCurrentResult] = useState<Record<string, unknown> | null>(initialResult || null);
   const [copied, setCopied] = useState(false);
 
@@ -2344,6 +2893,8 @@ function StatisticsPanel({
     { value: "anova", label: "1-way ANOVA", desc: "Compare all levels of one factor at once" },
     { value: "kruskal_wallis", label: "Kruskal-Wallis", desc: "Non-parametric alternative to 1-way ANOVA" },
     { value: "two_way_anova", label: "2-way ANOVA", desc: "Test two factors plus their interaction" },
+    { value: "repeated_measures_anova", label: "Repeated-measures ANOVA", desc: "Within-animal timepoint model for complete longitudinal data" },
+    { value: "mixed_effects", label: "Mixed-effects", desc: "Incomplete longitudinal data using per-animal intercept modeling" },
     { value: "multi_compare", label: "All Pairwise Comparisons", desc: "Run pairwise Welch t-tests across factor levels" },
     { value: "pearson", label: "Pearson Correlation", desc: "Linear association between two measures" },
     { value: "spearman", label: "Spearman Correlation", desc: "Rank-based association between two measures" },
@@ -2368,6 +2919,12 @@ function StatisticsPanel({
   }, [measureKey, measureKey2, numericKeys]);
 
   useEffect(() => {
+    if (testType === "repeated_measures_anova") setModelKind("repeated_measures");
+    else if (testType === "mixed_effects") setModelKind("mixed_effects");
+    else setModelKind("guided");
+  }, [testType]);
+
+  useEffect(() => {
     onConfigChange?.({
       testType,
       measureKey,
@@ -2377,8 +2934,14 @@ function StatisticsPanel({
       factorB,
       group1,
       group2,
+      postHocMethod,
+      pAdjustMethod,
+      modelKind,
+      subjectFactor,
+      withinSubjectFactor,
+      betweenSubjectFactor,
     });
-  }, [factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, onConfigChange, testType]);
+  }, [betweenSubjectFactor, factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, modelKind, onConfigChange, pAdjustMethod, postHocMethod, subjectFactor, testType, withinSubjectFactor]);
 
   useEffect(() => {
     onResultChange?.(currentResult);
@@ -2418,6 +2981,8 @@ function StatisticsPanel({
           test: "Descriptive Statistics",
           measure: measureLabels[measureKey] || measureKey,
           grouped_by: getFactorLabel(groupingFactor),
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
           ...results,
         });
         break;
@@ -2435,6 +3000,8 @@ function StatisticsPanel({
           measure: measureLabels[measureKey] || measureKey,
           grouped_by: getFactorLabel(groupingFactor),
           groups_compared: `${group1} vs ${group2}`,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
           ...result,
           significant_005: result.p < 0.05,
           significant_001: result.p < 0.01,
@@ -2456,6 +3023,8 @@ function StatisticsPanel({
           measure: measureLabels[measureKey] || measureKey,
           grouped_by: getFactorLabel(groupingFactor),
           groups_compared: `${group1} vs ${group2}`,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
           ...result,
           significant_005: result.p < 0.05,
           group1_stats: { name: group1, n: a.length, median: round(median(a)), mean_rank_proxy: round(mean(rankWithTies(a))) },
@@ -2464,25 +3033,43 @@ function StatisticsPanel({
         break;
       }
       case "anova": {
-        const allGroups = factorLevels.map((g) => getValues(g)).filter((g) => g.length >= 2);
+        const grouped = factorLevels.map((g) => ({ label: g, values: getValues(g) })).filter((g) => g.values.length >= 2);
+        const allGroups = grouped.map((group) => group.values);
         if (allGroups.length < 2) {
           toast.error("Need at least 2 groups with ≥ 2 values each");
           return;
         }
         const result = oneWayAnova(allGroups);
+        const assumptionChecks = [
+          ...grouped.map((group) => normalityScreen(group.label, group.values)),
+          brownForsytheTest(grouped),
+        ];
         const groupStats = factorLevels.map((g) => {
           const vals = getValues(g);
           return { group: g, n: vals.length, mean: round(mean(vals)), sd: round(stdDev(vals)) };
         }).filter((g) => g.n > 0);
+        const posthocComparisons =
+          postHocMethod === "none"
+            ? []
+            : pairwiseGroupComparisons(grouped, {
+                pAdjustMethod,
+                pooledVariance: postHocMethod === "tukey",
+                errorDf: result.dfWithin,
+              });
 
         setCurrentResult({
           test: "One-way ANOVA",
           measure: measureLabels[measureKey] || measureKey,
           grouped_by: getFactorLabel(groupingFactor),
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
           ...result,
           significant_005: result.p < 0.05,
           significant_001: result.p < 0.01,
           group_stats: groupStats,
+          comparisons: posthocComparisons,
+          posthoc_label: postHocMethod === "tukey" ? "Tukey-style pooled post-hoc" : undefined,
+          assumption_checks: assumptionChecks,
         });
         break;
       }
@@ -2497,6 +3084,8 @@ function StatisticsPanel({
           test: "Kruskal-Wallis",
           measure: measureLabels[measureKey] || measureKey,
           grouped_by: getFactorLabel(groupingFactor),
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
           ...result,
           significant_005: result.p < 0.05,
           group_stats: factorLevels
@@ -2514,50 +3103,97 @@ function StatisticsPanel({
           toast.error(result.error);
           return;
         }
+        const groupedCells = result.cellCounts.map((cell) => ({
+          label: `${String(cell.levelA)} / ${String(cell.levelB)}`,
+          values: flatData
+            .filter((row) => getFactorValue(row, factorA) === cell.levelA && getFactorValue(row, factorB) === cell.levelB)
+            .map((row) => Number(row[measureKey]))
+            .filter((value) => !Number.isNaN(value)),
+        }));
+        const assumptionChecks = [
+          ...groupedCells.map((cell) => normalityScreen(cell.label, cell.values)),
+          brownForsytheTest(groupedCells.filter((cell) => cell.values.length > 0)),
+        ];
+        const simpleEffects = result.levelsB.flatMap((levelB) =>
+          pairwiseGroupComparisons(
+            result.levelsA.map((levelA) => ({
+              label: `${levelA} @ ${levelB}`,
+              values: flatData
+                .filter((row) => getFactorValue(row, factorA) === levelA && getFactorValue(row, factorB) === levelB)
+                .map((row) => Number(row[measureKey]))
+                .filter((value) => !Number.isNaN(value)),
+            })),
+            { pAdjustMethod },
+          ),
+        );
         setCurrentResult({
           test: "Two-way ANOVA",
           measure: measureLabels[measureKey] || measureKey,
           factor_a: result.factorA,
           factor_b: result.factorB,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
           n: result.n,
           levels_a: result.levelsA,
           levels_b: result.levelsB,
           anova_table: result.table,
           cell_counts: result.cellCounts,
           warning: result.warning,
+          assumption_checks: assumptionChecks,
+          comparisons: simpleEffects,
+          posthoc_label: "Simple-effects follow-up comparisons",
+        });
+        break;
+      }
+      case "repeated_measures_anova": {
+        const result = repeatedMeasuresAnova(flatData, measureKey, pAdjustMethod);
+        if ("error" in result) {
+          toast.error(result.error);
+          return;
+        }
+        setCurrentResult({
+          ...result,
+          measure: measureLabels[measureKey] || measureKey,
+          model_kind: "repeated_measures_anova",
+          subject_factor: subjectFactor,
+          within_subject_factor: withinSubjectFactor,
+          between_subject_factor: betweenSubjectFactor,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+        });
+        break;
+      }
+      case "mixed_effects": {
+        const result = mixedEffectsApproximation(flatData, measureKey, betweenSubjectFactor, pAdjustMethod);
+        if ("error" in result) {
+          toast.error(result.error);
+          return;
+        }
+        setCurrentResult({
+          ...result,
+          measure: measureLabels[measureKey] || measureKey,
+          model_kind: "mixed_effects",
+          subject_factor: subjectFactor,
+          within_subject_factor: withinSubjectFactor,
+          between_subject_factor: betweenSubjectFactor,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
         });
         break;
       }
       case "multi_compare": {
-        const comparisons: { comparison: string; t: number; p: number; cohenD: number; significant: boolean }[] = [];
-        for (let i = 0; i < factorLevels.length; i++) {
-          for (let j = i + 1; j < factorLevels.length; j++) {
-            const a = getValues(factorLevels[i]);
-            const b = getValues(factorLevels[j]);
-            if (a.length < 2 || b.length < 2) continue;
-            const result = welchTTest(a, b);
-            comparisons.push({
-              comparison: `${factorLevels[i]} vs ${factorLevels[j]}`,
-              t: result.t,
-              p: result.p,
-              cohenD: result.cohenD,
-              significant: result.p < 0.05,
-            });
-          }
-        }
-        // Bonferroni correction
-        const nComparisons = comparisons.length;
-        const corrected = comparisons.map((c) => ({
-          ...c,
-          p_bonferroni: round(Math.min(c.p * nComparisons, 1), 6),
-          significant_bonferroni: c.p * nComparisons < 0.05,
-        }));
+        const corrected = pairwiseGroupComparisons(
+          factorLevels.map((level) => ({ label: level, values: getValues(level) })).filter((group) => group.values.length >= 2),
+          { pAdjustMethod },
+        );
 
         setCurrentResult({
-          test: "All Pairwise Comparisons (Welch's t-test with Bonferroni correction)",
+          test: `All Pairwise Comparisons (${pAdjustMethod === "none" ? "uncorrected" : `${pAdjustMethod} adjusted`})`,
           measure: measureLabels[measureKey] || measureKey,
           grouped_by: getFactorLabel(groupingFactor),
-          n_comparisons: nComparisons,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          n_comparisons: corrected.length,
           comparisons: corrected,
         });
         break;
@@ -2578,6 +3214,8 @@ function StatisticsPanel({
           setCurrentResult({
             test: "Pearson Correlation",
             measure: `${measureLabels[measureKey] || measureKey} vs ${measureLabels[measureKey2] || measureKey2}`,
+            included_animals: includedCount,
+            excluded_animals: excludedCount,
             n: pairs.length,
             ...result,
             significant_005: result.p < 0.05,
@@ -2587,6 +3225,8 @@ function StatisticsPanel({
           setCurrentResult({
             test: "Spearman Correlation",
             measure: `${measureLabels[measureKey] || measureKey} vs ${measureLabels[measureKey2] || measureKey2}`,
+            included_animals: includedCount,
+            excluded_animals: excludedCount,
             n: pairs.length,
             ...result,
             significant_005: result.p < 0.05,
@@ -2595,7 +3235,7 @@ function StatisticsPanel({
         break;
       }
     }
-  }, [testType, measureKey, measureKey2, group1, group2, factorLevels, groupingFactor, factorA, factorB, flatData, measureLabels]);
+  }, [betweenSubjectFactor, excludedCount, factorA, factorB, factorLevels, flatData, group1, group2, groupingFactor, includedCount, measureKey, measureKey2, measureLabels, pAdjustMethod, postHocMethod, subjectFactor, testType, withinSubjectFactor]);
 
   const handleCopyResults = useCallback(() => {
     if (!currentResult) return;
@@ -2608,6 +3248,8 @@ function StatisticsPanel({
   const needsFactor = ["descriptive", "t_test", "mann_whitney", "anova", "kruskal_wallis", "multi_compare"].includes(testType);
   const needsTwoFactors = testType === "two_way_anova";
   const needsSecondMeasure = testType === "pearson" || testType === "spearman";
+  const needsLongitudinalModel = testType === "repeated_measures_anova" || testType === "mixed_effects";
+  const needsPAdjust = ["multi_compare", "repeated_measures_anova", "mixed_effects", "two_way_anova"].includes(testType) || (testType === "anova" && postHocMethod !== "none");
 
   return (
     <div className="space-y-4">
@@ -2710,6 +3352,47 @@ function StatisticsPanel({
               </>
             )}
 
+            {needsLongitudinalModel && (
+              <>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Subject</Label>
+                  <Select value={subjectFactor} onValueChange={(value) => setSubjectFactor(value as "animal_id")}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="animal_id">Animal</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Within-subject factor</Label>
+                  <Select value={withinSubjectFactor} onValueChange={(value) => setWithinSubjectFactor(value as "timepoint")}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="timepoint">Timepoint</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Between-subject factor</Label>
+                  <Select value={betweenSubjectFactor} onValueChange={(value) => setBetweenSubjectFactor(value as AnalysisFactor | "__none__")}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">None</SelectItem>
+                      {factorOptions.filter((option) => option.value !== "timepoint").map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+
             {needsGroups && (
               <>
                 <div className="min-w-0 sm:col-span-1 lg:col-span-2">
@@ -2740,7 +3423,47 @@ function StatisticsPanel({
                 </div>
               </>
             )}
+
+            {(testType === "anova") && (
+              <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                <Label className="text-xs mb-1 block">Post-hoc</Label>
+                <Select value={postHocMethod} onValueChange={(value) => setPostHocMethod(value as "none" | "tukey")}>
+                  <SelectTrigger className="w-full min-w-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="tukey">Tukey-style pooled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {needsPAdjust && (
+              <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                <Label className="text-xs mb-1 block">P-value correction</Label>
+                <Select value={pAdjustMethod} onValueChange={(value) => setPAdjustMethod(value as "none" | "bonferroni" | "holm" | "fdr")}>
+                  <SelectTrigger className="w-full min-w-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="bonferroni">Bonferroni</SelectItem>
+                    <SelectItem value="holm">Holm</SelectItem>
+                    <SelectItem value="fdr">FDR</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
+
+          {needsLongitudinalModel && (
+            <div className="rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-600">
+              {testType === "repeated_measures_anova"
+                ? "Repeated-measures ANOVA only runs on animals with complete values across the selected timepoints."
+                : "Mixed-effects uses per-animal intercept modeling so incomplete longitudinal data can still be analyzed."}
+            </div>
+          )}
 
           <Button onClick={runTest} disabled={!measureKey} className="w-full gap-1.5 bg-slate-900 text-white hover:bg-slate-800 sm:w-auto">
             <FlaskConical className="h-4 w-4" /> Run Analysis
@@ -2780,15 +3503,32 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
   const comparisons = result.comparisons as Array<Record<string, unknown>> | undefined;
   const anovaTable = result.anova_table as Array<Record<string, unknown>> | undefined;
   const cellCounts = result.cell_counts as Array<Record<string, unknown>> | undefined;
+  const assumptionChecks = result.assumption_checks as Array<Record<string, unknown>> | undefined;
+  const includedAnimals = result.included_animals as number | undefined;
+  const excludedAnimals = result.excluded_animals as number | undefined;
 
   return (
     <div className="space-y-3">
       <div className="text-xs text-slate-600">
         <span className="font-medium">Measure:</span> {String(result.measure)}
       </div>
+      {(includedAnimals !== undefined || excludedAnimals !== undefined) && (
+        <div className="text-xs text-slate-600">
+          <span className="font-medium">Analysis set:</span> {includedAnimals ?? 0} included / {excludedAnimals ?? 0} excluded
+        </div>
+      )}
       {result.grouped_by != null && (
         <div className="text-xs text-slate-600">
           <span className="font-medium">Grouped by:</span> {String(result.grouped_by)}
+        </div>
+      )}
+      {(result.subject_factor != null || result.within_subject_factor != null || result.between_subject_factor != null) && (
+        <div className="text-xs text-slate-600">
+          <span className="font-medium">Model:</span>{" "}
+          subject = {String(result.subject_factor || "animal")} · within = {String(result.within_subject_factor || "timepoint")}
+          {result.between_subject_factor && result.between_subject_factor !== "__none__"
+            ? ` · between = ${String(result.between_subject_factor)}`
+            : ""}
         </div>
       )}
       {result.warning != null && (
@@ -2815,7 +3555,7 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
       {comparisons == null && anovaTable == null && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           {Object.entries(result)
-            .filter(([k]) => !["test", "measure", "grouped_by", "group_stats", "group1_stats", "group2_stats", "comparisons", "anova_table", "cell_counts", "warning", "significant_005", "significant_001", "groups_compared", "levels_a", "levels_b", "factor_a", "factor_b"].includes(k) && typeof result[k] !== "object")
+            .filter(([k]) => !["test", "measure", "grouped_by", "group_stats", "group1_stats", "group2_stats", "comparisons", "anova_table", "cell_counts", "warning", "significant_005", "significant_001", "groups_compared", "levels_a", "levels_b", "factor_a", "factor_b", "assumption_checks", "included_animals", "excluded_animals", "posthoc_label", "subject_factor", "within_subject_factor", "between_subject_factor", "model_kind"].includes(k) && typeof result[k] !== "object")
             .map(([key, value]) => (
               <div key={key} className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
                 <div className="text-[10px] uppercase tracking-wide text-slate-500">{key.replace(/_/g, " ")}</div>
@@ -2824,6 +3564,29 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
                 </div>
               </div>
             ))}
+        </div>
+      )}
+
+      {assumptionChecks && assumptionChecks.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-slate-700">Assumption checks</div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {assumptionChecks.map((check, index) => (
+              <div
+                key={`${String(check.name)}-${index}`}
+                className={`rounded-lg border px-3 py-2 text-xs ${
+                  check.status === "warn"
+                    ? "border-amber-200 bg-amber-50 text-amber-900"
+                    : check.status === "pass"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                    : "border-slate-200 bg-slate-50 text-slate-700"
+                }`}
+              >
+                <div className="font-medium">{String(check.name)}</div>
+                <div className="mt-1">{String(check.message)}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -2987,31 +3750,41 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
 
       {/* Multi-comparison table */}
       {comparisons && (
-        <div className="overflow-x-auto rounded-md border border-slate-200">
+        <div className="space-y-2">
+          {result.posthoc_label != null && (
+            <div className="text-xs text-slate-600">
+              <span className="font-medium">Post-hoc:</span> {String(result.posthoc_label)}
+            </div>
+          )}
+          <div className="overflow-x-auto rounded-md border border-slate-200">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b bg-slate-50/70">
                 <th className="text-left py-1.5 px-2 font-medium text-muted-foreground">Comparison</th>
-                <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">t</th>
+                <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Statistic</th>
                 <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">p</th>
-                <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">p (Bonferroni)</th>
-                <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Cohen&apos;s d</th>
+                <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Adjusted p</th>
+                <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Effect</th>
                 <th className="text-center py-1.5 px-2 font-medium text-muted-foreground">Sig.</th>
               </tr>
             </thead>
             <tbody>
               {comparisons.map((c, i) => (
-                <tr key={i} className={`border-b last:border-0 ${c.significant_bonferroni ? "bg-green-50/50 dark:bg-green-950/10" : ""}`}>
+                <tr key={i} className={`border-b last:border-0 ${c.significant ? "bg-green-50/50 dark:bg-green-950/10" : ""}`}>
                   <td className="py-1.5 px-2 font-medium">{String(c.comparison)}</td>
-                  <td className="text-right py-1.5 px-2 tabular-nums">{formatNum(c.t as number, 3)}</td>
+                  <td className="text-right py-1.5 px-2 tabular-nums">
+                    {String(c.statistic_label || "stat")} = {formatNum(Number(c.statistic || 0), 3)}
+                  </td>
                   <td className="text-right py-1.5 px-2 tabular-nums">{(c.p as number) < 0.001 ? "< .001" : (c.p as number).toFixed(4)}</td>
-                  <td className="text-right py-1.5 px-2 tabular-nums">{(c.p_bonferroni as number) < 0.001 ? "< .001" : (c.p_bonferroni as number).toFixed(4)}</td>
-                  <td className="text-right py-1.5 px-2 tabular-nums">{formatNum(c.cohenD as number, 3)}</td>
+                  <td className="text-right py-1.5 px-2 tabular-nums">
+                    {(Number(c.adjusted_p ?? c.p) < 0.001) ? "< .001" : Number(c.adjusted_p ?? c.p).toFixed(4)}
+                  </td>
+                  <td className="text-right py-1.5 px-2 tabular-nums">
+                    {String(c.effect_label || "Effect")} = {formatNum(Number(c.effect_size || 0), 3)}
+                  </td>
                   <td className="text-center py-1.5 px-2">
-                    {c.significant_bonferroni ? (
+                    {c.significant ? (
                       <Badge className="bg-green-600 text-[10px]">*</Badge>
-                    ) : c.significant ? (
-                      <Badge variant="secondary" className="text-[10px]">(*)</Badge>
                     ) : (
                       <span className="text-muted-foreground">ns</span>
                     )}
@@ -3020,8 +3793,9 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
               ))}
             </tbody>
           </table>
-          <p className="text-[10px] text-muted-foreground mt-2 px-2">
-            * = significant after Bonferroni correction (α = 0.05/{String(result.n_comparisons)}); (*) = uncorrected only; ns = not significant
+          </div>
+          <p className="text-[10px] text-muted-foreground px-2">
+            Significance is based on the adjusted p-value shown above.
           </p>
         </div>
       )}
