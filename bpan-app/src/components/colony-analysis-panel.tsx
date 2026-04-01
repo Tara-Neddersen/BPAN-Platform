@@ -1216,6 +1216,23 @@ interface AssumptionCheck {
   p?: number;
 }
 
+interface AnalysisReportPayload {
+  reportSummary: string;
+  reportResultsText: string;
+  reportMethodsText: string;
+  reportCaption: string;
+  reportWarnings: string[];
+  figureMetadata: {
+    chartType: string;
+    title: string;
+    primaryMeasure: string;
+    secondaryMeasure?: string;
+    grouping: string;
+    significanceSource: string;
+    annotationCount: number;
+  };
+}
+
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 interface ColonyAnalysisPanelProps {
@@ -1292,6 +1309,129 @@ function summarizeAnalysisResult(result: Record<string, unknown> | null, include
   if (typeof result.r === "number") pieces.push(`r = ${formatNum(Number(result.r), 4)}`);
   if (typeof result.rho === "number") pieces.push(`rho = ${formatNum(Number(result.rho), 4)}`);
   return pieces.join(" | ");
+}
+
+function formatPValueForReport(value: unknown) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "n/a";
+  if (value < 0.001) return "p < 0.001";
+  return `p = ${value.toFixed(4)}`;
+}
+
+function getFigureGroupingLabel(groupBy: ColonyAnalysisVisualizationDraft["groupBy"]) {
+  switch (groupBy) {
+    case "sex":
+      return "Sex";
+    case "genotype":
+      return "Genotype";
+    case "cohort":
+      return "Cohort";
+    case "group":
+    default:
+      return "Genotype × Sex";
+  }
+}
+
+function generateAnalysisReport(params: {
+  result: Record<string, unknown> | null;
+  statsDraft: ColonyAnalysisStatsDraft;
+  visualizationDraft: ColonyAnalysisVisualizationDraft;
+  measureLabels: Record<string, string>;
+  includedCount: number;
+  excludedCount: number;
+  analysisName: string;
+  exclusions: Array<{ animalId: string; reason: string }>;
+}): AnalysisReportPayload | null {
+  const { result, statsDraft, visualizationDraft, measureLabels, includedCount, excludedCount } = params;
+  if (!result) return null;
+
+  const measure = String(result.measure || measureLabels[statsDraft.measureKey] || statsDraft.measureKey || "selected measure");
+  const groupedBy = String(result.grouped_by || result.factor_a || result.subject_factor || "current analysis grouping");
+  const assumptions = Array.isArray(result.assumption_checks)
+    ? (result.assumption_checks as Array<Record<string, unknown>>)
+        .filter((check) => check.status === "warn" || check.status === "info")
+        .map((check) => String(check.message || check.name || "Assumption warning"))
+    : [];
+  if (result.warning) assumptions.unshift(String(result.warning));
+
+  const posthocSummary = Array.isArray(result.comparisons) && result.comparisons.length > 0
+    ? ` Post-hoc analysis (${String(result.posthoc_label || "pairwise comparisons")}) identified ${result.comparisons.filter((comparison) => Boolean(comparison.significant)).length} significant comparison${result.comparisons.filter((comparison) => Boolean(comparison.significant)).length === 1 ? "" : "s"}.`
+    : "";
+
+  let resultsSentence = `${String(result.test || "Analysis")} on ${measure} used ${includedCount} included animals`;
+  if (excludedCount > 0) resultsSentence += ` with ${excludedCount} excluded from this revision`;
+  resultsSentence += ".";
+
+  if (typeof result.F === "number") {
+    const dfBits = [];
+    if (typeof result.dfBetween === "number") dfBits.push(result.dfBetween);
+    if (typeof result.dfWithin === "number") dfBits.push(result.dfWithin);
+    if (typeof result.df_time === "number") dfBits.push(result.df_time);
+    if (typeof result.df_error === "number") dfBits.push(result.df_error);
+    const dfText = dfBits.length >= 2 ? `F(${dfBits[0]}, ${dfBits[1]}) = ${formatNum(result.F, 3)}` : `F = ${formatNum(result.F, 3)}`;
+    resultsSentence += ` ${dfText}, ${formatPValueForReport(result.p)}.`;
+  } else if (typeof result.t === "number") {
+    const dfText = typeof result.df === "number" ? `t(${result.df}) = ${formatNum(result.t, 3)}` : `t = ${formatNum(result.t, 3)}`;
+    resultsSentence += ` ${dfText}, ${formatPValueForReport(result.p)}.`;
+  } else if (typeof result.H === "number") {
+    resultsSentence += ` H(${String(result.df ?? "n/a")}) = ${formatNum(result.H, 3)}, ${formatPValueForReport(result.p)}.`;
+  } else if (typeof result.r === "number" || typeof result.rho === "number") {
+    const label = typeof result.r === "number" ? "r" : "rho";
+    const value = typeof result.r === "number" ? Number(result.r) : Number(result.rho);
+    resultsSentence += ` ${label} = ${formatNum(value, 3)}, ${formatPValueForReport(result.p)}.`;
+  } else if (typeof result.p === "number") {
+    resultsSentence += ` ${formatPValueForReport(result.p)}.`;
+  }
+  resultsSentence += posthocSummary;
+
+  const methodsText = [
+    `Analysis used the saved Colony Analysis revision for ${params.analysisName || "this workspace"}.`,
+    `Outcome: ${measure}.`,
+    `Model/Test: ${String(result.test || statsDraft.testType)}.`,
+    `Grouping: ${groupedBy}.`,
+    `Included animals: ${includedCount}; excluded animals: ${excludedCount}.`,
+    statsDraft.pAdjustMethod !== "none" ? `Multiple-comparisons correction: ${statsDraft.pAdjustMethod}.` : "No multiple-comparisons correction was selected.",
+  ].join(" ");
+
+  const figureTitle = visualizationDraft.title || measure;
+  const primaryMeasure = measureLabels[visualizationDraft.measureKey] || visualizationDraft.measureKey || measure;
+  const secondaryMeasure =
+    visualizationDraft.measureKey2 && (measureLabels[visualizationDraft.measureKey2] || visualizationDraft.measureKey2)
+      ? measureLabels[visualizationDraft.measureKey2] || visualizationDraft.measureKey2
+      : undefined;
+  const significanceSource =
+    visualizationDraft.chartType === "scatter" || visualizationDraft.chartType === "timepoint_line"
+      ? "No discrete significance brackets applied"
+      : visualizationDraft.autoRunSigStars
+      ? `Auto significance (${visualizationDraft.autoStatsMethod}, ${visualizationDraft.autoPAdjust})`
+      : visualizationDraft.sigAnnotations.length > 0
+      ? "Manual significance annotations"
+      : "No significance annotations";
+
+  const caption = [
+    `${figureTitle}.`,
+    `${visualizationDraft.chartType.replace(/_/g, " ")} plot of ${primaryMeasure}${secondaryMeasure ? ` versus ${secondaryMeasure}` : ""} grouped by ${getFigureGroupingLabel(visualizationDraft.groupBy)}.`,
+    `Linked analysis: ${String(result.test || "Analysis")} (${formatPValueForReport(result.p)}).`,
+    assumptions.length > 0 ? `Warnings: ${assumptions.join(" ")}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return {
+    reportSummary: summarizeAnalysisResult(result, includedCount, excludedCount) || "",
+    reportResultsText: resultsSentence,
+    reportMethodsText: methodsText,
+    reportCaption: caption,
+    reportWarnings: assumptions,
+    figureMetadata: {
+      chartType: visualizationDraft.chartType,
+      title: figureTitle,
+      primaryMeasure,
+      ...(secondaryMeasure ? { secondaryMeasure } : {}),
+      grouping: getFigureGroupingLabel(visualizationDraft.groupBy),
+      significanceSource,
+      annotationCount: visualizationDraft.sigAnnotations.length,
+    },
+  };
 }
 
 function suggestAnalysisTests(params: {
@@ -1714,6 +1854,36 @@ export function ColonyAnalysisPanel({
     () => scopedFlatData.filter((row) => excludedAnimalIds.has(row.animal_id)),
     [excludedAnimalIds, scopedFlatData],
   );
+  const activeExclusions = useMemo(
+    () =>
+      Object.entries(exclusionReasons)
+        .filter(([animalId]) => excludedAnimalIds.has(animalId))
+        .map(([animalId, reason]) => ({ animalId, reason })),
+    [excludedAnimalIds, exclusionReasons],
+  );
+  const currentReportPayload = useMemo(
+    () =>
+      generateAnalysisReport({
+        result: savedResult,
+        statsDraft,
+        visualizationDraft,
+        measureLabels,
+        includedCount: includedAnimalCount,
+        excludedCount: excludedAnimalCount,
+        analysisName,
+        exclusions: activeExclusions,
+      }),
+    [
+      activeExclusions,
+      analysisName,
+      excludedAnimalCount,
+      includedAnimalCount,
+      measureLabels,
+      savedResult,
+      statsDraft,
+      visualizationDraft,
+    ],
+  );
   const suggestedTests = useMemo(
     () =>
       suggestAnalysisTests({
@@ -1833,7 +2003,6 @@ export function ColonyAnalysisPanel({
   );
 
   const handleExportSummary = useCallback(() => {
-    const summary = summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount);
     const payload = {
       name: analysisName,
       description: analysisDescription,
@@ -1843,13 +2012,12 @@ export function ColonyAnalysisPanel({
         timepoint: effectiveSelectedTimepoint,
         cohort: selectedCohort,
       },
-      summary,
+      summary: currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
+      report: currentReportPayload,
       results: savedResult,
       includedAnimals: includedAnimalCount,
       excludedAnimals: excludedAnimalCount,
-      exclusions: Object.entries(exclusionReasons)
-        .filter(([animalId]) => excludedAnimalIds.has(animalId))
-        .map(([animalId, reason]) => ({ animalId, reason })),
+      exclusions: activeExclusions,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1859,7 +2027,66 @@ export function ColonyAnalysisPanel({
     anchor.click();
     URL.revokeObjectURL(url);
     toast.success("Analysis summary exported.");
-  }, [analysisDescription, analysisName, effectiveSelectedExperiment, effectiveSelectedTimepoint, exclusionReasons, excludedAnimalCount, excludedAnimalIds, includedAnimalCount, resolvedRunId, savedResult, selectedCohort]);
+  }, [activeExclusions, analysisDescription, analysisName, currentReportPayload, effectiveSelectedExperiment, effectiveSelectedTimepoint, excludedAnimalCount, includedAnimalCount, resolvedRunId, savedResult, selectedCohort]);
+
+  const handleExportReport = useCallback(() => {
+    if (!currentReportPayload) {
+      toast.error("Run an analysis first to generate a report.");
+      return;
+    }
+    const reportText = [
+      `# ${analysisName}`,
+      "",
+      "## Summary",
+      currentReportPayload.reportSummary,
+      "",
+      "## Methods",
+      currentReportPayload.reportMethodsText,
+      "",
+      "## Results",
+      currentReportPayload.reportResultsText,
+      "",
+      "## Figure Caption",
+      currentReportPayload.reportCaption,
+      "",
+      "## Warnings",
+      currentReportPayload.reportWarnings.length > 0 ? currentReportPayload.reportWarnings.map((warning) => `- ${warning}`).join("\n") : "- None",
+      "",
+      "## Exclusions",
+      activeExclusions.length > 0 ? activeExclusions.map((entry) => `- ${entry.animalId}: ${entry.reason || "No reason provided"}`).join("\n") : "- None",
+    ].join("\n");
+    const blob = new Blob([reportText], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${analysisName.replace(/\s+/g, "-").toLowerCase() || "colony-analysis"}-report.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast.success("Human-readable report exported.");
+  }, [activeExclusions, analysisName, currentReportPayload]);
+
+  const handleExportFigurePacket = useCallback(() => {
+    if (!currentReportPayload) {
+      toast.error("Run an analysis first to generate figure output.");
+      return;
+    }
+    const packet = {
+      analysisName,
+      figureMetadata: currentReportPayload.figureMetadata,
+      caption: currentReportPayload.reportCaption,
+      linkedStatsSummary: currentReportPayload.reportSummary,
+      linkedResultsText: currentReportPayload.reportResultsText,
+      warnings: currentReportPayload.reportWarnings,
+    };
+    const blob = new Blob([JSON.stringify(packet, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${analysisName.replace(/\s+/g, "-").toLowerCase() || "colony-analysis"}-figure-packet.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast.success("Figure packet exported.");
+  }, [analysisName, currentReportPayload]);
 
   const handleSaveAnalysis = useCallback(
     async (mode: "new" | "revision") => {
@@ -1868,6 +2095,7 @@ export function ColonyAnalysisPanel({
         return;
       }
       const payload = {
+        reportPayload: currentReportPayload,
         analysisId: mode === "revision" && selectedSavedAnalysisId !== "__new__" ? selectedSavedAnalysisId : null,
         name: analysisName.trim() || "Untitled Colony Analysis",
         description: analysisDescription.trim() || null,
@@ -1885,11 +2113,21 @@ export function ColonyAnalysisPanel({
           })),
           statistics: statsDraft,
           visualization: visualizationDraft,
+          reportWarnings: currentReportPayload?.reportWarnings || [],
+          figureMetadata: currentReportPayload?.figureMetadata || null,
           includedAnimalCount,
           excludedAnimalCount,
         },
-        results: savedResult,
-        summaryText: summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
+        results: {
+          ...savedResult,
+          reportSummary: currentReportPayload?.reportSummary || "",
+          reportResultsText: currentReportPayload?.reportResultsText || "",
+          reportMethodsText: currentReportPayload?.reportMethodsText || "",
+          reportCaption: currentReportPayload?.reportCaption || "",
+          reportWarnings: currentReportPayload?.reportWarnings || [],
+          figureMetadata: currentReportPayload?.figureMetadata || null,
+        },
+        summaryText: currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
       };
       try {
         const result = await saveAnalysisRevision(payload);
@@ -1908,6 +2146,7 @@ export function ColonyAnalysisPanel({
     [
       analysisDescription,
       analysisName,
+      currentReportPayload,
       effectiveSelectedExperiment,
       effectiveSelectedTimepoint,
       excludedAnimalCount,
@@ -1972,6 +2211,12 @@ export function ColonyAnalysisPanel({
               </Button>
               <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportSummary}>
                 <Download className="h-3.5 w-3.5" /> Summary
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportReport}>
+                <Download className="h-3.5 w-3.5" /> Report
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportFigurePacket}>
+                <Download className="h-3.5 w-3.5" /> Figure Packet
               </Button>
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => handleSaveAnalysis("new")}>
                 <Save className="h-3.5 w-3.5" /> Save as New
@@ -2412,6 +2657,9 @@ export function ColonyAnalysisPanel({
             <TabsTrigger value="analyze" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <FlaskConical className="h-3.5 w-3.5" /> Statistics
             </TabsTrigger>
+            <TabsTrigger value="report" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
+              <Info className="h-3.5 w-3.5" /> Report
+            </TabsTrigger>
             <TabsTrigger value="visualize" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
               <BarChart3 className="h-3.5 w-3.5" /> Graphs
             </TabsTrigger>
@@ -2450,6 +2698,14 @@ export function ColonyAnalysisPanel({
             />
           </TabsContent>
 
+          <TabsContent value="report">
+            <ReportPreviewPanel
+              reportPayload={currentReportPayload}
+              exclusions={activeExclusions}
+              analysisName={analysisName}
+            />
+          </TabsContent>
+
           <TabsContent value="visualize">
             <VisualizationPanel
               key={`viz-${loadedRevisionKey}`}
@@ -2458,6 +2714,7 @@ export function ColonyAnalysisPanel({
               measureLabels={measureLabels}
               groups={availableGroups}
               initialConfig={visualizationDraft}
+              reportPayload={currentReportPayload}
               onConfigChange={setVisualizationDraft}
             />
           </TabsContent>
@@ -3555,7 +3812,7 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
       {comparisons == null && anovaTable == null && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           {Object.entries(result)
-            .filter(([k]) => !["test", "measure", "grouped_by", "group_stats", "group1_stats", "group2_stats", "comparisons", "anova_table", "cell_counts", "warning", "significant_005", "significant_001", "groups_compared", "levels_a", "levels_b", "factor_a", "factor_b", "assumption_checks", "included_animals", "excluded_animals", "posthoc_label", "subject_factor", "within_subject_factor", "between_subject_factor", "model_kind"].includes(k) && typeof result[k] !== "object")
+            .filter(([k]) => !["test", "measure", "grouped_by", "group_stats", "group1_stats", "group2_stats", "comparisons", "anova_table", "cell_counts", "warning", "significant_005", "significant_001", "groups_compared", "levels_a", "levels_b", "factor_a", "factor_b", "assumption_checks", "included_animals", "excluded_animals", "posthoc_label", "subject_factor", "within_subject_factor", "between_subject_factor", "model_kind", "reportSummary", "reportResultsText", "reportMethodsText", "reportCaption", "reportWarnings", "figureMetadata"].includes(k) && typeof result[k] !== "object")
             .map(([key, value]) => (
               <div key={key} className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
                 <div className="text-[10px] uppercase tracking-wide text-slate-500">{key.replace(/_/g, " ")}</div>
@@ -3707,7 +3964,7 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
       {!result.group_stats && !result.group1_stats && !comparisons && (
         (() => {
           const groupKeys = Object.keys(result).filter(
-            (k) => typeof result[k] === "object" && result[k] !== null && !Array.isArray(result[k]) && k !== "test" && k !== "measure"
+            (k) => typeof result[k] === "object" && result[k] !== null && !Array.isArray(result[k]) && !["test", "measure", "figureMetadata"].includes(k)
           );
           if (groupKeys.length === 0) return null;
           return (
@@ -3803,6 +4060,81 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
   );
 }
 
+function ReportPreviewPanel({
+  reportPayload,
+  exclusions,
+  analysisName,
+}: {
+  reportPayload: AnalysisReportPayload | null;
+  exclusions: Array<{ animalId: string; reason: string }>;
+  analysisName: string;
+}) {
+  if (!reportPayload) {
+    return (
+      <div className="rounded-lg border border-dashed p-10 text-center">
+        <Info className="mx-auto mb-2 h-6 w-6 text-muted-foreground/30" />
+        <p className="text-sm text-muted-foreground">Run an analysis to generate a manuscript-style report preview.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-slate-200/80 bg-white shadow-sm">
+        <CardHeader className="border-b bg-slate-50/70 py-3 px-4">
+          <CardTitle className="text-sm font-medium">{analysisName} Report Preview</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Summary</p>
+            <p className="mt-1 text-sm text-slate-800">{reportPayload.reportSummary}</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Methods Note</p>
+            <p className="mt-1 text-sm text-slate-800">{reportPayload.reportMethodsText}</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Results Text</p>
+            <p className="mt-1 text-sm text-slate-800">{reportPayload.reportResultsText}</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Figure Caption</p>
+            <p className="mt-1 text-sm text-slate-800">{reportPayload.reportCaption}</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Warnings</p>
+            <div className="mt-1 space-y-1">
+              {reportPayload.reportWarnings.length > 0 ? (
+                reportPayload.reportWarnings.map((warning, index) => (
+                  <div key={`${warning}-${index}`} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    {warning}
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-600">No warnings on this saved result.</p>
+              )}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Exclusions Appendix</p>
+            <div className="mt-1 space-y-1">
+              {exclusions.length > 0 ? (
+                exclusions.map((entry) => (
+                  <div key={entry.animalId} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    <span className="font-medium">{entry.animalId}</span>: {entry.reason || "No reason provided"}
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-600">No animals were excluded in this revision.</p>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ─── Visualization Panel ────────────────────────────────────────────────────
 
 function VisualizationPanel({
@@ -3811,6 +4143,7 @@ function VisualizationPanel({
   measureLabels,
   groups,
   initialConfig,
+  reportPayload,
   onConfigChange,
 }: {
   flatData: FlatRow[];
@@ -3818,6 +4151,7 @@ function VisualizationPanel({
   measureLabels: Record<string, string>;
   groups: string[];
   initialConfig?: ColonyAnalysisVisualizationDraft;
+  reportPayload: AnalysisReportPayload | null;
   onConfigChange?: (next: ColonyAnalysisVisualizationDraft) => void;
 }) {
   const [chartType, setChartType] = useState(initialConfig?.chartType || "bar_sem");
@@ -4379,6 +4713,28 @@ function VisualizationPanel({
     [title]
   );
 
+  const handleExportFigureMetadata = useCallback(() => {
+    if (!reportPayload) {
+      toast.error("Run an analysis first to generate figure metadata.");
+      return;
+    }
+    const packet = {
+      figureMetadata: reportPayload.figureMetadata,
+      caption: reportPayload.reportCaption,
+      linkedSummary: reportPayload.reportSummary,
+      linkedResultsText: reportPayload.reportResultsText,
+      warnings: reportPayload.reportWarnings,
+    };
+    const blob = new Blob([JSON.stringify(packet, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${(reportPayload.figureMetadata.title || "figure").replace(/\s+/g, "-").toLowerCase()}-metadata.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast.success("Figure metadata exported.");
+  }, [reportPayload]);
+
   return (
     <div className="space-y-4">
       <Card className="border-slate-200/80 bg-white shadow-sm">
@@ -4658,6 +5014,9 @@ function VisualizationPanel({
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium">Preview</CardTitle>
               <div className="flex gap-1">
+                <Button variant="outline" size="sm" className="gap-1 text-xs h-7" onClick={handleExportFigureMetadata}>
+                  <Download className="h-3 w-3" /> Packet
+                </Button>
                 <Button variant="outline" size="sm" className="gap-1 text-xs h-7" onClick={() => handleExport("svg")}>
                   <Download className="h-3 w-3" /> SVG
                 </Button>
@@ -4705,6 +5064,45 @@ function VisualizationPanel({
                 useResizeHandler
                 style={{ width: "100%", height: 500 }}
               />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {reportPayload && (
+        <Card className="border-slate-200/80 bg-white shadow-sm">
+          <CardHeader className="border-b bg-slate-50/70 py-3 px-4">
+            <CardTitle className="text-sm font-medium">Figure Output</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 pt-4 text-sm text-slate-800">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Figure Title</p>
+                <p className="mt-1">{reportPayload.figureMetadata.title}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Grouping</p>
+                <p className="mt-1">{reportPayload.figureMetadata.grouping}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Plotted Measure</p>
+                <p className="mt-1">
+                  {reportPayload.figureMetadata.primaryMeasure}
+                  {reportPayload.figureMetadata.secondaryMeasure ? ` vs ${reportPayload.figureMetadata.secondaryMeasure}` : ""}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Significance Source</p>
+                <p className="mt-1">{reportPayload.figureMetadata.significanceSource}</p>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Linked Statistical Summary</p>
+              <p className="mt-1">{reportPayload.reportSummary}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Generated Caption</p>
+              <p className="mt-1">{reportPayload.reportCaption}</p>
             </div>
           </CardContent>
         </Card>
