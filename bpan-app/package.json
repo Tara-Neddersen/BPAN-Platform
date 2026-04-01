@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:colony-analysis-smoke": "tsx scripts/colony_analysis_smoke.ts",
     "test:labs-assistant-intents": "tsx scripts/labs_assistant_intent_regression.ts",
     "backfill:platform-sync": "node scripts/backfill_platform_sync.mjs",
     "quartzy:sync-orders": "node scripts/quartzy_sync_orders.mjs",
