@@ -1170,6 +1170,10 @@ interface ColonyAnalysisStatsDraft {
   testType: string;
   measureKey: string;
   measureKey2: string;
+  timeToEventMeasureKey: string;
+  eventMeasureKey: string;
+  predictorMeasureKey: string;
+  scoreMeasureKey: string;
   groupingFactor: AnalysisFactor;
   factorA: AnalysisFactor;
   factorB: AnalysisFactor;
@@ -1185,6 +1189,11 @@ interface ColonyAnalysisStatsDraft {
   controlGroup: string;
   binaryGroupA: string;
   binaryGroupB: string;
+  positiveClass: string;
+  regressionModelFamily: "linear" | "exponential" | "logistic";
+  alpha: number;
+  targetPower: number;
+  reportMeasureKeys: string[];
   outlierMethod: OutlierMethod;
   outlierThreshold: number;
   tableExportMode: "long" | "wide";
@@ -1252,6 +1261,7 @@ interface AnalysisReportPayload {
   reportMethodsText: string;
   reportCaption: string;
   reportWarnings: string[];
+  bundledMeasures?: string[];
   figureMetadata: {
     chartType: string;
     title: string;
@@ -1296,6 +1306,10 @@ function defaultStatsDraft(): ColonyAnalysisStatsDraft {
     testType: "t_test",
     measureKey: "",
     measureKey2: "",
+    timeToEventMeasureKey: "",
+    eventMeasureKey: "",
+    predictorMeasureKey: "",
+    scoreMeasureKey: "",
     groupingFactor: "group",
     factorA: "genotype",
     factorB: "sex",
@@ -1311,6 +1325,11 @@ function defaultStatsDraft(): ColonyAnalysisStatsDraft {
     controlGroup: "",
     binaryGroupA: "",
     binaryGroupB: "",
+    positiveClass: "Positive",
+    regressionModelFamily: "linear",
+    alpha: 0.05,
+    targetPower: 0.8,
+    reportMeasureKeys: [],
     outlierMethod: "iqr",
     outlierThreshold: 1.5,
     tableExportMode: "long",
@@ -1392,6 +1411,10 @@ function summarizeAnalysisResult(result: Record<string, unknown> | null, include
   if (typeof result.H === "number") pieces.push(`H = ${formatNum(Number(result.H), 4)}`);
   if (typeof result.r === "number") pieces.push(`r = ${formatNum(Number(result.r), 4)}`);
   if (typeof result.rho === "number") pieces.push(`rho = ${formatNum(Number(result.rho), 4)}`);
+  if (typeof result.auc === "number") pieces.push(`AUC = ${formatNum(Number(result.auc), 4)}`);
+  if (typeof result.chi2 === "number") pieces.push(`χ² = ${formatNum(Number(result.chi2), 4)}`);
+  if (typeof result.log_rank_chi2 === "number") pieces.push(`Log-rank χ² = ${formatNum(Number(result.log_rank_chi2), 4)}`);
+  if (typeof result.suggested_n_per_group === "number") pieces.push(`Suggested n/group = ${String(result.suggested_n_per_group)}`);
   return pieces.join(" | ");
 }
 
@@ -1462,6 +1485,16 @@ function generateAnalysisReport(params: {
     const label = typeof result.r === "number" ? "r" : "rho";
     const value = typeof result.r === "number" ? Number(result.r) : Number(result.rho);
     resultsSentence += ` ${label} = ${formatNum(value, 3)}, ${formatPValueForReport(result.p)}.`;
+  } else if (typeof result.auc === "number") {
+    resultsSentence += ` AUC = ${formatNum(Number(result.auc), 3)}, ${formatPValueForReport(result.p)}.`;
+  } else if (typeof result.chi2 === "number") {
+    resultsSentence += ` χ²(${String(result.df ?? "n/a")}) = ${formatNum(Number(result.chi2), 3)}, ${formatPValueForReport(result.p)}.`;
+  } else if (typeof result.log_rank_chi2 === "number") {
+    resultsSentence += ` Log-rank χ²(${String(result.df ?? "n/a")}) = ${formatNum(Number(result.log_rank_chi2), 3)}, ${formatPValueForReport(result.p)}.`;
+  } else if (typeof result.r2 === "number" && typeof result.rmse === "number") {
+    resultsSentence += ` Model fit achieved R² = ${formatNum(Number(result.r2), 3)} with RMSE = ${formatNum(Number(result.rmse), 3)}.`;
+  } else if (typeof result.suggested_n_per_group === "number") {
+    resultsSentence += ` Estimated sample size is ${String(result.suggested_n_per_group)} animals per group at α = ${formatNum(Number(result.alpha ?? statsDraft.alpha), 3)} and power = ${formatNum(Number(result.target_power ?? statsDraft.targetPower), 2)}.`;
   } else if (typeof result.p === "number") {
     resultsSentence += ` ${formatPValueForReport(result.p)}.`;
   }
@@ -1474,6 +1507,9 @@ function generateAnalysisReport(params: {
     `Grouping: ${groupedBy}.`,
     `Included animals: ${includedCount}; excluded animals: ${excludedCount}.`,
     statsDraft.pAdjustMethod !== "none" ? `Multiple-comparisons correction: ${statsDraft.pAdjustMethod}.` : "No multiple-comparisons correction was selected.",
+    Array.isArray(statsDraft.reportMeasureKeys) && statsDraft.reportMeasureKeys.length > 0
+      ? `Bundled measures: ${statsDraft.reportMeasureKeys.map((key) => measureLabels[key] || key).join(", ")}.`
+      : "",
   ].join(" ");
 
   const figureTitle = visualizationDraft.title || measure;
@@ -1506,6 +1542,9 @@ function generateAnalysisReport(params: {
     reportMethodsText: methodsText,
     reportCaption: caption,
     reportWarnings: assumptions,
+    bundledMeasures: Array.isArray(statsDraft.reportMeasureKeys)
+      ? statsDraft.reportMeasureKeys.map((key) => measureLabels[key] || key)
+      : [],
     figureMetadata: {
       chartType: visualizationDraft.chartType,
       title: figureTitle,
@@ -1690,11 +1729,267 @@ function rocAucFromBinaryGroups(groupA: number[], groupB: number[]) {
   return { auc: round(auc, 4), p: mw.p };
 }
 
-function estimateSampleSizeForTwoGroup(effectSize: number, power = 0.8) {
+function estimateSampleSizeForTwoGroup(effectSize: number, alpha = 0.05, power = 0.8) {
   if (effectSize <= 0) return null;
-  const zAlpha = 1.96;
+  const zAlpha = alpha <= 0.01 ? 2.58 : alpha <= 0.05 ? 1.96 : 1.64;
   const zPower = power >= 0.9 ? 1.28 : power >= 0.8 ? 0.84 : 0.52;
   return Math.ceil((2 * (zAlpha + zPower) ** 2) / (effectSize ** 2));
+}
+
+function inferBinaryValue(value: unknown, positiveClass = "Positive") {
+  if (typeof value === "number") return value > 0;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  const positive = positiveClass.trim().toLowerCase();
+  if (normalized === positive) return true;
+  if (["1", "true", "yes", "positive", "event", "done", "completed"].includes(normalized)) return true;
+  if (["0", "false", "no", "negative", "censored", "pending", "skipped"].includes(normalized)) return false;
+  return null;
+}
+
+function detectBinaryLikeKeys(rows: FlatRow[]) {
+  const keys = new Map<string, Set<string>>();
+  rows.forEach((row) => {
+    Object.entries(row).forEach(([key, value]) => {
+      if (["animal_id", "identifier", "sex", "genotype", "group", "cohort", "timepoint", "experiment"].includes(key)) return;
+      if (value == null || value === "") return;
+      const set = keys.get(key) || new Set<string>();
+      set.add(String(value).trim().toLowerCase());
+      keys.set(key, set);
+    });
+  });
+  return Array.from(keys.entries())
+    .filter(([, values]) => values.size > 0 && values.size <= 2)
+    .map(([key]) => key);
+}
+
+function buildRocCurve(scores: Array<{ score: number; positive: boolean }>) {
+  const sortedThresholds = Array.from(new Set(scores.map((entry) => entry.score))).sort((a, b) => b - a);
+  const positives = scores.filter((entry) => entry.positive).length;
+  const negatives = scores.length - positives;
+  if (positives === 0 || negatives === 0) return { points: [], thresholdTable: [], optimal: null, auc: 0.5 };
+  const points: Array<{ threshold: number; tpr: number; fpr: number }> = [];
+  const thresholdTable: Array<Record<string, unknown>> = [];
+  let best: Record<string, unknown> | null = null;
+  for (const threshold of sortedThresholds) {
+    const tp = scores.filter((entry) => entry.positive && entry.score >= threshold).length;
+    const fp = scores.filter((entry) => !entry.positive && entry.score >= threshold).length;
+    const fn = positives - tp;
+    const tn = negatives - fp;
+    const sensitivity = tp / positives;
+    const specificity = tn / negatives;
+    const fpr = 1 - specificity;
+    const youden = sensitivity + specificity - 1;
+    const row = {
+      threshold: round(threshold, 4),
+      sensitivity: round(sensitivity, 4),
+      specificity: round(specificity, 4),
+      false_positive_rate: round(fpr, 4),
+      tp,
+      fp,
+      tn,
+      fn,
+      youden_j: round(youden, 4),
+    };
+    thresholdTable.push(row);
+    points.push({ threshold, tpr: sensitivity, fpr });
+    if (!best || Number(row.youden_j) > Number(best.youden_j)) best = row;
+  }
+  const augmented = [{ threshold: Number.POSITIVE_INFINITY, tpr: 0, fpr: 0 }, ...points, { threshold: Number.NEGATIVE_INFINITY, tpr: 1, fpr: 1 }]
+    .sort((a, b) => a.fpr - b.fpr);
+  let auc = 0;
+  for (let i = 1; i < augmented.length; i++) {
+    const prev = augmented[i - 1];
+    const curr = augmented[i];
+    auc += (curr.fpr - prev.fpr) * ((curr.tpr + prev.tpr) / 2);
+  }
+  return { points, thresholdTable, optimal: best, auc: round(auc, 4) };
+}
+
+function kaplanMeierSummary(
+  rows: FlatRow[],
+  timeKey: string,
+  eventKey: string,
+  groupingFactor: AnalysisFactor,
+  positiveClass: string,
+) {
+  const grouped = new Map<string, Array<{ time: number; event: boolean }>>();
+  rows.forEach((row) => {
+    const time = Number(row[timeKey]);
+    const event = inferBinaryValue(row[eventKey], positiveClass);
+    if (Number.isNaN(time) || event == null) return;
+    const group = getFactorValue(row, groupingFactor);
+    const list = grouped.get(group) || [];
+    list.push({ time, event });
+    grouped.set(group, list);
+  });
+  return Array.from(grouped.entries())
+    .filter(([, entries]) => entries.length >= 2)
+    .map(([group, entries]) => {
+      const ordered = [...entries].sort((a, b) => a.time - b.time);
+      let atRisk = ordered.length;
+      let survival = 1;
+      const points: Array<Record<string, unknown>> = [{ time: 0, survival: 1, at_risk: atRisk, events: 0 }];
+      const uniqueTimes = Array.from(new Set(ordered.map((entry) => entry.time))).sort((a, b) => a - b);
+      uniqueTimes.forEach((time) => {
+        const atTime = ordered.filter((entry) => entry.time === time);
+        const events = atTime.filter((entry) => entry.event).length;
+        const censored = atTime.length - events;
+        if (events > 0 && atRisk > 0) survival *= (atRisk - events) / atRisk;
+        points.push({
+          time,
+          survival: round(survival, 4),
+          at_risk: atRisk,
+          events,
+          censored,
+        });
+        atRisk -= atTime.length;
+      });
+      const medianPoint = points.find((point) => Number(point.survival) <= 0.5);
+      return {
+        group,
+        n: entries.length,
+        events: entries.filter((entry) => entry.event).length,
+        censored: entries.filter((entry) => !entry.event).length,
+        median_survival: medianPoint ? Number(medianPoint.time) : null,
+        points,
+      };
+    });
+}
+
+function logRankTest(
+  rows: FlatRow[],
+  timeKey: string,
+  eventKey: string,
+  groupingFactor: AnalysisFactor,
+  positiveClass: string,
+) {
+  const prepared = rows
+    .map((row) => ({
+      time: Number(row[timeKey]),
+      event: inferBinaryValue(row[eventKey], positiveClass),
+      group: getFactorValue(row, groupingFactor),
+    }))
+    .filter((row) => !Number.isNaN(row.time) && row.event != null);
+  const groups = Array.from(new Set(prepared.map((row) => row.group)));
+  if (groups.length < 2) return { error: "Log-rank test needs at least 2 groups with valid survival data." } as const;
+  const eventTimes = Array.from(new Set(prepared.filter((row) => row.event).map((row) => row.time))).sort((a, b) => a - b);
+  const observed = new Map<string, number>(groups.map((group) => [group, 0]));
+  const expected = new Map<string, number>(groups.map((group) => [group, 0]));
+  const variance = new Map<string, number>(groups.map((group) => [group, 0]));
+  eventTimes.forEach((time) => {
+    const atRiskByGroup = groups.map((group) => prepared.filter((row) => row.group === group && row.time >= time).length);
+    const eventByGroup = groups.map((group) => prepared.filter((row) => row.group === group && row.time === time && row.event).length);
+    const totalAtRisk = atRiskByGroup.reduce((sum, value) => sum + value, 0);
+    const totalEvents = eventByGroup.reduce((sum, value) => sum + value, 0);
+    if (totalAtRisk <= 1 || totalEvents === 0) return;
+    groups.forEach((group, index) => {
+      const o = eventByGroup[index];
+      const e = (atRiskByGroup[index] / totalAtRisk) * totalEvents;
+      const v =
+        (atRiskByGroup[index] * (totalAtRisk - atRiskByGroup[index]) * totalEvents * (totalAtRisk - totalEvents)) /
+        Math.max(totalAtRisk ** 2 * (totalAtRisk - 1), 1);
+      observed.set(group, Number(observed.get(group) || 0) + o);
+      expected.set(group, Number(expected.get(group) || 0) + e);
+      variance.set(group, Number(variance.get(group) || 0) + v);
+    });
+  });
+  const chi2 = groups.reduce((sum, group) => {
+    const diff = Number(observed.get(group) || 0) - Number(expected.get(group) || 0);
+    const v = Number(variance.get(group) || 0);
+    return sum + (v > 0 ? (diff ** 2) / v : 0);
+  }, 0);
+  const df = groups.length - 1;
+  return {
+    log_rank_chi2: round(chi2),
+    df,
+    p: round(1 - approxChiSquareCDF(chi2, df), 6),
+    observed_expected: groups.map((group) => ({
+      group,
+      observed: round(Number(observed.get(group) || 0), 4),
+      expected: round(Number(expected.get(group) || 0), 4),
+      variance: round(Number(variance.get(group) || 0), 4),
+    })),
+  };
+}
+
+function fitNonlinearRegression(
+  rows: FlatRow[],
+  predictorKey: string,
+  outcomeKey: string,
+  family: "linear" | "exponential" | "logistic",
+) {
+  const points = rows
+    .map((row) => ({ x: Number(row[predictorKey]), y: Number(row[outcomeKey]) }))
+    .filter((row) => !Number.isNaN(row.x) && !Number.isNaN(row.y));
+  if (points.length < 4) return { error: "Need at least 4 valid rows for regression fitting." } as const;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const yMean = mean(ys);
+  const totalSS = ys.reduce((sum, y) => sum + (y - yMean) ** 2, 0);
+
+  if (family === "linear") {
+    const fit = fitLinearModel(points.map((point) => [1, point.x]), ys);
+    if (!fit) return { error: "Could not fit linear regression." } as const;
+    const [intercept, slope] = fit.coefficients;
+    return {
+      model: "Linear regression",
+      family,
+      coefficients: { intercept: round(intercept), slope: round(slope) },
+      fitted_points: points.map((point) => ({ x: point.x, y: round(intercept + slope * point.x, 4) })),
+      rmse: round(Math.sqrt(fit.sse / Math.max(points.length, 1))),
+      r2: round(totalSS > 0 ? 1 - fit.sse / totalSS : 1, 4),
+      points,
+    };
+  }
+
+  if (family === "exponential") {
+    const valid = points.filter((point) => point.y > 0);
+    if (valid.length < 4) return { error: "Exponential regression needs positive outcome values." } as const;
+    const fit = fitLinearModel(valid.map((point) => [1, point.x]), valid.map((point) => Math.log(point.y)));
+    if (!fit) return { error: "Could not fit exponential regression." } as const;
+    const [logA, b] = fit.coefficients;
+    const a = Math.exp(logA);
+    const sse = points.reduce((sum, point) => sum + (point.y - a * Math.exp(b * point.x)) ** 2, 0);
+    return {
+      model: "Exponential regression",
+      family,
+      coefficients: { a: round(a), b: round(b) },
+      fitted_points: points.map((point) => ({ x: point.x, y: round(a * Math.exp(b * point.x), 4) })),
+      rmse: round(Math.sqrt(sse / Math.max(points.length, 1))),
+      r2: round(totalSS > 0 ? 1 - sse / totalSS : 1, 4),
+      points,
+    };
+  }
+
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  let best: { midpoint: number; slope: number; sse: number } | null = null;
+  for (let i = 0; i <= 20; i++) {
+    const midpoint = minX + ((maxX - minX) * i) / 20;
+    for (const slope of [0.25, 0.5, 1, 2, 4, 8]) {
+      const sse = points.reduce((sum, point) => {
+        const predicted = minY + (maxY - minY) / (1 + Math.exp(-(point.x - midpoint) / slope));
+        return sum + (point.y - predicted) ** 2;
+      }, 0);
+      if (!best || sse < best.sse) best = { midpoint, slope, sse };
+    }
+  }
+  if (!best) return { error: "Could not fit logistic regression." } as const;
+  return {
+    model: "Logistic regression",
+    family,
+    coefficients: { bottom: round(minY), top: round(maxY), midpoint: round(best.midpoint), slope: round(best.slope) },
+    fitted_points: points.map((point) => ({
+      x: point.x,
+      y: round(minY + (maxY - minY) / (1 + Math.exp(-(point.x - best.midpoint) / best.slope)), 4),
+    })),
+    rmse: round(Math.sqrt(best.sse / Math.max(points.length, 1))),
+    r2: round(totalSS > 0 ? 1 - best.sse / totalSS : 1, 4),
+    points,
+  };
 }
 
 function summarizeRevisionDiff(a: SavedColonyAnalysisRevision | null, b: SavedColonyAnalysisRevision | null): RevisionDiffSummary | null {
@@ -1749,6 +2044,9 @@ function suggestAnalysisTests(params: {
         return map;
       }, new Map()),
     ).every(([, timepoints]) => timepoints.size === new Set(flatData.map((row) => row.timepoint)).size);
+  const binaryKeys = detectBinaryLikeKeys(flatData);
+  const hasBinaryOutcome = binaryKeys.length > 0;
+  const hasPredictorOutcomePair = numericKeys.length >= 2;
 
   if (numericKeys.length >= 2) {
     suggestions.push({
@@ -1760,6 +2058,11 @@ function suggestAnalysisTests(params: {
       testType: "spearman",
       label: "Spearman Correlation",
       reason: "Useful when the relationship may be monotonic or less normally distributed.",
+    });
+    suggestions.push({
+      testType: "nonlinear_regression",
+      label: "Nonlinear Regression",
+      reason: "Two numeric measures are available, so predictor-outcome fitting is possible.",
     });
   }
 
@@ -1782,6 +2085,13 @@ function suggestAnalysisTests(params: {
       label: "Mann-Whitney U",
       reason: "A good non-parametric fallback for the same 2-group comparison.",
     });
+    if (hasPredictorOutcomePair) {
+      suggestions.push({
+        testType: "power_planning",
+        label: "Power Planning",
+        reason: "Two-group structure is available, so you can estimate sample size from the observed effect size.",
+      });
+    }
   } else if (groups.length > 2) {
     suggestions.unshift({
       testType: "anova",
@@ -1820,6 +2130,24 @@ function suggestAnalysisTests(params: {
             reason: "Multiple timepoints are present, but there are not enough repeated animals yet for longitudinal inference.",
           },
     );
+  }
+
+  if (hasBinaryOutcome && numericKeys.length >= 1) {
+    suggestions.push({
+      testType: "roc_curve",
+      label: "ROC Curve",
+      reason: "A binary-like outcome and numeric score are both present, so discrimination analysis is available.",
+    });
+    suggestions.push({
+      testType: "kaplan_meier",
+      label: "Kaplan-Meier",
+      reason: "A numeric duration plus binary event field can support survival-style summaries.",
+    });
+    suggestions.push({
+      testType: "log_rank",
+      label: "Log-rank",
+      reason: "When event/censoring fields exist across groups, survival curves can be compared directly.",
+    });
   }
 
   return suggestions.filter(
@@ -3731,6 +4059,10 @@ function StatisticsPanel({
   const [testType, setTestType] = useState(normalizedInitialConfig.testType);
   const [measureKey, setMeasureKey] = useState(normalizedInitialConfig.measureKey || numericKeys[0] || "");
   const [measureKey2, setMeasureKey2] = useState(normalizedInitialConfig.measureKey2 || numericKeys[1] || numericKeys[0] || "");
+  const [timeToEventMeasureKey, setTimeToEventMeasureKey] = useState(normalizedInitialConfig.timeToEventMeasureKey || numericKeys[0] || "");
+  const [eventMeasureKey, setEventMeasureKey] = useState(normalizedInitialConfig.eventMeasureKey || "");
+  const [predictorMeasureKey, setPredictorMeasureKey] = useState(normalizedInitialConfig.predictorMeasureKey || numericKeys[0] || "");
+  const [scoreMeasureKey, setScoreMeasureKey] = useState(normalizedInitialConfig.scoreMeasureKey || numericKeys[0] || "");
   const [groupingFactor, setGroupingFactor] = useState<AnalysisFactor>(normalizedInitialConfig.groupingFactor);
   const [factorA, setFactorA] = useState<AnalysisFactor>(normalizedInitialConfig.factorA);
   const [factorB, setFactorB] = useState<AnalysisFactor>(normalizedInitialConfig.factorB);
@@ -3746,6 +4078,11 @@ function StatisticsPanel({
   const [controlGroup, setControlGroup] = useState(normalizedInitialConfig.controlGroup || "");
   const [binaryGroupA, setBinaryGroupA] = useState(normalizedInitialConfig.binaryGroupA || "");
   const [binaryGroupB, setBinaryGroupB] = useState(normalizedInitialConfig.binaryGroupB || "");
+  const [positiveClass, setPositiveClass] = useState(normalizedInitialConfig.positiveClass || "Positive");
+  const [regressionModelFamily, setRegressionModelFamily] = useState(normalizedInitialConfig.regressionModelFamily || "linear");
+  const [alpha, setAlpha] = useState<number>(normalizedInitialConfig.alpha || 0.05);
+  const [targetPower, setTargetPower] = useState<number>(normalizedInitialConfig.targetPower || 0.8);
+  const [reportMeasureKeys, setReportMeasureKeys] = useState<string[]>(normalizedInitialConfig.reportMeasureKeys || []);
   const [outlierMethod] = useState<OutlierMethod>(normalizedInitialConfig.outlierMethod);
   const [outlierThreshold] = useState<number>(normalizedInitialConfig.outlierThreshold);
   const [tableExportMode, setTableExportMode] = useState<"long" | "wide">(normalizedInitialConfig.tableExportMode);
@@ -3770,8 +4107,12 @@ function StatisticsPanel({
     { value: "fisher_exact", label: "Fisher Exact", desc: "Exact test for 2×2 contingency tables" },
     { value: "pearson", label: "Pearson Correlation", desc: "Linear association between two measures" },
     { value: "spearman", label: "Spearman Correlation", desc: "Rank-based association between two measures" },
-    { value: "roc_auc", label: "ROC AUC", desc: "Measure separation between two groups on one numeric outcome" },
-    { value: "power_two_group", label: "Power / Sample Size", desc: "Estimate per-group sample size from observed effect size" },
+    { value: "kaplan_meier", label: "Kaplan-Meier", desc: "Estimate group-wise survival curves from time-to-event data" },
+    { value: "log_rank", label: "Log-rank", desc: "Compare survival curves across groups using time-to-event data" },
+    { value: "nonlinear_regression", label: "Nonlinear Regression", desc: "Fit a predictor-outcome model with linear, exponential, or logistic families" },
+    { value: "dose_response", label: "Dose Response", desc: "Sigmoidal predictor-outcome fitting for dose-response style data" },
+    { value: "roc_curve", label: "ROC Curve", desc: "Full ROC curve with threshold summary and AUC" },
+    { value: "power_planning", label: "Power Planning", desc: "Estimate per-group sample size from observed effect size, alpha, and target power" },
   ];
 
   const factorOptions: Array<{ value: AnalysisFactor; label: string }> = [
@@ -3786,12 +4127,17 @@ function StatisticsPanel({
     const levels = Array.from(new Set(flatData.map((row) => getFactorValue(row, groupingFactor)))).sort();
     return levels;
   }, [flatData, groupingFactor]);
+  const binaryMeasureKeys = useMemo(() => detectBinaryLikeKeys(flatData), [flatData]);
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!numericKeys.includes(measureKey)) setMeasureKey(numericKeys[0] || "");
     if (!numericKeys.includes(measureKey2)) setMeasureKey2(numericKeys[1] || numericKeys[0] || "");
-  }, [measureKey, measureKey2, numericKeys]);
+    if (!numericKeys.includes(timeToEventMeasureKey)) setTimeToEventMeasureKey(numericKeys[0] || "");
+    if (!numericKeys.includes(predictorMeasureKey)) setPredictorMeasureKey(numericKeys[0] || "");
+    if (!numericKeys.includes(scoreMeasureKey)) setScoreMeasureKey(numericKeys[0] || "");
+    if (eventMeasureKey && !binaryMeasureKeys.includes(eventMeasureKey)) setEventMeasureKey(binaryMeasureKeys[0] || "");
+  }, [binaryMeasureKeys, eventMeasureKey, measureKey, measureKey2, numericKeys, predictorMeasureKey, scoreMeasureKey, timeToEventMeasureKey]);
 
   useEffect(() => {
     if (testType === "repeated_measures_anova") setModelKind("repeated_measures");
@@ -3805,6 +4151,10 @@ function StatisticsPanel({
       testType,
       measureKey,
       measureKey2,
+      timeToEventMeasureKey,
+      eventMeasureKey,
+      predictorMeasureKey,
+      scoreMeasureKey,
       groupingFactor,
       factorA,
       factorB,
@@ -3820,11 +4170,16 @@ function StatisticsPanel({
       controlGroup,
       binaryGroupA,
       binaryGroupB,
+      positiveClass,
+      regressionModelFamily,
+      alpha,
+      targetPower,
+      reportMeasureKeys,
       outlierMethod,
       outlierThreshold,
       tableExportMode,
     });
-  }, [betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, modelKind, normalizedInitialConfig, onConfigChange, outlierMethod, outlierThreshold, pAdjustMethod, postHocMethod, subjectFactor, tableExportMode, testType, withinSubjectFactor]);
+  }, [alpha, betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, eventMeasureKey, factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, modelKind, normalizedInitialConfig, onConfigChange, outlierMethod, outlierThreshold, pAdjustMethod, positiveClass, postHocMethod, predictorMeasureKey, regressionModelFamily, reportMeasureKeys, scoreMeasureKey, subjectFactor, tableExportMode, targetPower, testType, timeToEventMeasureKey, withinSubjectFactor]);
 
   useEffect(() => {
     onResultChange?.(currentResult);
@@ -4289,27 +4644,97 @@ function StatisticsPanel({
         }
         break;
       }
-      case "roc_auc": {
-        const a = getValues(binaryGroupA);
-        const b = getValues(binaryGroupB);
-        if (a.length < 2 || b.length < 2) {
-          toast.error("Need at least 2 values in each selected group.");
+      case "kaplan_meier":
+      case "log_rank": {
+        if (!timeToEventMeasureKey || !eventMeasureKey) {
+          toast.error("Choose both time-to-event and event fields.");
           return;
         }
-        const result = rocAucFromBinaryGroups(a, b);
+        const curves = kaplanMeierSummary(flatData, timeToEventMeasureKey, eventMeasureKey, groupingFactor, positiveClass);
+        if (curves.length < 1) {
+          toast.error("Need valid time-to-event and event data to estimate survival curves.");
+          return;
+        }
+        const logRank = curves.length > 1 ? logRankTest(flatData, timeToEventMeasureKey, eventMeasureKey, groupingFactor, positiveClass) : null;
+        if (testType === "log_rank" && logRank && "error" in logRank) {
+          toast.error(logRank.error);
+          return;
+        }
         setCurrentResult({
-          test: "ROC AUC",
-          measure: measureLabels[measureKey] || measureKey,
+          test: testType === "kaplan_meier" ? "Kaplan-Meier Survival" : "Log-rank Survival Comparison",
+          measure: `${measureLabels[timeToEventMeasureKey] || timeToEventMeasureKey} with ${measureLabels[eventMeasureKey] || eventMeasureKey}`,
+          grouped_by: getFactorLabel(groupingFactor),
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          survival_curves: curves,
+          log_rank_chi2: logRank && !("error" in logRank) ? logRank.log_rank_chi2 : undefined,
+          df: logRank && !("error" in logRank) ? logRank.df : undefined,
+          p: logRank && !("error" in logRank) ? logRank.p : undefined,
+          observed_expected: logRank && !("error" in logRank) ? logRank.observed_expected : undefined,
+          warning: "Survival v1 assumes one time-to-event field plus one event/censor field for the included animals.",
+        });
+        break;
+      }
+      case "nonlinear_regression":
+      case "dose_response": {
+        const family = testType === "dose_response" ? "logistic" : regressionModelFamily;
+        if (!predictorMeasureKey || !measureKey) {
+          toast.error("Choose predictor and outcome measures.");
+          return;
+        }
+        const result = fitNonlinearRegression(flatData, predictorMeasureKey, measureKey, family);
+        if ("error" in result) {
+          toast.error(result.error);
+          return;
+        }
+        setCurrentResult({
+          test: testType === "dose_response" ? "Dose Response Fit" : result.model,
+          measure: `${measureLabels[predictorMeasureKey] || predictorMeasureKey} → ${measureLabels[measureKey] || measureKey}`,
+          predictor_label: measureLabels[predictorMeasureKey] || predictorMeasureKey,
+          outcome_label: measureLabels[measureKey] || measureKey,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          ...result,
+        });
+        break;
+      }
+      case "roc_curve":
+      case "roc_auc": {
+        const scoreKey = scoreMeasureKey || measureKey;
+        const eventKey = eventMeasureKey || measureKey;
+        const scoreRows = flatData
+          .map((row) => ({
+            score: Number(row[scoreKey]),
+            positive: inferBinaryValue(row[eventKey], positiveClass),
+            group: getFactorValue(row, groupingFactor),
+          }))
+          .filter((row) => !Number.isNaN(row.score) && row.positive != null && (row.group === binaryGroupA || row.group === binaryGroupB));
+        if (scoreRows.length < 4) {
+          toast.error("Need valid score and binary-class rows for ROC analysis.");
+          return;
+        }
+        const curve = buildRocCurve(scoreRows.map((row) => ({ score: row.score, positive: Boolean(row.positive) })));
+        const groupAValues = scoreRows.filter((row) => row.group === binaryGroupA).map((row) => row.score);
+        const groupBValues = scoreRows.filter((row) => row.group === binaryGroupB).map((row) => row.score);
+        const scalar = rocAucFromBinaryGroups(groupAValues, groupBValues);
+        setCurrentResult({
+          test: "ROC Curve",
+          measure: measureLabels[scoreKey] || scoreKey,
           grouped_by: getFactorLabel(groupingFactor),
           groups_compared: `${binaryGroupA} vs ${binaryGroupB}`,
           included_animals: includedCount,
           excluded_animals: excludedCount,
-          auc: result.auc,
-          p: result.p,
-          significant_005: result.p < 0.05,
+          auc: curve.auc,
+          p: scalar.p,
+          significant_005: scalar.p < 0.05,
+          roc_points: curve.points,
+          threshold_table: curve.thresholdTable,
+          optimal_threshold: curve.optimal,
+          positive_class: positiveClass,
         });
         break;
       }
+      case "power_planning":
       case "power_two_group": {
         const a = getValues(group1);
         const b = getValues(group2);
@@ -4318,7 +4743,8 @@ function StatisticsPanel({
           return;
         }
         const t = welchTTest(a, b);
-        const suggestedN = estimateSampleSizeForTwoGroup(Math.abs(t.cohenD));
+        const observedEffect = Math.abs(t.cohenD);
+        const suggestedN = estimateSampleSizeForTwoGroup(observedEffect, alpha, targetPower);
         setCurrentResult({
           test: "Two-group Sample Size Estimate",
           measure: measureLabels[measureKey] || measureKey,
@@ -4326,15 +4752,17 @@ function StatisticsPanel({
           groups_compared: `${group1} vs ${group2}`,
           included_animals: includedCount,
           excluded_animals: excludedCount,
-          observed_effect_size: Math.abs(t.cohenD),
+          observed_effect_size: observedEffect,
           suggested_n_per_group: suggestedN,
+          alpha,
+          target_power: targetPower,
           reference_p: t.p,
           reference_t: t.t,
         });
         break;
       }
     }
-  }, [betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, excludedCount, factorA, factorB, factorLevels, flatData, group1, group2, groupingFactor, includedCount, measureKey, measureKey2, measureLabels, pAdjustMethod, postHocMethod, subjectFactor, testType, withinSubjectFactor]);
+  }, [alpha, betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, eventMeasureKey, excludedCount, factorA, factorB, factorLevels, flatData, group1, group2, groupingFactor, includedCount, measureKey, measureKey2, measureLabels, pAdjustMethod, positiveClass, postHocMethod, predictorMeasureKey, regressionModelFamily, scoreMeasureKey, subjectFactor, targetPower, testType, timeToEventMeasureKey, withinSubjectFactor]);
 
   const handleCopyResults = useCallback(() => {
     if (!currentResult) return;
@@ -4343,15 +4771,18 @@ function StatisticsPanel({
     setTimeout(() => setCopied(false), 2000);
   }, [currentResult]);
 
-  const needsGroups = ["t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank", "power_two_group"].includes(testType);
-  const needsFactor = ["descriptive", "t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank", "anova", "kruskal_wallis", "multi_compare", "dunnett", "ancova", "chi_square", "fisher_exact", "roc_auc", "power_two_group"].includes(testType);
+  const needsGroups = ["t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank", "power_two_group", "power_planning"].includes(testType);
+  const needsFactor = ["descriptive", "t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank", "anova", "kruskal_wallis", "multi_compare", "dunnett", "ancova", "chi_square", "fisher_exact", "roc_auc", "roc_curve", "kaplan_meier", "log_rank", "power_two_group", "power_planning"].includes(testType);
   const needsTwoFactors = testType === "two_way_anova";
   const needsSecondMeasure = testType === "pearson" || testType === "spearman";
   const needsLongitudinalModel = testType === "repeated_measures_anova" || testType === "mixed_effects";
   const needsPAdjust = ["multi_compare", "repeated_measures_anova", "mixed_effects", "two_way_anova", "dunnett"].includes(testType) || (testType === "anova" && postHocMethod !== "none");
   const needsCovariate = testType === "ancova";
-  const needsBinaryGroups = ["chi_square", "fisher_exact", "roc_auc"].includes(testType);
+  const needsBinaryGroups = ["chi_square", "fisher_exact", "roc_auc", "roc_curve"].includes(testType);
   const needsControlGroup = testType === "dunnett";
+  const needsSurvivalFields = testType === "kaplan_meier" || testType === "log_rank";
+  const needsRegressionFields = testType === "nonlinear_regression" || testType === "dose_response";
+  const needsPowerPlanning = testType === "power_planning" || testType === "power_two_group";
 
   return (
     <div className="space-y-4">
@@ -4405,6 +4836,87 @@ function StatisticsPanel({
                   </SelectContent>
                 </Select>
               </div>
+            )}
+
+            {needsSurvivalFields && (
+              <>
+                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                  <Label className="text-xs mb-1 block">Time-to-event</Label>
+                  <Select value={timeToEventMeasureKey} onValueChange={setTimeToEventMeasureKey}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue placeholder="Select duration field" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {numericKeys.map((k) => (
+                        <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                  <Label className="text-xs mb-1 block">Event Field</Label>
+                  <Select value={eventMeasureKey} onValueChange={setEventMeasureKey}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue placeholder="Select event field" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {binaryMeasureKeys.map((k) => (
+                        <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Positive Event Label</Label>
+                  <Input value={positiveClass} onChange={(event) => setPositiveClass(event.target.value)} placeholder="Positive" />
+                </div>
+              </>
+            )}
+
+            {needsRegressionFields && (
+              <>
+                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                  <Label className="text-xs mb-1 block">Predictor</Label>
+                  <Select value={predictorMeasureKey} onValueChange={setPredictorMeasureKey}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue placeholder="Select predictor" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {numericKeys.map((k) => (
+                        <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                  <Label className="text-xs mb-1 block">Outcome</Label>
+                  <Select value={measureKey} onValueChange={setMeasureKey}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue placeholder="Select outcome" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {numericKeys.map((k) => (
+                        <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {testType === "nonlinear_regression" && (
+                  <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                    <Label className="text-xs mb-1 block">Model Family</Label>
+                    <Select value={regressionModelFamily} onValueChange={(value) => setRegressionModelFamily(value as "linear" | "exponential" | "logistic")}>
+                      <SelectTrigger className="w-full min-w-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="linear">Linear</SelectItem>
+                        <SelectItem value="exponential">Exponential</SelectItem>
+                        <SelectItem value="logistic">Logistic</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </>
             )}
 
             {needsCovariate && (
@@ -4560,6 +5072,32 @@ function StatisticsPanel({
 
             {needsBinaryGroups && (
               <>
+                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                  <Label className="text-xs mb-1 block">Score / Numeric Field</Label>
+                  <Select value={scoreMeasureKey || measureKey} onValueChange={setScoreMeasureKey}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {numericKeys.map((k) => (
+                        <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                  <Label className="text-xs mb-1 block">Binary Class Field</Label>
+                  <Select value={eventMeasureKey || measureKey} onValueChange={setEventMeasureKey}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue placeholder="Select class field" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {binaryMeasureKeys.map((k) => (
+                        <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div className="min-w-0 sm:col-span-1 lg:col-span-2">
                   <Label className="text-xs mb-1 block">Binary Group A</Label>
                   <Select value={binaryGroupA} onValueChange={setBinaryGroupA}>
@@ -4585,6 +5123,23 @@ function StatisticsPanel({
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Positive Class</Label>
+                  <Input value={positiveClass} onChange={(event) => setPositiveClass(event.target.value)} placeholder="Positive" />
+                </div>
+              </>
+            )}
+
+            {needsPowerPlanning && (
+              <>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Alpha</Label>
+                  <Input type="number" step="0.01" value={alpha} onChange={(event) => setAlpha(Number.parseFloat(event.target.value || "0.05") || 0.05)} />
+                </div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Target Power</Label>
+                  <Input type="number" step="0.05" value={targetPower} onChange={(event) => setTargetPower(Number.parseFloat(event.target.value || "0.8") || 0.8)} />
                 </div>
               </>
             )}
@@ -4633,6 +5188,33 @@ function StatisticsPanel({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2">
+            <Label className="text-xs mb-1 block">Report Bundle Measures</Label>
+            <div className="flex flex-wrap gap-2">
+              {numericKeys.slice(0, 10).map((key) => {
+                const selected = reportMeasureKeys.includes(key);
+                return (
+                  <Button
+                    key={key}
+                    variant={selected ? "default" : "outline"}
+                    size="sm"
+                    className="h-7"
+                    onClick={() =>
+                      setReportMeasureKeys((current) =>
+                        current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+                      )
+                    }
+                  >
+                    {measureLabels[key] || key}
+                  </Button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-slate-500">
+              These measures are carried into the saved revision report bundle and export metadata, even when the active analysis is centered on one primary outcome.
+            </p>
           </div>
 
           {needsLongitudinalModel && (
@@ -4687,6 +5269,9 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
   const cellCounts = result.cell_counts as Array<Record<string, unknown>> | undefined;
   const assumptionChecks = result.assumption_checks as Array<Record<string, unknown>> | undefined;
   const contingencyTable = result.contingency_table as Array<Record<string, unknown>> | undefined;
+  const survivalCurves = result.survival_curves as Array<Record<string, unknown>> | undefined;
+  const thresholdTable = result.threshold_table as Array<Record<string, unknown>> | undefined;
+  const fittedPoints = result.fitted_points as Array<Record<string, unknown>> | undefined;
   const includedAnimals = result.included_animals as number | undefined;
   const excludedAnimals = result.excluded_animals as number | undefined;
 
@@ -4738,7 +5323,7 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
       {comparisons == null && anovaTable == null && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           {Object.entries(result)
-            .filter(([k]) => !["test", "measure", "grouped_by", "group_stats", "group1_stats", "group2_stats", "comparisons", "anova_table", "cell_counts", "warning", "significant_005", "significant_001", "groups_compared", "levels_a", "levels_b", "factor_a", "factor_b", "assumption_checks", "included_animals", "excluded_animals", "posthoc_label", "subject_factor", "within_subject_factor", "between_subject_factor", "model_kind", "reportSummary", "reportResultsText", "reportMethodsText", "reportCaption", "reportWarnings", "figureMetadata"].includes(k) && typeof result[k] !== "object")
+            .filter(([k]) => !["test", "measure", "grouped_by", "group_stats", "group1_stats", "group2_stats", "comparisons", "anova_table", "cell_counts", "warning", "significant_005", "significant_001", "groups_compared", "levels_a", "levels_b", "factor_a", "factor_b", "assumption_checks", "included_animals", "excluded_animals", "posthoc_label", "subject_factor", "within_subject_factor", "between_subject_factor", "model_kind", "reportSummary", "reportResultsText", "reportMethodsText", "reportCaption", "reportWarnings", "figureMetadata", "survival_curves", "threshold_table", "roc_points", "fitted_points", "observed_expected", "optimal_threshold"].includes(k) && typeof result[k] !== "object")
             .map(([key, value]) => (
               <div key={key} className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
                 <div className="text-[10px] uppercase tracking-wide text-slate-500">{key.replace(/_/g, " ")}</div>
@@ -4854,6 +5439,88 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
                     <td className="px-2 py-1.5 font-medium">{String(row.group)}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{String(row.positive ?? 0)}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{String(row.negative ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {survivalCurves && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-slate-700">Survival curves</div>
+          <div className="overflow-x-auto rounded-md border border-slate-200">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50/70">
+                  <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Group</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">N</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Events</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Censored</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Median Survival</th>
+                </tr>
+              </thead>
+              <tbody>
+                {survivalCurves.map((curve, index) => (
+                  <tr key={index} className="border-b last:border-0">
+                    <td className="px-2 py-1.5 font-medium">{String(curve.group)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{String(curve.n)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{String(curve.events)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{String(curve.censored)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{curve.median_survival == null ? "—" : formatNum(Number(curve.median_survival), 3)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {thresholdTable && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-slate-700">ROC threshold summary</div>
+          <div className="overflow-x-auto rounded-md border border-slate-200">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50/70">
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Threshold</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Sensitivity</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Specificity</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Youden J</th>
+                </tr>
+              </thead>
+              <tbody>
+                {thresholdTable.slice(0, 8).map((row, index) => (
+                  <tr key={index} className="border-b last:border-0">
+                    <td className="px-2 py-1.5 text-right tabular-nums">{formatNum(Number(row.threshold), 4)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{formatNum(Number(row.sensitivity), 4)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{formatNum(Number(row.specificity), 4)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{formatNum(Number(row.youden_j), 4)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {fittedPoints && (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-slate-700">Fitted curve preview</div>
+          <div className="overflow-x-auto rounded-md border border-slate-200">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50/70">
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Predictor</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Fitted</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fittedPoints.slice(0, 12).map((row, index) => (
+                  <tr key={index} className="border-b last:border-0">
+                    <td className="px-2 py-1.5 text-right tabular-nums">{formatNum(Number(row.x), 4)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{formatNum(Number(row.y), 4)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -5057,6 +5724,12 @@ function ReportPreviewPanel({
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Figure Caption</p>
             <p className="mt-1 text-sm text-slate-800">{reportPayload.reportCaption}</p>
           </div>
+          {reportPayload.bundledMeasures && reportPayload.bundledMeasures.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Bundled Measures</p>
+              <p className="mt-1 text-sm text-slate-800">{reportPayload.bundledMeasures.join(", ")}</p>
+            </div>
+          )}
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Warnings</p>
             <div className="mt-1 space-y-1">
