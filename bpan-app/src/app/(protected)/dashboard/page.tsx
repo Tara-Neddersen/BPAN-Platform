@@ -542,7 +542,14 @@ function ActivityFilterPill({
 }
 
 async function MissingDataFixButton({ alert }: { alert: MissingDataAlert }) {
-  const action = alert.fix === "resync_meeting_tasks" ? resyncMeetingActionTasks : backfillStarterExperimentTimepoints;
+  const action = async (_formData: FormData) => {
+    "use server";
+    if (alert.fix === "resync_meeting_tasks") {
+      await resyncMeetingActionTasks();
+      return;
+    }
+    await backfillStarterExperimentTimepoints();
+  };
   const label = alert.fix === "resync_meeting_tasks" ? "Auto-fix: Resync tasks" : "Auto-fix: Create starter timepoints";
   return (
     <form action={action}>
