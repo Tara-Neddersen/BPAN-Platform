@@ -221,6 +221,11 @@ interface ColonyClientProps {
     summaryText?: string | null;
   }) => Promise<{ success?: boolean; analysisId?: string; revisionId?: string; revisionNumber?: number }>;
   deleteColonyAnalysis: (analysisId: string) => Promise<{ success?: boolean }>;
+  updateColonyAnalysisRevisionMetadata: (args: {
+    revisionId: string;
+    configPatch?: Record<string, unknown>;
+    summaryText?: string | null;
+  }) => Promise<{ success?: boolean }>;
   actions: {
     createBreederCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateBreederCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
@@ -333,6 +338,7 @@ export function ColonyClient({
   bulkDeleteColonyResults,
   saveColonyAnalysisRevision,
   deleteColonyAnalysis,
+  updateColonyAnalysisRevisionMetadata,
   actions,
 }: ColonyClientProps) {
   const router = useRouter();
@@ -1694,6 +1700,11 @@ export function ColonyClient({
             }}
             deleteAnalysis={async (analysisId) => {
               const result = await deleteColonyAnalysis(analysisId);
+              if (result.success) await refetchAll();
+              return result;
+            }}
+            updateAnalysisRevisionMetadata={async (args) => {
+              const result = await updateColonyAnalysisRevisionMetadata(args);
               if (result.success) await refetchAll();
               return result;
             }}

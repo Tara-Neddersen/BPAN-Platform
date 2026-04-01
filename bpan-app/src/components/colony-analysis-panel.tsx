@@ -1140,6 +1140,10 @@ interface GroupStats {
 }
 
 type AnalysisFactor = "group" | "sex" | "genotype" | "cohort" | "timepoint";
+type OutlierMethod = "iqr" | "zscore";
+type OutlierMode = "mark" | "exclude" | "restore";
+type AnalysisAuditSource = "manual" | "rule" | "outlier" | "restored";
+type ModelKind = ColonyAnalysisStatsDraft["modelKind"];
 
 interface AnalysisAnimalRow {
   animal_id: string;
@@ -1150,6 +1154,16 @@ interface AnalysisAnimalRow {
   group: string;
   rowCount: number;
   included: boolean;
+}
+
+interface AnalysisSetEntry {
+  animalId: string;
+  included: boolean;
+  reason: string;
+  source: AnalysisAuditSource;
+  outlierFlagged?: boolean;
+  outlierMode?: OutlierMode;
+  outlierScore?: number | null;
 }
 
 interface ColonyAnalysisStatsDraft {
@@ -1163,10 +1177,17 @@ interface ColonyAnalysisStatsDraft {
   group2: string;
   postHocMethod: "none" | "tukey";
   pAdjustMethod: "none" | "bonferroni" | "holm" | "fdr";
-  modelKind: "guided" | "repeated_measures" | "mixed_effects";
+  modelKind: "guided" | "repeated_measures" | "mixed_effects" | "paired" | "categorical" | "covariate" | "diagnostic";
   subjectFactor: "animal_id";
   withinSubjectFactor: "timepoint";
   betweenSubjectFactor: AnalysisFactor | "__none__";
+  covariateMeasureKey: string;
+  controlGroup: string;
+  binaryGroupA: string;
+  binaryGroupB: string;
+  outlierMethod: OutlierMethod;
+  outlierThreshold: number;
+  tableExportMode: "long" | "wide";
 }
 
 interface ColonyAnalysisVisualizationDraft {
@@ -1181,6 +1202,9 @@ interface ColonyAnalysisVisualizationDraft {
   autoStatsMethod: "welch_t" | "mann_whitney";
   autoPAdjust: "none" | "bonferroni";
   includeNsAnnotations: boolean;
+  showMeanLine: boolean;
+  showDistributionCurve: boolean;
+  tableExportMode: "long" | "wide";
 }
 
 interface SavedColonyAnalysisRoot {
@@ -1200,6 +1224,12 @@ interface SavedColonyAnalysisRevision {
   config: Record<string, unknown>;
   results: Record<string, unknown>;
   summaryText: string | null;
+}
+
+interface RevisionDiffSummary {
+  fromRevision: string;
+  toRevision: string;
+  changes: string[];
 }
 
 interface AnalysisSuggestion {
@@ -1254,6 +1284,11 @@ interface ColonyAnalysisPanelProps {
     summaryText?: string | null;
   }) => Promise<{ success?: boolean; analysisId?: string; revisionId?: string; revisionNumber?: number }>;
   deleteAnalysis: (analysisId: string) => Promise<{ success?: boolean }>;
+  updateAnalysisRevisionMetadata: (args: {
+    revisionId: string;
+    configPatch?: Record<string, unknown>;
+    summaryText?: string | null;
+  }) => Promise<{ success?: boolean }>;
 }
 
 function defaultStatsDraft(): ColonyAnalysisStatsDraft {
@@ -1272,6 +1307,13 @@ function defaultStatsDraft(): ColonyAnalysisStatsDraft {
     subjectFactor: "animal_id",
     withinSubjectFactor: "timepoint",
     betweenSubjectFactor: "__none__",
+    covariateMeasureKey: "",
+    controlGroup: "",
+    binaryGroupA: "",
+    binaryGroupB: "",
+    outlierMethod: "iqr",
+    outlierThreshold: 1.5,
+    tableExportMode: "long",
   };
 }
 
@@ -1288,6 +1330,48 @@ function defaultVisualizationDraft(): ColonyAnalysisVisualizationDraft {
     autoStatsMethod: "welch_t",
     autoPAdjust: "none",
     includeNsAnnotations: false,
+    showMeanLine: false,
+    showDistributionCurve: false,
+    tableExportMode: "long",
+  };
+}
+
+function normalizeAnalysisSetEntry(entry: Record<string, unknown>): AnalysisSetEntry {
+  return {
+    animalId: String(entry.animalId || ""),
+    included: entry.included !== false,
+    reason: String(entry.reason || ""),
+    source: String(entry.source || "manual") as AnalysisAuditSource,
+    outlierFlagged: Boolean(entry.outlierFlagged),
+    outlierMode:
+      entry.outlierMode === "mark" || entry.outlierMode === "exclude" || entry.outlierMode === "restore"
+        ? entry.outlierMode
+        : undefined,
+    outlierScore:
+      typeof entry.outlierScore === "number"
+        ? entry.outlierScore
+        : Number.isNaN(Number(entry.outlierScore))
+          ? null
+          : Number(entry.outlierScore),
+  };
+}
+
+function normalizeStatsDraft(input?: Partial<ColonyAnalysisStatsDraft>): ColonyAnalysisStatsDraft {
+  return {
+    ...defaultStatsDraft(),
+    ...(input || {}),
+  };
+}
+
+function normalizeVisualizationDraft(
+  input?: Partial<ColonyAnalysisVisualizationDraft>,
+): ColonyAnalysisVisualizationDraft {
+  return {
+    ...defaultVisualizationDraft(),
+    ...(input || {}),
+    sigAnnotations: Array.isArray(input?.sigAnnotations)
+      ? (input.sigAnnotations as Array<{ group1: string; group2: string; label: string }>)
+      : [],
   };
 }
 
@@ -1434,6 +1518,208 @@ function generateAnalysisReport(params: {
   };
 }
 
+function quantile(values: number[], q: number) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  if (sorted[base + 1] !== undefined) return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+  return sorted[base];
+}
+
+function detectOutlierScores(
+  rows: FlatRow[],
+  measureKey: string,
+  method: OutlierMethod,
+  threshold: number,
+): Record<string, { score: number; flagged: boolean }> {
+  const values = rows
+    .map((row) => ({ animalId: row.animal_id, value: Number(row[measureKey]) }))
+    .filter((entry) => !Number.isNaN(entry.value));
+  if (values.length < 4) return {};
+  if (method === "zscore") {
+    const numeric = values.map((entry) => entry.value);
+    const m = mean(numeric);
+    const sd = stdDev(numeric);
+    return values.reduce<Record<string, { score: number; flagged: boolean }>>((acc, entry) => {
+      const score = sd === 0 ? 0 : Math.abs((entry.value - m) / sd);
+      acc[entry.animalId] = { score: round(score, 4), flagged: score > threshold };
+      return acc;
+    }, {});
+  }
+  const numeric = values.map((entry) => entry.value);
+  const q1 = quantile(numeric, 0.25);
+  const q3 = quantile(numeric, 0.75);
+  const iqr = q3 - q1;
+  const lower = q1 - threshold * iqr;
+  const upper = q3 + threshold * iqr;
+  return values.reduce<Record<string, { score: number; flagged: boolean }>>((acc, entry) => {
+    let score = 0;
+    if (entry.value < q1 && iqr > 0) score = Math.abs((q1 - entry.value) / iqr);
+    if (entry.value > q3 && iqr > 0) score = Math.abs((entry.value - q3) / iqr);
+    acc[entry.animalId] = {
+      score: round(score, 4),
+      flagged: entry.value < lower || entry.value > upper,
+    };
+    return acc;
+  }, {});
+}
+
+function wilcoxonSignedRankTest(a: number[], b: number[]): { W: number; z: number; p: number; rankBiserial: number } {
+  if (a.length !== b.length || a.length < 2) return { W: 0, z: 0, p: 1, rankBiserial: 0 };
+  const diffs = a.map((value, index) => value - b[index]).filter((value) => value !== 0);
+  if (diffs.length === 0) return { W: 0, z: 0, p: 1, rankBiserial: 0 };
+  const absDiffs = diffs.map(Math.abs);
+  const ranks = rankWithTies(absDiffs);
+  let wPositive = 0;
+  let wNegative = 0;
+  diffs.forEach((diff, index) => {
+    if (diff > 0) wPositive += ranks[index];
+    else wNegative += ranks[index];
+  });
+  const W = Math.min(wPositive, wNegative);
+  const n = diffs.length;
+  const meanW = (n * (n + 1)) / 4;
+  const sdW = Math.sqrt((n * (n + 1) * (2 * n + 1)) / 24);
+  const z = sdW === 0 ? 0 : (W - meanW) / sdW;
+  const p = 2 * (1 - approxNormCDF(Math.abs(z)));
+  const rankBiserial = (wPositive - wNegative) / ((n * (n + 1)) / 2);
+  return { W: round(W), z: round(z), p: round(p, 6), rankBiserial: round(rankBiserial) };
+}
+
+function chiSquareTest(contingency: number[][]) {
+  const rowSums = contingency.map((row) => row.reduce((sum, value) => sum + value, 0));
+  const colSums = contingency[0].map((_, index) => contingency.reduce((sum, row) => sum + row[index], 0));
+  const total = rowSums.reduce((sum, value) => sum + value, 0);
+  let chi2 = 0;
+  for (let r = 0; r < contingency.length; r++) {
+    for (let c = 0; c < contingency[r].length; c++) {
+      const expected = (rowSums[r] * colSums[c]) / Math.max(total, 1);
+      if (expected > 0) chi2 += ((contingency[r][c] - expected) ** 2) / expected;
+    }
+  }
+  const df = (contingency.length - 1) * (contingency[0].length - 1);
+  const p = 1 - approxChiSquareCDF(chi2, df);
+  const phi = total > 0 ? Math.sqrt(chi2 / total) : 0;
+  return { chi2: round(chi2), df, p: round(p, 6), phi: round(phi) };
+}
+
+function logFactorial(n: number) {
+  let result = 0;
+  for (let i = 2; i <= n; i++) result += Math.log(i);
+  return result;
+}
+
+function fisherExactTest(a: number, b: number, c: number, d: number) {
+  const row1 = a + b;
+  const row2 = c + d;
+  const col1 = a + c;
+  const total = row1 + row2;
+  const minA = Math.max(0, col1 - row2);
+  const maxA = Math.min(col1, row1);
+  const hyperProb = (x: number) =>
+    Math.exp(
+      logFactorial(row1) +
+        logFactorial(row2) +
+        logFactorial(col1) +
+        logFactorial(total - col1) -
+        (logFactorial(total) + logFactorial(x) + logFactorial(row1 - x) + logFactorial(col1 - x) + logFactorial(row2 - col1 + x)),
+    );
+  const observed = hyperProb(a);
+  let p = 0;
+  for (let x = minA; x <= maxA; x++) {
+    const prob = hyperProb(x);
+    if (prob <= observed + 1e-12) p += prob;
+  }
+  const oddsRatio = b * c === 0 ? (a * d === 0 ? 0 : Infinity) : (a * d) / (b * c);
+  return { p: round(Math.min(p, 1), 6), oddsRatio: Number.isFinite(oddsRatio) ? round(oddsRatio) : oddsRatio };
+}
+
+function ancova(rows: FlatRow[], outcomeKey: string, factor: AnalysisFactor, covariateKey: string) {
+  const prepared = rows
+    .map((row) => ({
+      y: Number(row[outcomeKey]),
+      covariate: Number(row[covariateKey]),
+      factorLevel: getFactorValue(row, factor),
+    }))
+    .filter((row) => !Number.isNaN(row.y) && !Number.isNaN(row.covariate) && row.factorLevel);
+  const levels = Array.from(new Set(prepared.map((row) => row.factorLevel))).sort();
+  if (levels.length < 2) return { error: "ANCOVA needs at least 2 factor levels with valid covariate values." } as const;
+  if (prepared.length < levels.length + 3) return { error: "Not enough rows to estimate ANCOVA with the selected covariate." } as const;
+  const reducedDesign = prepared.map((row) => [1, row.covariate]);
+  const fullDesign = prepared.map((row) => [
+    1,
+    row.covariate,
+    ...levels.slice(1).map((level) => (row.factorLevel === level ? 1 : 0)),
+  ]);
+  const y = prepared.map((row) => row.y);
+  const reducedFit = fitLinearModel(reducedDesign, y);
+  const fullFit = fitLinearModel(fullDesign, y);
+  if (!reducedFit || !fullFit) return { error: "Could not fit ANCOVA with the selected measure and covariate." } as const;
+  const dfFactor = levels.length - 1;
+  const ssFactor = Math.max(0, reducedFit.sse - fullFit.sse);
+  const msFactor = dfFactor > 0 ? ssFactor / dfFactor : 0;
+  const msError = fullFit.dfResidual > 0 ? fullFit.sse / fullFit.dfResidual : 0;
+  const F = msError > 0 ? msFactor / msError : 0;
+  const p = dfFactor > 0 && fullFit.dfResidual > 0 ? 1 - approxFCDF(F, dfFactor, fullFit.dfResidual) : 1;
+  return {
+    factor: getFactorLabel(factor),
+    covariate: covariateKey,
+    F: round(F),
+    dfFactor,
+    dfError: fullFit.dfResidual,
+    p: round(p, 6),
+    partial_eta_sq: round(ssFactor / Math.max(ssFactor + fullFit.sse, 1e-12)),
+  };
+}
+
+function rocAucFromBinaryGroups(groupA: number[], groupB: number[]) {
+  const totalPairs = groupA.length * groupB.length;
+  if (totalPairs === 0) return { auc: 0.5, p: 1 };
+  let wins = 0;
+  let ties = 0;
+  for (const a of groupA) {
+    for (const b of groupB) {
+      if (a > b) wins += 1;
+      else if (a === b) ties += 1;
+    }
+  }
+  const auc = (wins + ties * 0.5) / totalPairs;
+  const mw = mannWhitneyUTest(groupA, groupB);
+  return { auc: round(auc, 4), p: mw.p };
+}
+
+function estimateSampleSizeForTwoGroup(effectSize: number, alpha = 0.05, power = 0.8) {
+  if (effectSize <= 0) return null;
+  const zAlpha = 1.96;
+  const zPower = power >= 0.9 ? 1.28 : power >= 0.8 ? 0.84 : 0.52;
+  return Math.ceil((2 * (zAlpha + zPower) ** 2) / (effectSize ** 2));
+}
+
+function summarizeRevisionDiff(a: SavedColonyAnalysisRevision | null, b: SavedColonyAnalysisRevision | null): RevisionDiffSummary | null {
+  if (!a || !b) return null;
+  const changes: string[] = [];
+  const aStats = (a.config.statistics || {}) as Record<string, unknown>;
+  const bStats = (b.config.statistics || {}) as Record<string, unknown>;
+  const aScope = (a.config.scope || {}) as Record<string, unknown>;
+  const bScope = (b.config.scope || {}) as Record<string, unknown>;
+  if (aStats.testType !== bStats.testType) changes.push(`Test changed from ${String(aStats.testType || "—")} to ${String(bStats.testType || "—")}.`);
+  if (aStats.measureKey !== bStats.measureKey) changes.push(`Primary measure changed from ${String(aStats.measureKey || "—")} to ${String(bStats.measureKey || "—")}.`);
+  if (aScope.experiment !== bScope.experiment || aScope.timepoint !== bScope.timepoint) {
+    changes.push(`Scope changed from ${String(aScope.experiment || "all")} @ ${String(aScope.timepoint || "all")} to ${String(bScope.experiment || "all")} @ ${String(bScope.timepoint || "all")}.`);
+  }
+  const aExcluded = Array.isArray(a.config.analysisSetEntries) ? (a.config.analysisSetEntries as Array<Record<string, unknown>>).filter((entry) => entry.included === false).length : 0;
+  const bExcluded = Array.isArray(b.config.analysisSetEntries) ? (b.config.analysisSetEntries as Array<Record<string, unknown>>).filter((entry) => entry.included === false).length : 0;
+  if (aExcluded !== bExcluded) changes.push(`Excluded animals changed from ${aExcluded} to ${bExcluded}.`);
+  if (String(a.results.reportSummary || "") !== String(b.results.reportSummary || "")) changes.push("Statistical summary changed.");
+  return {
+    fromRevision: `Rev ${a.revisionNumber}`,
+    toRevision: `Rev ${b.revisionNumber}`,
+    changes: changes.length > 0 ? changes : ["No major difference detected in saved scope, stats config, or summary."],
+  };
+}
+
 function suggestAnalysisTests(params: {
   flatData: FlatRow[];
   numericKeys: string[];
@@ -1555,6 +1841,7 @@ export function ColonyAnalysisPanel({
   savedAnalysisRevisions,
   saveAnalysisRevision,
   deleteAnalysis,
+  updateAnalysisRevisionMetadata,
 }: ColonyAnalysisPanelProps) {
   // ── Filter state ──
   const [activeRunId, setActiveRunId] = useState<string>("__all__");
@@ -1565,11 +1852,16 @@ export function ColonyAnalysisPanel({
   const [selectedCohort, setSelectedCohort] = useState<string>("__all__");
   const [excludedAnimalIds, setExcludedAnimalIds] = useState<Set<string>>(new Set());
   const [exclusionReasons, setExclusionReasons] = useState<Record<string, string>>({});
+  const [exclusionSources, setExclusionSources] = useState<Record<string, AnalysisAuditSource>>({});
+  const [outlierFlags, setOutlierFlags] = useState<Record<string, boolean>>({});
+  const [outlierModes, setOutlierModes] = useState<Record<string, OutlierMode>>({});
+  const [outlierScores, setOutlierScores] = useState<Record<string, number>>({});
   const [animalSearch, setAnimalSearch] = useState("");
   const [analysisName, setAnalysisName] = useState("Untitled Colony Analysis");
   const [analysisDescription, setAnalysisDescription] = useState("");
   const [selectedSavedAnalysisId, setSelectedSavedAnalysisId] = useState<string>("__new__");
   const [selectedRevisionId, setSelectedRevisionId] = useState<string>("__latest__");
+  const [compareRevisionId, setCompareRevisionId] = useState<string>("__none__");
   const [statsDraft, setStatsDraft] = useState<ColonyAnalysisStatsDraft>(defaultStatsDraft());
   const [visualizationDraft, setVisualizationDraft] = useState<ColonyAnalysisVisualizationDraft>(defaultVisualizationDraft());
   const [savedResult, setSavedResult] = useState<Record<string, unknown> | null>(null);
@@ -1661,6 +1953,11 @@ export function ColonyAnalysisPanel({
       : selectedRevisionId === "__latest__"
       ? currentSavedRevisions[0] || null
       : currentSavedRevisions.find((revision) => revision.id === selectedRevisionId) || null;
+  const compareRevision =
+    selectedSavedAnalysisId === "__new__" || compareRevisionId === "__none__"
+      ? null
+      : currentSavedRevisions.find((revision) => revision.id === compareRevisionId) || null;
+  const selectedRevisionFinalized = Boolean(selectedSavedRevision?.config?.finalized);
 
   // Available experiment types from results
   const availableExperiments = useMemo(() => {
@@ -1856,10 +2153,34 @@ export function ColonyAnalysisPanel({
   );
   const activeExclusions = useMemo(
     () =>
-      Object.entries(exclusionReasons)
-        .filter(([animalId]) => excludedAnimalIds.has(animalId))
-        .map(([animalId, reason]) => ({ animalId, reason })),
-    [excludedAnimalIds, exclusionReasons],
+      Array.from(new Set([...Object.keys(exclusionReasons), ...Array.from(excludedAnimalIds)]))
+        .filter((animalId) => excludedAnimalIds.has(animalId))
+        .map((animalId) => ({
+          animalId,
+          reason: exclusionReasons[animalId] || "",
+          source: exclusionSources[animalId] || "manual",
+          outlierFlagged: Boolean(outlierFlags[animalId]),
+          outlierMode: outlierModes[animalId],
+          outlierScore: outlierScores[animalId],
+        })),
+    [excludedAnimalIds, exclusionReasons, exclusionSources, outlierFlags, outlierModes, outlierScores],
+  );
+  const currentAnalysisSetEntries = useMemo<AnalysisSetEntry[]>(
+    () =>
+      analysisAnimals.map((animal) => ({
+        animalId: animal.animal_id,
+        included: !excludedAnimalIds.has(animal.animal_id),
+        reason: exclusionReasons[animal.animal_id] || "",
+        source: exclusionSources[animal.animal_id] || "manual",
+        outlierFlagged: Boolean(outlierFlags[animal.animal_id]),
+        outlierMode: outlierModes[animal.animal_id],
+        outlierScore: outlierScores[animal.animal_id] ?? null,
+      })),
+    [analysisAnimals, excludedAnimalIds, exclusionReasons, exclusionSources, outlierFlags, outlierModes, outlierScores],
+  );
+  const revisionDiff = useMemo(
+    () => summarizeRevisionDiff(compareRevision, selectedSavedRevision),
+    [compareRevision, selectedSavedRevision],
   );
   const currentReportPayload = useMemo(
     () =>
@@ -1937,8 +2258,24 @@ export function ColonyAnalysisPanel({
     const exclusions = Array.isArray(selectedSavedRevision.config.excludedAnimals)
       ? (selectedSavedRevision.config.excludedAnimals as Array<Record<string, unknown>>)
       : [];
-    const stats = (selectedSavedRevision.config.statistics || {}) as Partial<ColonyAnalysisStatsDraft>;
-    const visualization = (selectedSavedRevision.config.visualization || {}) as Partial<ColonyAnalysisVisualizationDraft>;
+    const analysisSetEntries = Array.isArray(selectedSavedRevision.config.analysisSetEntries)
+      ? (selectedSavedRevision.config.analysisSetEntries as Array<Record<string, unknown>>).map(normalizeAnalysisSetEntry)
+      : [];
+    const stats = normalizeStatsDraft((selectedSavedRevision.config.statistics || {}) as Partial<ColonyAnalysisStatsDraft>);
+    const visualization = normalizeVisualizationDraft(
+      (selectedSavedRevision.config.visualization || {}) as Partial<ColonyAnalysisVisualizationDraft>,
+    );
+    const effectiveEntries =
+      analysisSetEntries.length > 0
+        ? analysisSetEntries
+        : exclusions.map((entry) =>
+            normalizeAnalysisSetEntry({
+              animalId: entry.animalId,
+              included: false,
+              reason: entry.reason,
+              source: "manual",
+            }),
+          );
 
     setAnalysisName(selectedSavedRevision.name || "Untitled Colony Analysis");
     setAnalysisDescription(String(selectedSavedRevision.config.description || ""));
@@ -1946,26 +2283,57 @@ export function ColonyAnalysisPanel({
     setSelectedExperiment(typeof scope.experiment === "string" ? scope.experiment : "__all__");
     setSelectedTimepoint(typeof scope.timepoint === "string" ? scope.timepoint : "__all__");
     setSelectedCohort(typeof scope.cohort === "string" ? scope.cohort : "__all__");
-    setExcludedAnimalIds(new Set(exclusions.map((entry) => String(entry.animalId || "")).filter(Boolean)));
+    setExcludedAnimalIds(
+      new Set(
+        effectiveEntries
+          .filter((entry) => entry.included === false)
+          .map((entry) => String(entry.animalId || ""))
+          .filter(Boolean),
+      ),
+    );
     setExclusionReasons(
-      exclusions.reduce<Record<string, string>>((acc, entry) => {
+      effectiveEntries.reduce<Record<string, string>>((acc, entry) => {
         const animalId = String(entry.animalId || "").trim();
         if (!animalId) return acc;
         acc[animalId] = String(entry.reason || "");
         return acc;
       }, {}),
     );
-    setStatsDraft({
-      ...defaultStatsDraft(),
-      ...stats,
-    });
-    setVisualizationDraft({
-      ...defaultVisualizationDraft(),
-      ...visualization,
-      sigAnnotations: Array.isArray(visualization.sigAnnotations)
-        ? (visualization.sigAnnotations as Array<{ group1: string; group2: string; label: string }>)
-        : [],
-    });
+    setExclusionSources(
+      effectiveEntries.reduce<Record<string, AnalysisAuditSource>>((acc, entry) => {
+        const animalId = String(entry.animalId || "").trim();
+        if (!animalId) return acc;
+        acc[animalId] = (String(entry.source || "manual") as AnalysisAuditSource);
+        return acc;
+      }, {}),
+    );
+    setOutlierFlags(
+      effectiveEntries.reduce<Record<string, boolean>>((acc, entry) => {
+        const animalId = String(entry.animalId || "").trim();
+        if (!animalId) return acc;
+        acc[animalId] = Boolean(entry.outlierFlagged);
+        return acc;
+      }, {}),
+    );
+    setOutlierModes(
+      effectiveEntries.reduce<Record<string, OutlierMode>>((acc, entry) => {
+        const animalId = String(entry.animalId || "").trim();
+        if (!animalId || !entry.outlierMode) return acc;
+        acc[animalId] = String(entry.outlierMode) as OutlierMode;
+        return acc;
+      }, {}),
+    );
+    setOutlierScores(
+      effectiveEntries.reduce<Record<string, number>>((acc, entry) => {
+        const animalId = String(entry.animalId || "").trim();
+        const value = Number(entry.outlierScore);
+        if (!animalId || Number.isNaN(value)) return acc;
+        acc[animalId] = value;
+        return acc;
+      }, {}),
+    );
+    setStatsDraft(stats);
+    setVisualizationDraft(visualization);
     setSavedResult(selectedSavedRevision.results || null);
     setLoadedRevisionKey(selectedSavedRevision.id);
   }, [selectedSavedRevision]);
@@ -1973,6 +2341,7 @@ export function ColonyAnalysisPanel({
   useEffect(() => {
     if (selectedSavedAnalysisId !== "__new__") return;
     setSelectedRevisionId("__latest__");
+    setCompareRevisionId("__none__");
   }, [selectedSavedAnalysisId]);
 
   const exportAnalysisRows = useCallback(
@@ -2111,12 +2480,21 @@ export function ColonyAnalysisPanel({
             animalId,
             reason: exclusionReasons[animalId] || "",
           })),
+          analysisSetEntries: currentAnalysisSetEntries,
+          analysisSetPreset: {
+            runId: resolvedRunId,
+            experiment: effectiveSelectedExperiment,
+            timepoint: effectiveSelectedTimepoint,
+            cohort: selectedCohort,
+            search: animalSearch,
+          },
           statistics: statsDraft,
           visualization: visualizationDraft,
           reportWarnings: currentReportPayload?.reportWarnings || [],
           figureMetadata: currentReportPayload?.figureMetadata || null,
           includedAnimalCount,
           excludedAnimalCount,
+          finalized: selectedSavedRevision?.config?.finalized || false,
         },
         results: {
           ...savedResult,
@@ -2146,6 +2524,8 @@ export function ColonyAnalysisPanel({
     [
       analysisDescription,
       analysisName,
+      animalSearch,
+      currentAnalysisSetEntries,
       currentReportPayload,
       effectiveSelectedExperiment,
       effectiveSelectedTimepoint,
@@ -2157,6 +2537,7 @@ export function ColonyAnalysisPanel({
       saveAnalysisRevision,
       savedResult,
       selectedCohort,
+      selectedSavedRevision?.config,
       selectedSavedAnalysisId,
       statsDraft,
       visualizationDraft,
@@ -2175,6 +2556,150 @@ export function ColonyAnalysisPanel({
       toast.error(error instanceof Error ? error.message : "Failed to delete saved analysis.");
     }
   }, [analysisName, deleteAnalysis, selectedSavedAnalysisId]);
+
+  const markAnimalExclusion = useCallback((animalId: string, included: boolean, source: AnalysisAuditSource, reason = "") => {
+    setExcludedAnimalIds((current) => {
+      const next = new Set(current);
+      if (included) next.delete(animalId);
+      else next.add(animalId);
+      return next;
+    });
+    setExclusionSources((current) => ({ ...current, [animalId]: source }));
+    if (reason) {
+      setExclusionReasons((current) => ({ ...current, [animalId]: reason }));
+    }
+  }, []);
+
+  const handleRunOutlierScreen = useCallback(
+    (mode: OutlierMode) => {
+      if (!statsDraft.measureKey) {
+        toast.error("Choose an outcome measure first for outlier screening.");
+        return;
+      }
+      const scores = detectOutlierScores(flatData, statsDraft.measureKey, statsDraft.outlierMethod, statsDraft.outlierThreshold);
+      setOutlierFlags((current) => ({
+        ...current,
+        ...Object.fromEntries(Object.entries(scores).map(([animalId, payload]) => [animalId, payload.flagged])),
+      }));
+      setOutlierScores((current) => ({
+        ...current,
+        ...Object.fromEntries(Object.entries(scores).map(([animalId, payload]) => [animalId, payload.score])),
+      }));
+      setOutlierModes((current) => ({
+        ...current,
+        ...Object.fromEntries(Object.entries(scores).filter(([, payload]) => payload.flagged).map(([animalId]) => [animalId, mode])),
+      }));
+      Object.entries(scores).forEach(([animalId, payload]) => {
+        if (!payload.flagged) return;
+        if (mode === "restore") {
+          markAnimalExclusion(animalId, true, "restored", "");
+          return;
+        }
+        markAnimalExclusion(
+          animalId,
+          mode !== "exclude",
+          "outlier",
+          `${statsDraft.outlierMethod.toUpperCase()} outlier screen (${statsDraft.measureKey}) score ${payload.score.toFixed(2)}`,
+        );
+      });
+      const flaggedCount = Object.values(scores).filter((payload) => payload.flagged).length;
+      toast.success(
+        flaggedCount > 0
+          ? `Flagged ${flaggedCount} outlier${flaggedCount === 1 ? "" : "s"} using ${statsDraft.outlierMethod.toUpperCase()}.`
+          : "No outliers were flagged with the current settings.",
+      );
+    },
+    [flatData, markAnimalExclusion, statsDraft.measureKey, statsDraft.outlierMethod, statsDraft.outlierThreshold],
+  );
+
+  const handleDuplicateAnalysis = useCallback(async () => {
+    if (!savedResult) {
+      toast.error("Run or load an analysis first.");
+      return;
+    }
+    const payload = {
+      analysisId: null,
+      name: `${analysisName.trim() || "Colony Analysis"} Copy`,
+      description: analysisDescription.trim() || null,
+      config: {
+        description: analysisDescription.trim() || null,
+        scope: {
+          runId: resolvedRunId,
+          experiment: effectiveSelectedExperiment,
+          timepoint: effectiveSelectedTimepoint,
+          cohort: selectedCohort,
+        },
+        excludedAnimals: Array.from(excludedAnimalIds).map((animalId) => ({
+          animalId,
+          reason: exclusionReasons[animalId] || "",
+        })),
+        analysisSetEntries: currentAnalysisSetEntries,
+        statistics: statsDraft,
+        visualization: visualizationDraft,
+        reportWarnings: currentReportPayload?.reportWarnings || [],
+        figureMetadata: currentReportPayload?.figureMetadata || null,
+        includedAnimalCount,
+        excludedAnimalCount,
+        duplicatedFromRevisionId: selectedSavedRevision?.id || null,
+      },
+      results: {
+        ...savedResult,
+        reportSummary: currentReportPayload?.reportSummary || "",
+        reportResultsText: currentReportPayload?.reportResultsText || "",
+        reportMethodsText: currentReportPayload?.reportMethodsText || "",
+        reportCaption: currentReportPayload?.reportCaption || "",
+        reportWarnings: currentReportPayload?.reportWarnings || [],
+        figureMetadata: currentReportPayload?.figureMetadata || null,
+      },
+      summaryText: currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
+    };
+    const result = await saveAnalysisRevision(payload);
+    if (result.success && result.analysisId) {
+      setSelectedSavedAnalysisId(result.analysisId);
+      setSelectedRevisionId(result.revisionId || "__latest__");
+      toast.success("Saved analysis duplicated.");
+    }
+  }, [analysisDescription, analysisName, currentAnalysisSetEntries, currentReportPayload, effectiveSelectedExperiment, effectiveSelectedTimepoint, excludedAnimalCount, excludedAnimalIds, exclusionReasons, includedAnimalCount, resolvedRunId, saveAnalysisRevision, savedResult, selectedCohort, selectedSavedRevision?.id, statsDraft, visualizationDraft]);
+
+  const handleToggleFinalizeRevision = useCallback(async () => {
+    if (!selectedSavedRevision) return;
+    try {
+      await updateAnalysisRevisionMetadata({
+        revisionId: selectedSavedRevision.id,
+        configPatch: {
+          finalized: !selectedRevisionFinalized,
+          finalizedAt: !selectedRevisionFinalized ? new Date().toISOString() : null,
+        },
+      });
+      toast.success(selectedRevisionFinalized ? "Revision unlocked for editing." : "Revision finalized.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update revision status.");
+    }
+  }, [selectedRevisionFinalized, selectedSavedRevision, updateAnalysisRevisionMetadata]);
+
+  const handleExportResultTables = useCallback(() => {
+    if (!savedResult) {
+      toast.error("Run an analysis first to export result tables.");
+      return;
+    }
+    const rows: Array<Record<string, unknown>> = [];
+    if (Array.isArray(savedResult.group_stats)) rows.push(...(savedResult.group_stats as Array<Record<string, unknown>>).map((row) => ({ table: "group_stats", ...row })));
+    if (Array.isArray(savedResult.anova_table)) rows.push(...(savedResult.anova_table as Array<Record<string, unknown>>).map((row) => ({ table: "anova_table", ...row })));
+    if (Array.isArray(savedResult.comparisons)) rows.push(...(savedResult.comparisons as Array<Record<string, unknown>>).map((row) => ({ table: "comparisons", ...row })));
+    if (rows.length === 0) {
+      toast.error("This result does not currently expose structured tables.");
+      return;
+    }
+    const csv = Papa.unparse(rows);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${analysisName.replace(/\s+/g, "-").toLowerCase() || "colony-analysis"}-tables.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast.success("Structured result tables exported.");
+  }, [analysisName, savedResult]);
 
   if (colonyResults.length === 0) {
     return (
@@ -2218,16 +2743,37 @@ export function ColonyAnalysisPanel({
               <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportFigurePacket}>
                 <Download className="h-3.5 w-3.5" /> Figure Packet
               </Button>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportResultTables} disabled={!savedResult}>
+                <Download className="h-3.5 w-3.5" /> Tables
+              </Button>
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => handleSaveAnalysis("new")}>
                 <Save className="h-3.5 w-3.5" /> Save as New
               </Button>
               <Button
                 size="sm"
                 className="gap-1.5"
-                disabled={selectedSavedAnalysisId === "__new__"}
+                disabled={selectedSavedAnalysisId === "__new__" || selectedRevisionFinalized}
                 onClick={() => handleSaveAnalysis("revision")}
               >
                 <Save className="h-3.5 w-3.5" /> Save Revision
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={!savedResult}
+                onClick={handleDuplicateAnalysis}
+              >
+                <Copy className="h-3.5 w-3.5" /> Duplicate
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={selectedSavedAnalysisId === "__new__" || !selectedSavedRevision}
+                onClick={handleToggleFinalizeRevision}
+              >
+                <Check className="h-3.5 w-3.5" /> {selectedRevisionFinalized ? "Unlock" : "Finalize"}
               </Button>
               <Button
                 variant="outline"
@@ -2273,14 +2819,59 @@ export function ColonyAnalysisPanel({
               </Select>
             </div>
             <div>
+              <Label className="text-xs mb-1 block">Compare Against</Label>
+              <Select value={compareRevisionId} onValueChange={setCompareRevisionId} disabled={selectedSavedAnalysisId === "__new__"}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No comparison</SelectItem>
+                  {currentSavedRevisions
+                    .filter((revision) => revision.id !== selectedSavedRevision?.id)
+                    .map((revision) => (
+                      <SelectItem key={revision.id} value={revision.id}>
+                        Rev {revision.revisionNumber}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label className="text-xs mb-1 block">Analysis Name</Label>
               <Input value={analysisName} onChange={(event) => setAnalysisName(event.target.value)} placeholder="e.g. Run 1 30D Y-Maze" />
             </div>
-            <div>
+            <div className="sm:col-span-2 lg:col-span-1">
               <Label className="text-xs mb-1 block">Description</Label>
               <Input value={analysisDescription} onChange={(event) => setAnalysisDescription(event.target.value)} placeholder="Optional methods / scope note" />
             </div>
           </div>
+          {(selectedSavedRevision || revisionDiff) && (
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {selectedSavedRevision && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs text-slate-700">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">Revision State</span>
+                    {selectedRevisionFinalized ? (
+                      <Badge className="bg-emerald-600 text-white">Finalized</Badge>
+                    ) : (
+                      <Badge variant="outline">Editable</Badge>
+                    )}
+                  </div>
+                  <div className="mt-1">Revision {selectedSavedRevision.revisionNumber} saved {new Date(selectedSavedRevision.createdAt).toLocaleString()}.</div>
+                </div>
+              )}
+              {revisionDiff && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs text-slate-700">
+                  <div className="font-medium">{revisionDiff.fromRevision} → {revisionDiff.toRevision}</div>
+                  <div className="mt-1 space-y-1">
+                    {revisionDiff.changes.map((change) => (
+                      <div key={change}>• {change}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -2406,7 +2997,10 @@ export function ColonyAnalysisPanel({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setExcludedAnimalIds(new Set())}
+                onClick={() => {
+                  setExcludedAnimalIds(new Set());
+                  setExclusionSources({});
+                }}
                 disabled={excludedAnimalCount === 0}
               >
                 Include all
@@ -2415,11 +3009,9 @@ export function ColonyAnalysisPanel({
                 variant="outline"
                 size="sm"
                 onClick={() =>
-                  setExcludedAnimalIds((current) => {
-                    const next = new Set(current);
-                    visibleAnalysisAnimals.forEach((animal) => next.add(animal.animal_id));
-                    return next;
-                  })
+                  visibleAnalysisAnimals.forEach((animal) =>
+                    markAnimalExclusion(animal.animal_id, false, "rule", "Visible selection exclusion"),
+                  )
                 }
                 disabled={visibleAnalysisAnimals.length === 0}
               >
@@ -2430,13 +3022,9 @@ export function ColonyAnalysisPanel({
                 size="sm"
                 disabled={!statsDraft.measureKey}
                 onClick={() =>
-                  setExcludedAnimalIds((current) => {
-                    const next = new Set(current);
-                    scopedFlatData
-                      .filter((row) => row[statsDraft.measureKey] == null || row[statsDraft.measureKey] === "")
-                      .forEach((row) => next.add(row.animal_id));
-                    return next;
-                  })
+                  scopedFlatData
+                    .filter((row) => row[statsDraft.measureKey] == null || row[statsDraft.measureKey] === "")
+                    .forEach((row) => markAnimalExclusion(row.animal_id, false, "rule", `Missing selected outcome: ${statsDraft.measureKey}`))
                 }
               >
                 Exclude missing selected outcome
@@ -2451,11 +3039,9 @@ export function ColonyAnalysisPanel({
                   size="sm"
                   className="h-7 border"
                   onClick={() =>
-                    setExcludedAnimalIds((current) => {
-                      const next = new Set(current);
-                      analysisAnimals.filter((animal) => animal.cohort === cohort).forEach((animal) => next.add(animal.animal_id));
-                      return next;
-                    })
+                    analysisAnimals
+                      .filter((animal) => animal.cohort === cohort)
+                      .forEach((animal) => markAnimalExclusion(animal.animal_id, false, "rule", `Excluded cohort ${cohort}`))
                   }
                 >
                   Exclude {cohort}
@@ -2468,11 +3054,9 @@ export function ColonyAnalysisPanel({
                   size="sm"
                   className="h-7 border"
                   onClick={() =>
-                    setExcludedAnimalIds((current) => {
-                      const next = new Set(current);
-                      analysisAnimals.filter((animal) => animal.sex === sex).forEach((animal) => next.add(animal.animal_id));
-                      return next;
-                    })
+                    analysisAnimals
+                      .filter((animal) => animal.sex === sex)
+                      .forEach((animal) => markAnimalExclusion(animal.animal_id, false, "rule", `Excluded sex ${sex}`))
                   }
                 >
                   Exclude {sex}
@@ -2485,16 +3069,59 @@ export function ColonyAnalysisPanel({
                   size="sm"
                   className="h-7 border"
                   onClick={() =>
-                    setExcludedAnimalIds((current) => {
-                      const next = new Set(current);
-                      analysisAnimals.filter((animal) => animal.genotype === genotype).forEach((animal) => next.add(animal.animal_id));
-                      return next;
-                    })
+                    analysisAnimals
+                      .filter((animal) => animal.genotype === genotype)
+                      .forEach((animal) => markAnimalExclusion(animal.animal_id, false, "rule", `Excluded genotype ${genotype}`))
                   }
                 >
                   Exclude {genotype}
                 </Button>
               ))}
+            </div>
+
+            <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3 md:grid-cols-5">
+              <div>
+                <Label className="mb-1 block text-xs">Outlier Screen</Label>
+                <Select
+                  value={statsDraft.outlierMethod}
+                  onValueChange={(value) => setStatsDraft((current) => ({ ...current, outlierMethod: value as OutlierMethod }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="iqr">IQR Fence</SelectItem>
+                    <SelectItem value="zscore">Z-Score</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="mb-1 block text-xs">Threshold</Label>
+                <Input
+                  type="number"
+                  value={statsDraft.outlierThreshold}
+                  onChange={(event) =>
+                    setStatsDraft((current) => ({
+                      ...current,
+                      outlierThreshold: Number.parseFloat(event.target.value || "0") || current.outlierThreshold,
+                    }))
+                  }
+                />
+              </div>
+              <div className="md:col-span-3">
+                <Label className="mb-1 block text-xs">Outlier Actions</Label>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" disabled={!statsDraft.measureKey} onClick={() => handleRunOutlierScreen("mark")}>
+                    Mark Only
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={!statsDraft.measureKey} onClick={() => handleRunOutlierScreen("exclude")}>
+                    Mark + Exclude
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={!statsDraft.measureKey} onClick={() => handleRunOutlierScreen("restore")}>
+                    Restore Flagged
+                  </Button>
+                </div>
+              </div>
             </div>
 
             <div className="max-h-64 overflow-auto rounded-md border border-slate-200">
@@ -2507,7 +3134,9 @@ export function ColonyAnalysisPanel({
                     <th className="px-2 py-2 text-left font-medium text-muted-foreground">Sex</th>
                     <th className="px-2 py-2 text-left font-medium text-muted-foreground">Genotype</th>
                     <th className="px-2 py-2 text-left font-medium text-muted-foreground">Group</th>
+                    <th className="px-2 py-2 text-left font-medium text-muted-foreground">Audit</th>
                     <th className="px-2 py-2 text-left font-medium text-muted-foreground">Reason</th>
+                    <th className="px-2 py-2 text-right font-medium text-muted-foreground">Outlier</th>
                     <th className="px-2 py-2 text-right font-medium text-muted-foreground">Rows</th>
                   </tr>
                 </thead>
@@ -2520,12 +3149,12 @@ export function ColonyAnalysisPanel({
                             type="checkbox"
                             checked={animal.included}
                             onChange={(event) =>
-                              setExcludedAnimalIds((current) => {
-                                const next = new Set(current);
-                                if (event.target.checked) next.delete(animal.animal_id);
-                                else next.add(animal.animal_id);
-                                return next;
-                              })
+                              markAnimalExclusion(
+                                animal.animal_id,
+                                event.target.checked,
+                                event.target.checked ? "restored" : "manual",
+                                event.target.checked ? "" : exclusionReasons[animal.animal_id] || "Manual exclusion",
+                              )
                             }
                             className="h-4 w-4 rounded border-slate-300"
                           />
@@ -2538,6 +3167,11 @@ export function ColonyAnalysisPanel({
                       <td className="px-2 py-2">{animal.genotype}</td>
                       <td className="px-2 py-2" style={{ color: GROUP_COLORS[animal.group] || undefined }}>
                         {animal.group}
+                      </td>
+                      <td className="px-2 py-2">
+                        <Badge variant="outline" className="text-[10px] capitalize">
+                          {exclusionSources[animal.animal_id] || (animal.included ? "manual" : "manual")}
+                        </Badge>
                       </td>
                       <td className="px-2 py-2">
                         {!animal.included ? (
@@ -2556,12 +3190,21 @@ export function ColonyAnalysisPanel({
                           <span className="text-muted-foreground">—</span>
                         )}
                       </td>
+                      <td className="px-2 py-2 text-right tabular-nums">
+                        {outlierFlags[animal.animal_id] ? (
+                          <span title={outlierModes[animal.animal_id] || "flagged"}>
+                            {outlierScores[animal.animal_id] != null ? formatNum(outlierScores[animal.animal_id], 2) : "flagged"}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
                       <td className="px-2 py-2 text-right tabular-nums">{animal.rowCount}</td>
                     </tr>
                   ))}
                   {visibleAnalysisAnimals.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
+                      <td colSpan={10} className="px-3 py-6 text-center text-muted-foreground">
                         No animals match the current search.
                       </td>
                     </tr>
@@ -3126,35 +3769,51 @@ function StatisticsPanel({
   onConfigChange?: (next: ColonyAnalysisStatsDraft) => void;
   onResultChange?: (next: Record<string, unknown> | null) => void;
 }) {
-  const [testType, setTestType] = useState(initialConfig?.testType || "t_test");
-  const [measureKey, setMeasureKey] = useState(initialConfig?.measureKey || numericKeys[0] || "");
-  const [measureKey2, setMeasureKey2] = useState(initialConfig?.measureKey2 || numericKeys[1] || numericKeys[0] || "");
-  const [groupingFactor, setGroupingFactor] = useState<AnalysisFactor>(initialConfig?.groupingFactor || "group");
-  const [factorA, setFactorA] = useState<AnalysisFactor>(initialConfig?.factorA || "genotype");
-  const [factorB, setFactorB] = useState<AnalysisFactor>(initialConfig?.factorB || "sex");
-  const [group1, setGroup1] = useState(initialConfig?.group1 || "");
-  const [group2, setGroup2] = useState(initialConfig?.group2 || "");
-  const [postHocMethod, setPostHocMethod] = useState<"none" | "tukey">(initialConfig?.postHocMethod || "none");
-  const [pAdjustMethod, setPAdjustMethod] = useState<"none" | "bonferroni" | "holm" | "fdr">(initialConfig?.pAdjustMethod || "holm");
-  const [modelKind, setModelKind] = useState<"guided" | "repeated_measures" | "mixed_effects">(initialConfig?.modelKind || "guided");
-  const [subjectFactor, setSubjectFactor] = useState<"animal_id">(initialConfig?.subjectFactor || "animal_id");
-  const [withinSubjectFactor, setWithinSubjectFactor] = useState<"timepoint">(initialConfig?.withinSubjectFactor || "timepoint");
-  const [betweenSubjectFactor, setBetweenSubjectFactor] = useState<AnalysisFactor | "__none__">(initialConfig?.betweenSubjectFactor || "__none__");
+  const normalizedInitialConfig = useMemo(() => normalizeStatsDraft(initialConfig), [initialConfig]);
+  const [testType, setTestType] = useState(normalizedInitialConfig.testType);
+  const [measureKey, setMeasureKey] = useState(normalizedInitialConfig.measureKey || numericKeys[0] || "");
+  const [measureKey2, setMeasureKey2] = useState(normalizedInitialConfig.measureKey2 || numericKeys[1] || numericKeys[0] || "");
+  const [groupingFactor, setGroupingFactor] = useState<AnalysisFactor>(normalizedInitialConfig.groupingFactor);
+  const [factorA, setFactorA] = useState<AnalysisFactor>(normalizedInitialConfig.factorA);
+  const [factorB, setFactorB] = useState<AnalysisFactor>(normalizedInitialConfig.factorB);
+  const [group1, setGroup1] = useState(normalizedInitialConfig.group1);
+  const [group2, setGroup2] = useState(normalizedInitialConfig.group2);
+  const [postHocMethod, setPostHocMethod] = useState<"none" | "tukey">(normalizedInitialConfig.postHocMethod);
+  const [pAdjustMethod, setPAdjustMethod] = useState<"none" | "bonferroni" | "holm" | "fdr">(normalizedInitialConfig.pAdjustMethod);
+  const [modelKind, setModelKind] = useState<ModelKind>(normalizedInitialConfig.modelKind);
+  const [subjectFactor, setSubjectFactor] = useState<"animal_id">(normalizedInitialConfig.subjectFactor);
+  const [withinSubjectFactor, setWithinSubjectFactor] = useState<"timepoint">(normalizedInitialConfig.withinSubjectFactor);
+  const [betweenSubjectFactor, setBetweenSubjectFactor] = useState<AnalysisFactor | "__none__">(normalizedInitialConfig.betweenSubjectFactor);
+  const [covariateMeasureKey, setCovariateMeasureKey] = useState(normalizedInitialConfig.covariateMeasureKey || "");
+  const [controlGroup, setControlGroup] = useState(normalizedInitialConfig.controlGroup || "");
+  const [binaryGroupA, setBinaryGroupA] = useState(normalizedInitialConfig.binaryGroupA || "");
+  const [binaryGroupB, setBinaryGroupB] = useState(normalizedInitialConfig.binaryGroupB || "");
+  const [outlierMethod, setOutlierMethod] = useState<OutlierMethod>(normalizedInitialConfig.outlierMethod);
+  const [outlierThreshold, setOutlierThreshold] = useState<number>(normalizedInitialConfig.outlierThreshold);
+  const [tableExportMode, setTableExportMode] = useState<"long" | "wide">(normalizedInitialConfig.tableExportMode);
   const [currentResult, setCurrentResult] = useState<Record<string, unknown> | null>(initialResult || null);
   const [copied, setCopied] = useState(false);
 
   const TEST_OPTIONS = [
     { value: "descriptive", label: "Descriptive Statistics", desc: "Mean, SD, SEM, median for each selected factor level" },
     { value: "t_test", label: "Welch t-test", desc: "Compare two selected groups with unequal-variance t-test" },
+    { value: "paired_t_test", label: "Paired t-test", desc: "Compare matched measurements from the same animals" },
     { value: "mann_whitney", label: "Mann-Whitney U", desc: "Non-parametric comparison between two selected groups" },
+    { value: "wilcoxon_signed_rank", label: "Wilcoxon Signed-Rank", desc: "Paired non-parametric comparison for matched animals" },
     { value: "anova", label: "1-way ANOVA", desc: "Compare all levels of one factor at once" },
     { value: "kruskal_wallis", label: "Kruskal-Wallis", desc: "Non-parametric alternative to 1-way ANOVA" },
     { value: "two_way_anova", label: "2-way ANOVA", desc: "Test two factors plus their interaction" },
     { value: "repeated_measures_anova", label: "Repeated-measures ANOVA", desc: "Within-animal timepoint model for complete longitudinal data" },
     { value: "mixed_effects", label: "Mixed-effects", desc: "Incomplete longitudinal data using per-animal intercept modeling" },
     { value: "multi_compare", label: "All Pairwise Comparisons", desc: "Run pairwise Welch t-tests across factor levels" },
+    { value: "dunnett", label: "Control vs All", desc: "Compare every level against a designated control group" },
+    { value: "ancova", label: "ANCOVA", desc: "Adjust one factor comparison by a numeric covariate" },
+    { value: "chi_square", label: "Chi-square", desc: "Test association between factor levels and binary outcome" },
+    { value: "fisher_exact", label: "Fisher Exact", desc: "Exact test for 2×2 contingency tables" },
     { value: "pearson", label: "Pearson Correlation", desc: "Linear association between two measures" },
     { value: "spearman", label: "Spearman Correlation", desc: "Rank-based association between two measures" },
+    { value: "roc_auc", label: "ROC AUC", desc: "Measure separation between two groups on one numeric outcome" },
+    { value: "power_two_group", label: "Power / Sample Size", desc: "Estimate per-group sample size from observed effect size" },
   ];
 
   const factorOptions: Array<{ value: AnalysisFactor; label: string }> = [
@@ -3183,6 +3842,7 @@ function StatisticsPanel({
 
   useEffect(() => {
     onConfigChange?.({
+      ...normalizedInitialConfig,
       testType,
       measureKey,
       measureKey2,
@@ -3197,8 +3857,15 @@ function StatisticsPanel({
       subjectFactor,
       withinSubjectFactor,
       betweenSubjectFactor,
+      covariateMeasureKey,
+      controlGroup,
+      binaryGroupA,
+      binaryGroupB,
+      outlierMethod,
+      outlierThreshold,
+      tableExportMode,
     });
-  }, [betweenSubjectFactor, factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, modelKind, onConfigChange, pAdjustMethod, postHocMethod, subjectFactor, testType, withinSubjectFactor]);
+  }, [betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, modelKind, normalizedInitialConfig, onConfigChange, outlierMethod, outlierThreshold, pAdjustMethod, postHocMethod, subjectFactor, tableExportMode, testType, withinSubjectFactor]);
 
   useEffect(() => {
     onResultChange?.(currentResult);
@@ -3209,6 +3876,11 @@ function StatisticsPanel({
     if (!factorLevels.includes(group2) || group2 === group1) {
       setGroup2(factorLevels.find((level) => level !== (factorLevels[0] || "")) || factorLevels[0] || "");
     }
+    if (!factorLevels.includes(controlGroup)) setControlGroup(factorLevels[0] || "");
+    if (!factorLevels.includes(binaryGroupA)) setBinaryGroupA(factorLevels[0] || "");
+    if (!factorLevels.includes(binaryGroupB) || binaryGroupB === binaryGroupA) {
+      setBinaryGroupB(factorLevels.find((level) => level !== (factorLevels[0] || "")) || factorLevels[0] || "");
+    }
   }, [factorLevels, group1, group2]);
 
   const runTest = useCallback(() => {
@@ -3217,6 +3889,23 @@ function StatisticsPanel({
         .filter((r) => getFactorValue(r, groupingFactor) === group)
         .map((r) => Number(r[key]))
         .filter((v) => !isNaN(v));
+    const getPairedValues = () => {
+      const byAnimal = new Map<string, Record<string, number>>();
+      flatData.forEach((row) => {
+        const level = getFactorValue(row, groupingFactor);
+        if (level !== group1 && level !== group2) return;
+        const value = Number(row[measureKey]);
+        if (Number.isNaN(value)) return;
+        const current = byAnimal.get(row.animal_id) || {};
+        current[level] = value;
+        byAnimal.set(row.animal_id, current);
+      });
+      const paired = Array.from(byAnimal.values()).filter((entry) => entry[group1] != null && entry[group2] != null);
+      return {
+        a: paired.map((entry) => Number(entry[group1])),
+        b: paired.map((entry) => Number(entry[group2])),
+      };
+    };
 
     switch (testType) {
       case "descriptive": {
@@ -3267,6 +3956,28 @@ function StatisticsPanel({
         });
         break;
       }
+      case "paired_t_test": {
+        const { a, b } = getPairedValues();
+        if (a.length < 2 || b.length < 2) {
+          toast.error("Need at least 2 matched animals with both selected levels.");
+          return;
+        }
+        const result = pairedTTest(a, b);
+        setCurrentResult({
+          test: "Paired t-test",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          groups_compared: `${group1} vs ${group2}`,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          n_pairs: a.length,
+          ...result,
+          significant_005: result.p < 0.05,
+          group1_stats: { name: group1, n: a.length, mean: round(mean(a)), sd: round(stdDev(a)), sem: round(sem(a)) },
+          group2_stats: { name: group2, n: b.length, mean: round(mean(b)), sd: round(stdDev(b)), sem: round(sem(b)) },
+        });
+        break;
+      }
       case "mann_whitney": {
         const a = getValues(group1);
         const b = getValues(group2);
@@ -3286,6 +3997,28 @@ function StatisticsPanel({
           significant_005: result.p < 0.05,
           group1_stats: { name: group1, n: a.length, median: round(median(a)), mean_rank_proxy: round(mean(rankWithTies(a))) },
           group2_stats: { name: group2, n: b.length, median: round(median(b)), mean_rank_proxy: round(mean(rankWithTies(b))) },
+        });
+        break;
+      }
+      case "wilcoxon_signed_rank": {
+        const { a, b } = getPairedValues();
+        if (a.length < 2 || b.length < 2) {
+          toast.error("Need at least 2 matched animals with both selected levels.");
+          return;
+        }
+        const result = wilcoxonSignedRankTest(a, b);
+        setCurrentResult({
+          test: "Wilcoxon Signed-Rank",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          groups_compared: `${group1} vs ${group2}`,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          n_pairs: a.length,
+          ...result,
+          significant_005: result.p < 0.05,
+          group1_stats: { name: group1, n: a.length, median: round(median(a)), mean: round(mean(a)) },
+          group2_stats: { name: group2, n: b.length, median: round(median(b)), mean: round(mean(b)) },
         });
         break;
       }
@@ -3455,6 +4188,112 @@ function StatisticsPanel({
         });
         break;
       }
+      case "dunnett": {
+        const comparisonGroups = factorLevels
+          .filter((level) => level !== controlGroup)
+          .map((level) => ({
+            label: level,
+            values: getValues(level),
+          }))
+          .filter((group) => group.values.length >= 2);
+        const controlValues = getValues(controlGroup);
+        if (controlValues.length < 2 || comparisonGroups.length === 0) {
+          toast.error("Need a control group plus at least one comparison group with 2+ values.");
+          return;
+        }
+        const raw = comparisonGroups.map((group) => {
+          const result = welchTTest(controlValues, group.values);
+          return {
+            comparison: `${controlGroup} vs ${group.label}`,
+            statistic_label: "t",
+            statistic: result.t,
+            df: result.df,
+            p: result.p,
+            effect_label: "Cohen's d",
+            effect_size: result.cohenD,
+          };
+        });
+        const adjusted = applyPAdjustment(raw.map((entry) => Number(entry.p)), pAdjustMethod);
+        setCurrentResult({
+          test: "Control vs All Comparisons",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          control_group: controlGroup,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          comparisons: raw.map((entry, index) => ({
+            ...entry,
+            adjusted_p: adjusted[index],
+            significant: adjusted[index] < 0.05,
+          })),
+          posthoc_label: `Control-group follow-up (${pAdjustMethod})`,
+        });
+        break;
+      }
+      case "ancova": {
+        if (!covariateMeasureKey) {
+          toast.error("Choose a covariate measure.");
+          return;
+        }
+        const result = ancova(flatData, measureKey, groupingFactor, covariateMeasureKey);
+        if ("error" in result) {
+          toast.error(result.error);
+          return;
+        }
+        setCurrentResult({
+          test: "ANCOVA",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          covariate_label: measureLabels[covariateMeasureKey] || covariateMeasureKey,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          ...result,
+        });
+        break;
+      }
+      case "chi_square":
+      case "fisher_exact": {
+        const validRows = flatData.filter((row) => {
+          const group = getFactorValue(row, groupingFactor);
+          return (group === binaryGroupA || group === binaryGroupB) && row[measureKey] != null && row[measureKey] !== "";
+        });
+        const levels = ["Positive", "Negative"];
+        const countFor = (group: string, positive: boolean) =>
+          validRows.filter((row) => {
+            if (getFactorValue(row, groupingFactor) !== group) return false;
+            const value = Number(row[measureKey]);
+            if (!Number.isNaN(value)) return positive ? value > 0 : value <= 0;
+            const label = String(row[measureKey]).toLowerCase();
+            return positive ? ["1", "true", "yes", "positive", "done", "completed"].includes(label) : !["1", "true", "yes", "positive", "done", "completed"].includes(label);
+          }).length;
+        const a = countFor(binaryGroupA, true);
+        const b = countFor(binaryGroupA, false);
+        const c = countFor(binaryGroupB, true);
+        const d = countFor(binaryGroupB, false);
+        if (a + b === 0 || c + d === 0) {
+          toast.error("Need both selected groups to have binary data.");
+          return;
+        }
+        const contingency = [
+          [a, b],
+          [c, d],
+        ];
+        const result = testType === "chi_square" ? chiSquareTest(contingency) : fisherExactTest(a, b, c, d);
+        setCurrentResult({
+          test: testType === "chi_square" ? "Chi-square Test" : "Fisher Exact Test",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          groups_compared: `${binaryGroupA} vs ${binaryGroupB}`,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          contingency_table: [
+            { group: binaryGroupA, positive: a, negative: b },
+            { group: binaryGroupB, positive: c, negative: d },
+          ],
+          ...result,
+        });
+        break;
+      }
       case "pearson":
       case "spearman": {
         const pairs = flatData
@@ -3491,8 +4330,52 @@ function StatisticsPanel({
         }
         break;
       }
+      case "roc_auc": {
+        const a = getValues(binaryGroupA);
+        const b = getValues(binaryGroupB);
+        if (a.length < 2 || b.length < 2) {
+          toast.error("Need at least 2 values in each selected group.");
+          return;
+        }
+        const result = rocAucFromBinaryGroups(a, b);
+        setCurrentResult({
+          test: "ROC AUC",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          groups_compared: `${binaryGroupA} vs ${binaryGroupB}`,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          auc: result.auc,
+          p: result.p,
+          significant_005: result.p < 0.05,
+        });
+        break;
+      }
+      case "power_two_group": {
+        const a = getValues(group1);
+        const b = getValues(group2);
+        if (a.length < 2 || b.length < 2) {
+          toast.error("Need at least 2 values in each selected group.");
+          return;
+        }
+        const t = welchTTest(a, b);
+        const suggestedN = estimateSampleSizeForTwoGroup(Math.abs(t.cohenD));
+        setCurrentResult({
+          test: "Two-group Sample Size Estimate",
+          measure: measureLabels[measureKey] || measureKey,
+          grouped_by: getFactorLabel(groupingFactor),
+          groups_compared: `${group1} vs ${group2}`,
+          included_animals: includedCount,
+          excluded_animals: excludedCount,
+          observed_effect_size: Math.abs(t.cohenD),
+          suggested_n_per_group: suggestedN,
+          reference_p: t.p,
+          reference_t: t.t,
+        });
+        break;
+      }
     }
-  }, [betweenSubjectFactor, excludedCount, factorA, factorB, factorLevels, flatData, group1, group2, groupingFactor, includedCount, measureKey, measureKey2, measureLabels, pAdjustMethod, postHocMethod, subjectFactor, testType, withinSubjectFactor]);
+  }, [betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, excludedCount, factorA, factorB, factorLevels, flatData, group1, group2, groupingFactor, includedCount, measureKey, measureKey2, measureLabels, pAdjustMethod, postHocMethod, subjectFactor, testType, withinSubjectFactor]);
 
   const handleCopyResults = useCallback(() => {
     if (!currentResult) return;
@@ -3501,12 +4384,15 @@ function StatisticsPanel({
     setTimeout(() => setCopied(false), 2000);
   }, [currentResult]);
 
-  const needsGroups = testType === "t_test" || testType === "mann_whitney";
-  const needsFactor = ["descriptive", "t_test", "mann_whitney", "anova", "kruskal_wallis", "multi_compare"].includes(testType);
+  const needsGroups = ["t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank", "power_two_group"].includes(testType);
+  const needsFactor = ["descriptive", "t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank", "anova", "kruskal_wallis", "multi_compare", "dunnett", "ancova", "chi_square", "fisher_exact", "roc_auc", "power_two_group"].includes(testType);
   const needsTwoFactors = testType === "two_way_anova";
   const needsSecondMeasure = testType === "pearson" || testType === "spearman";
   const needsLongitudinalModel = testType === "repeated_measures_anova" || testType === "mixed_effects";
-  const needsPAdjust = ["multi_compare", "repeated_measures_anova", "mixed_effects", "two_way_anova"].includes(testType) || (testType === "anova" && postHocMethod !== "none");
+  const needsPAdjust = ["multi_compare", "repeated_measures_anova", "mixed_effects", "two_way_anova", "dunnett"].includes(testType) || (testType === "anova" && postHocMethod !== "none");
+  const needsCovariate = testType === "ancova";
+  const needsBinaryGroups = ["chi_square", "fisher_exact", "roc_auc"].includes(testType);
+  const needsControlGroup = testType === "dunnett";
 
   return (
     <div className="space-y-4">
@@ -3552,6 +4438,22 @@ function StatisticsPanel({
                 <Select value={measureKey2} onValueChange={setMeasureKey2}>
                   <SelectTrigger className="w-full min-w-0">
                     <SelectValue placeholder="Select measure" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {numericKeys.filter((k) => k !== measureKey).map((k) => (
+                      <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {needsCovariate && (
+              <div className="min-w-0 sm:col-span-2 lg:col-span-4">
+                <Label className="text-xs mb-1 block">Covariate</Label>
+                <Select value={covariateMeasureKey} onValueChange={setCovariateMeasureKey}>
+                  <SelectTrigger className="w-full min-w-0">
+                    <SelectValue placeholder="Select covariate" />
                   </SelectTrigger>
                   <SelectContent>
                     {numericKeys.filter((k) => k !== measureKey).map((k) => (
@@ -3681,6 +4583,53 @@ function StatisticsPanel({
               </>
             )}
 
+            {needsControlGroup && (
+              <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                <Label className="text-xs mb-1 block">Control Group</Label>
+                <Select value={controlGroup} onValueChange={setControlGroup}>
+                  <SelectTrigger className="w-full min-w-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {factorLevels.map((g) => (
+                      <SelectItem key={g} value={g}>{g}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {needsBinaryGroups && (
+              <>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Binary Group A</Label>
+                  <Select value={binaryGroupA} onValueChange={setBinaryGroupA}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {factorLevels.map((g) => (
+                        <SelectItem key={g} value={g}>{g}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Binary Group B</Label>
+                  <Select value={binaryGroupB} onValueChange={setBinaryGroupB}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {factorLevels.filter((g) => g !== binaryGroupA).map((g) => (
+                        <SelectItem key={g} value={g}>{g}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+
             {(testType === "anova") && (
               <div className="min-w-0 sm:col-span-1 lg:col-span-2">
                 <Label className="text-xs mb-1 block">Post-hoc</Label>
@@ -3712,6 +4661,19 @@ function StatisticsPanel({
                 </Select>
               </div>
             )}
+
+            <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+              <Label className="text-xs mb-1 block">Result Table Export</Label>
+              <Select value={tableExportMode} onValueChange={(value) => setTableExportMode(value as "long" | "wide")}>
+                <SelectTrigger className="w-full min-w-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="long">Long</SelectItem>
+                  <SelectItem value="wide">Wide</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           {needsLongitudinalModel && (
@@ -3721,6 +4683,10 @@ function StatisticsPanel({
                 : "Mixed-effects uses per-animal intercept modeling so incomplete longitudinal data can still be analyzed."}
             </div>
           )}
+
+          <div className="rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-600">
+            Outlier screen preference: {outlierMethod.toUpperCase()} at {formatNum(outlierThreshold, 2)}. Export tables will prefer {tableExportMode} format for downstream figure/report packets.
+          </div>
 
           <Button onClick={runTest} disabled={!measureKey} className="w-full gap-1.5 bg-slate-900 text-white hover:bg-slate-800 sm:w-auto">
             <FlaskConical className="h-4 w-4" /> Run Analysis
@@ -3761,6 +4727,7 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
   const anovaTable = result.anova_table as Array<Record<string, unknown>> | undefined;
   const cellCounts = result.cell_counts as Array<Record<string, unknown>> | undefined;
   const assumptionChecks = result.assumption_checks as Array<Record<string, unknown>> | undefined;
+  const contingencyTable = result.contingency_table as Array<Record<string, unknown>> | undefined;
   const includedAnimals = result.included_animals as number | undefined;
   const excludedAnimals = result.excluded_animals as number | undefined;
 
@@ -3911,6 +4878,31 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
         </div>
       )}
 
+      {contingencyTable && (
+        <div className="space-y-2">
+          <div className="overflow-x-auto rounded-md border border-slate-200">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50/70">
+                  <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Group</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Positive</th>
+                  <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Negative</th>
+                </tr>
+              </thead>
+              <tbody>
+                {contingencyTable.map((row, index) => (
+                  <tr key={index} className="border-b last:border-0">
+                    <td className="px-2 py-1.5 font-medium">{String(row.group)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{String(row.positive ?? 0)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{String(row.negative ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Group stats */}
       {(result.group1_stats != null || result.group_stats != null) && (
         <div className="text-xs">
@@ -3936,6 +4928,11 @@ function StatResultsDisplay({ result }: { result: Record<string, unknown> }) {
                         <td className="text-right py-1 px-2 tabular-nums">{String(g.n)}</td>
                         <td className="text-right py-1 px-2 tabular-nums">{g.mean == null ? "—" : formatNum(g.mean as number)}</td>
                         <td className="text-right py-1 px-2 tabular-nums">{g.sd == null ? "—" : formatNum(g.sd as number)}</td>
+                        {((g.sem !== undefined) || (g.median !== undefined)) && (
+                          <td className="text-right py-1 px-2 tabular-nums">
+                            {g.sem !== undefined ? formatNum(g.sem as number) : formatNum(g.median as number)}
+                          </td>
+                        )}
                       </tr>
                     ))
                   : [result.group1_stats, result.group2_stats].filter(Boolean).map((g, i) => {
@@ -4154,25 +5151,26 @@ function VisualizationPanel({
   reportPayload: AnalysisReportPayload | null;
   onConfigChange?: (next: ColonyAnalysisVisualizationDraft) => void;
 }) {
-  const [chartType, setChartType] = useState(initialConfig?.chartType || "bar_sem");
-  const [measureKey, setMeasureKey] = useState(initialConfig?.measureKey || numericKeys[0] || "");
-  const [measureKey2, setMeasureKey2] = useState(initialConfig?.measureKey2 || numericKeys[1] || "");
-  const [groupBy, setGroupBy] = useState<"group" | "sex" | "genotype" | "cohort">(initialConfig?.groupBy || "group");
-  const [title, setTitle] = useState(initialConfig?.title || "");
-  const [showPoints, setShowPoints] = useState(initialConfig?.showPoints ?? true);
+  const normalizedInitialConfig = useMemo(() => normalizeVisualizationDraft(initialConfig), [initialConfig]);
+  const [chartType, setChartType] = useState(normalizedInitialConfig.chartType);
+  const [measureKey, setMeasureKey] = useState(normalizedInitialConfig.measureKey || numericKeys[0] || "");
+  const [measureKey2, setMeasureKey2] = useState(normalizedInitialConfig.measureKey2 || numericKeys[1] || "");
+  const [groupBy, setGroupBy] = useState<"group" | "sex" | "genotype" | "cohort">(normalizedInitialConfig.groupBy);
+  const [title, setTitle] = useState(normalizedInitialConfig.title);
+  const [showPoints, setShowPoints] = useState(normalizedInitialConfig.showPoints);
   const plotRef = useRef<HTMLDivElement>(null);
 
   // Significance annotations
   type SigAnnotation = { group1: string; group2: string; label: string };
   const SIG_LABELS = ["ns", "*", "**", "***", "****"];
-  const [sigAnnotations, setSigAnnotations] = useState<SigAnnotation[]>(initialConfig?.sigAnnotations || []);
+  const [sigAnnotations, setSigAnnotations] = useState<SigAnnotation[]>(normalizedInitialConfig.sigAnnotations);
   const [pendingGroup1, setPendingGroup1] = useState("");
   const [pendingGroup2, setPendingGroup2] = useState("");
   const [pendingLabel, setPendingLabel] = useState("*");
-  const [autoRunSigStars, setAutoRunSigStars] = useState(initialConfig?.autoRunSigStars ?? false);
-  const [autoStatsMethod, setAutoStatsMethod] = useState<"welch_t" | "mann_whitney">(initialConfig?.autoStatsMethod || "welch_t");
-  const [autoPAdjust, setAutoPAdjust] = useState<"none" | "bonferroni">(initialConfig?.autoPAdjust || "none");
-  const [includeNsAnnotations, setIncludeNsAnnotations] = useState(initialConfig?.includeNsAnnotations ?? false);
+  const [autoRunSigStars, setAutoRunSigStars] = useState(normalizedInitialConfig.autoRunSigStars);
+  const [autoStatsMethod, setAutoStatsMethod] = useState<"welch_t" | "mann_whitney">(normalizedInitialConfig.autoStatsMethod);
+  const [autoPAdjust, setAutoPAdjust] = useState<"none" | "bonferroni">(normalizedInitialConfig.autoPAdjust);
+  const [includeNsAnnotations, setIncludeNsAnnotations] = useState(normalizedInitialConfig.includeNsAnnotations);
   const [showManualSigControls, setShowManualSigControls] = useState(false);
   const [autoStatsSummary, setAutoStatsSummary] = useState<{
     tested: number;
@@ -4200,6 +5198,7 @@ function VisualizationPanel({
 
   useEffect(() => {
     onConfigChange?.({
+      ...normalizedInitialConfig,
       chartType,
       measureKey,
       measureKey2,
@@ -4221,6 +5220,7 @@ function VisualizationPanel({
     includeNsAnnotations,
     measureKey,
     measureKey2,
+    normalizedInitialConfig,
     onConfigChange,
     showPoints,
     sigAnnotations,

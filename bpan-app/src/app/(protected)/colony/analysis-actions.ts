@@ -131,3 +131,43 @@ export async function deleteColonyAnalysis(analysisId: string) {
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
+
+export async function updateColonyAnalysisRevisionMetadata(args: {
+  revisionId: string;
+  configPatch?: Record<string, unknown>;
+  summaryText?: string | null;
+}) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const { data: existing, error: existingError } = await supabase
+    .from("analyses")
+    .select("id,config,dataset_id")
+    .eq("id", args.revisionId)
+    .eq("user_id", user.id)
+    .single();
+  if (existingError || !existing) throw new Error(existingError?.message || "Revision not found.");
+
+  const nextConfig = {
+    ...((existing.config as Record<string, unknown>) || {}),
+    ...(args.configPatch || {}),
+  };
+
+  const { error } = await supabase
+    .from("analyses")
+    .update({
+      config: nextConfig,
+      ...(args.summaryText !== undefined ? { ai_interpretation: args.summaryText } : {}),
+    })
+    .eq("id", args.revisionId)
+    .eq("user_id", user.id);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/colony");
+  revalidatePath("/colony/analysis");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true };
+}

@@ -70,7 +70,7 @@ import {
   deleteColonyResultMeasureColumn,
   bulkDeleteColonyResults,
 } from "./result-actions";
-import { deleteColonyAnalysis, saveColonyAnalysisRevision } from "./analysis-actions";
+import { deleteColonyAnalysis, saveColonyAnalysisRevision, updateColonyAnalysisRevisionMetadata } from "./analysis-actions";
 
 /**
  * Fetch ALL rows from a table using cursor-based pagination.
@@ -313,6 +313,7 @@ export async function renderColonyPageView({
           bulkDeleteColonyResults={bulkDeleteColonyResults}
           saveColonyAnalysisRevision={saveColonyAnalysisRevision}
           deleteColonyAnalysis={deleteColonyAnalysis}
+          updateColonyAnalysisRevisionMetadata={updateColonyAnalysisRevisionMetadata}
           actions={{
             createBreederCage,
             updateBreederCage,
