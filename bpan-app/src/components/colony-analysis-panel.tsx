@@ -53,6 +53,7 @@ import type {
   OutlierMode,
   PowerBaseTest,
   PowerConfig,
+  PowerContrastSelection,
   PowerObjective,
   RevisionDiffSummary,
   SavedColonyAnalysisRevision,
@@ -175,6 +176,21 @@ function uniqueNonEmptyOptions(values: unknown[]): string[] {
         .filter((value): value is string => Boolean(value)),
     ),
   );
+}
+
+function getPowerContrastSelectionKey(selection: PowerContrastSelection | null | undefined): string {
+  const group1 = normalizeOptionValue(selection?.group1) || "__none__";
+  const group2 = normalizeOptionValue(selection?.group2) || "__none__";
+  return `${group1}__${group2}`;
+}
+
+function samePowerContrastSelection(
+  a: PowerContrastSelection | null | undefined,
+  b: PowerContrastSelection | null | undefined,
+): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return getPowerContrastSelectionKey(a) === getPowerContrastSelectionKey(b);
 }
 
 function mean(arr: number[]): number {
@@ -4248,11 +4264,12 @@ function StatisticsPanel({
               option.group1 === powerConfig.contrastSelection?.group1 && option.group2 === powerConfig.contrastSelection?.group2,
           ) ?? powerPlannerContext.contrastOptions[0] ?? null
         : powerConfig.contrastSelection;
-    if (validTarget && nextContrast === powerConfig.contrastSelection) return;
+    const contrastChanged = !samePowerContrastSelection(nextContrast, powerConfig.contrastSelection);
+    if (validTarget && !contrastChanged) return;
     setPowerConfig((current) => ({
       ...current,
       targetEffect: validTarget ? current.targetEffect : defaultPowerConfig(current.baseTest).targetEffect,
-      contrastSelection: nextContrast,
+      contrastSelection: contrastChanged ? nextContrast : current.contrastSelection,
     }));
   }, [powerConfig.baseTest, powerConfig.contrastSelection, powerConfig.targetEffect, powerPlannerContext.contrastOptions, powerTargetOptions, testType]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -5352,9 +5369,10 @@ function StatisticsPanel({
                   <div className="min-w-0 sm:col-span-2 lg:col-span-4">
                     <Label className="text-xs mb-1 block">Primary Contrast</Label>
                     <Select
-                      value={powerConfig.contrastSelection?.label || powerPlannerContext.contrastOptions[0]?.label || "__none__"}
+                      value={getPowerContrastSelectionKey(powerConfig.contrastSelection || powerPlannerContext.contrastOptions[0] || null)}
                       onValueChange={(value) => {
-                        const nextSelection = powerPlannerContext.contrastOptions.find((option) => option.label === value) || null;
+                        const nextSelection =
+                          powerPlannerContext.contrastOptions.find((option) => getPowerContrastSelectionKey(option) === value) || null;
                         setPowerConfig((current) => ({ ...current, contrastSelection: nextSelection }));
                         setCurrentResult(null);
                       }}
@@ -5364,7 +5382,9 @@ function StatisticsPanel({
                       </SelectTrigger>
                       <SelectContent>
                         {powerPlannerContext.contrastOptions.map((option) => (
-                          <SelectItem key={option.label} value={option.label}>{option.label}</SelectItem>
+                          <SelectItem key={getPowerContrastSelectionKey(option)} value={getPowerContrastSelectionKey(option)}>
+                            {option.label}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
