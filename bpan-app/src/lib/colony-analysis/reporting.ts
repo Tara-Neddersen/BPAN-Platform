@@ -48,6 +48,11 @@ export function summarizeAnalysisResult(result: Record<string, unknown> | null, 
   if (typeof result.chi2 === "number") pieces.push(`χ² = ${formatNum(Number(result.chi2), 4)}`);
   if (typeof result.log_rank_chi2 === "number") pieces.push(`Log-rank χ² = ${formatNum(Number(result.log_rank_chi2), 4)}`);
   if (typeof result.suggested_n_per_group === "number") pieces.push(`Suggested n/group = ${String(result.suggested_n_per_group)}`);
+  if (typeof result.recommended_n_per_group === "number") pieces.push(`Recommended n/group = ${String(result.recommended_n_per_group)}`);
+  if (typeof result.recommended_n_per_cell === "number") pieces.push(`Recommended n/cell = ${String(result.recommended_n_per_cell)}`);
+  if (typeof result.recommended_total_n === "number") pieces.push(`Recommended total N = ${String(result.recommended_total_n)}`);
+  if (typeof result.achieved_power === "number") pieces.push(`Power = ${formatNum(Number(result.achieved_power), 4)}`);
+  if (typeof result.mde === "number") pieces.push(`MDE = ${formatNum(Number(result.mde), 4)}`);
   if (typeof result.r2 === "number") pieces.push(`R² = ${formatNum(Number(result.r2), 4)}`);
   return pieces.join(" | ");
 }
@@ -231,6 +236,36 @@ export function buildStructuredResultTables(result: Record<string, unknown>): St
     );
   }
 
+  if (result.base_test || String(result.test || "").includes("Power Planning")) {
+    push(
+      tableFromRows(
+        "power-summary",
+        "Power Planning Summary",
+        [{
+          base_test: result.base_test,
+          objective: result.objective,
+          target_effect: result.target_effect,
+          effect_metric: result.effect_metric,
+          assumed_effect:
+            typeof result.assumed_effect === "object" && result.assumed_effect !== null
+              ? JSON.stringify(result.assumed_effect)
+              : result.assumed_effect,
+          recommended_total_n: result.recommended_total_n,
+          recommended_n_per_group: result.recommended_n_per_group,
+          recommended_n_per_cell: result.recommended_n_per_cell,
+          planned_n: result.planned_n,
+          achieved_power: result.achieved_power,
+          mde: result.mde,
+          engine: result.engine,
+          iterations: result.iterations,
+          mcse: result.mcse,
+          contrast: result.contrast,
+        }],
+        ["base_test", "objective", "target_effect", "effect_metric", "assumed_effect", "recommended_total_n", "recommended_n_per_group", "recommended_n_per_cell", "planned_n", "achieved_power", "mde", "engine", "iterations", "mcse", "contrast"],
+      ),
+    );
+  }
+
   if (Array.isArray(result.roc_points)) {
     push(
       tableFromRows(
@@ -383,8 +418,29 @@ export function generateAnalysisReport(params: {
     resultsSentence += ` Log-rank χ²(${String(result.df ?? "n/a")}) = ${formatNum(Number(result.log_rank_chi2), 3)}, ${formatPValueForReport(result.p)}.`;
   } else if (typeof result.r2 === "number" && typeof result.rmse === "number") {
     resultsSentence += ` Model fit achieved R² = ${formatNum(Number(result.r2), 3)} with RMSE = ${formatNum(Number(result.rmse), 3)}.`;
+  } else if (typeof result.recommended_total_n === "number" || typeof result.recommended_n_per_group === "number" || typeof result.recommended_n_per_cell === "number") {
+    const sizeLabel =
+      typeof result.recommended_n_per_cell === "number"
+        ? `${String(result.recommended_n_per_cell)} per cell`
+        : typeof result.recommended_n_per_group === "number"
+          ? `${String(result.recommended_n_per_group)} per group`
+          : `${String(result.recommended_total_n)} total`;
+    resultsSentence += ` Required sample size is ${sizeLabel} at α = ${formatNum(Number(result.alpha ?? statsDraft.alpha), 3)} and target power = ${formatNum(Number(result.target_power ?? statsDraft.targetPower), 2)}.`;
+    if (result.engine) {
+      resultsSentence += ` Planner engine: ${String(result.engine)}${result.iterations ? ` (${String(result.iterations)} iterations)` : ""}.`;
+    }
   } else if (typeof result.suggested_n_per_group === "number") {
     resultsSentence += ` Estimated sample size is ${String(result.suggested_n_per_group)} animals per group at α = ${formatNum(Number(result.alpha ?? statsDraft.alpha), 3)} and power = ${formatNum(Number(result.target_power ?? statsDraft.targetPower), 2)}.`;
+  } else if (typeof result.achieved_power === "number" && result.base_test) {
+    resultsSentence += ` Achieved power was ${formatNum(Number(result.achieved_power), 3)} for ${String(result.planned_n ?? result.planned_total_n ?? "the planned sample")} under the ${String(result.base_test)} design.`;
+    if (result.engine) {
+      resultsSentence += ` Planner engine: ${String(result.engine)}${result.iterations ? ` (${String(result.iterations)} iterations)` : ""}.`;
+    }
+  } else if (typeof result.mde === "number" && result.base_test) {
+    resultsSentence += ` The minimum detectable effect was ${formatNum(Number(result.mde), 3)} at the configured α/power targets for the ${String(result.base_test)} design.`;
+    if (result.engine) {
+      resultsSentence += ` Planner engine: ${String(result.engine)}${result.iterations ? ` (${String(result.iterations)} iterations)` : ""}.`;
+    }
   } else if (typeof result.p === "number") {
     resultsSentence += ` ${formatPValueForReport(result.p)}.`;
   }
@@ -397,6 +453,9 @@ export function generateAnalysisReport(params: {
     `Grouping: ${groupedBy}.`,
     `Included animals: ${includedCount}; excluded animals: ${excludedCount}.`,
     statsDraft.pAdjustMethod !== "none" ? `Multiple-comparisons correction: ${statsDraft.pAdjustMethod}.` : "No multiple-comparisons correction was selected.",
+    result.base_test ? `Power planner base design: ${String(result.base_test)} with objective ${String(result.objective || "sample_size")}.` : "",
+    result.effect_metric ? `Effect metric: ${String(result.effect_metric)}.` : "",
+    result.engine ? `Planner engine: ${String(result.engine)}${result.iterations ? ` with ${String(result.iterations)} deterministic iterations` : ""}.` : "",
     Array.isArray(statsDraft.reportMeasureKeys) && statsDraft.reportMeasureKeys.length > 0
       ? `Bundled measures: ${statsDraft.reportMeasureKeys.map((key) => measureLabels[key] || key).join(", ")}.`
       : "",

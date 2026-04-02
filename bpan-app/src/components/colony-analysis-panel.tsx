@@ -51,6 +51,9 @@ import type {
   ModelKind,
   OutlierMethod,
   OutlierMode,
+  PowerBaseTest,
+  PowerConfig,
+  PowerObjective,
   RevisionDiffSummary,
   SavedColonyAnalysisRevision,
   SavedColonyAnalysisRoot,
@@ -60,6 +63,7 @@ import {
   buildRevisionConfigEnvelope,
   buildRevisionResultsEnvelope,
   COLONY_ANALYSIS_SCHEMA_VERSION,
+  defaultPowerConfig,
   defaultStatsDraft,
   defaultFigureStudioDraft,
   defaultVisualizationDraft,
@@ -70,6 +74,14 @@ import {
   normalizeFigureStudioDraft,
   normalizeVisualizationDraft,
 } from "@/lib/colony-analysis/config";
+import {
+  chooseSuggestedPowerBaseTest,
+  derivePowerPlannerContext,
+  getPowerObjectiveOptions,
+  getPowerTargetOptions,
+  inferPowerBaseTest,
+  runPowerAnalysis,
+} from "@/lib/colony-analysis/power";
 import {
   buildFigurePacket,
   buildStructuredResultTables,
@@ -1955,13 +1967,6 @@ function suggestAnalysisTests(params: {
       label: "Mann-Whitney U",
       reason: "A good non-parametric fallback for the same 2-group comparison.",
     });
-    if (hasPredictorOutcomePair) {
-      suggestions.push({
-        testType: "power_planning",
-        label: "Power Planning",
-        reason: "Two-group structure is available, so you can estimate sample size from the observed effect size.",
-      });
-    }
   } else if (groups.length > 2) {
     suggestions.unshift({
       testType: "anova",
@@ -2017,6 +2022,14 @@ function suggestAnalysisTests(params: {
       testType: "log_rank",
       label: "Log-rank",
       reason: "When event/censoring fields exist across groups, survival curves can be compared directly.",
+    });
+  }
+
+  if (suggestions.some((suggestion) => inferPowerBaseTest(suggestion.testType))) {
+    suggestions.push({
+      testType: "power_planning",
+      label: "Power Planning",
+      reason: "This analysis set supports inferential modeling, so you can plan required N, achieved power, or the minimum detectable effect.",
     });
   }
 
@@ -4050,12 +4063,14 @@ function StatisticsPanel({
   const [regressionModelFamily, setRegressionModelFamily] = useState(normalizedInitialConfig.regressionModelFamily || "linear");
   const [alpha, setAlpha] = useState<number>(normalizedInitialConfig.alpha || 0.05);
   const [targetPower, setTargetPower] = useState<number>(normalizedInitialConfig.targetPower || 0.8);
+  const [powerConfig, setPowerConfig] = useState<PowerConfig>(normalizedInitialConfig.powerConfig);
   const [reportMeasureKeys, setReportMeasureKeys] = useState<string[]>(normalizedInitialConfig.reportMeasureKeys || []);
   const [outlierMethod] = useState<OutlierMethod>(normalizedInitialConfig.outlierMethod);
   const [outlierThreshold] = useState<number>(normalizedInitialConfig.outlierThreshold);
   const [tableExportMode, setTableExportMode] = useState<"long" | "wide">(normalizedInitialConfig.tableExportMode);
   const [currentResult, setCurrentResult] = useState<Record<string, unknown> | null>(initialResult || null);
   const [copied, setCopied] = useState(false);
+  const [powerBusy, setPowerBusy] = useState(false);
 
   const TEST_OPTIONS = [
     { value: "descriptive", label: "Descriptive Statistics", desc: "Mean, SD, SEM, median for each selected factor level" },
@@ -4080,7 +4095,7 @@ function StatisticsPanel({
     { value: "nonlinear_regression", label: "Nonlinear Regression", desc: "Fit a predictor-outcome model with linear, exponential, or logistic families" },
     { value: "dose_response", label: "Dose Response", desc: "Sigmoidal predictor-outcome fitting for dose-response style data" },
     { value: "roc_curve", label: "ROC Curve", desc: "Full ROC curve with threshold summary and AUC" },
-    { value: "power_planning", label: "Power Planning", desc: "Estimate per-group sample size from observed effect size, alpha, and target power" },
+    { value: "power_planning", label: "Power Planning", desc: "Adaptive power planning across supported inferential designs" },
   ];
 
   const factorOptions: Array<{ value: AnalysisFactor; label: string }> = [
@@ -4096,6 +4111,116 @@ function StatisticsPanel({
     return levels;
   }, [flatData, groupingFactor]);
   const binaryMeasureKeys = useMemo(() => detectBinaryLikeKeys(flatData), [flatData]);
+  const hasMultipleTimepoints = useMemo(() => new Set(flatData.map((row) => row.timepoint)).size > 1, [flatData]);
+  const panelSuggestedTests = useMemo(
+    () => suggestAnalysisTests({ flatData, numericKeys, hasMultipleTimepoints }),
+    [flatData, hasMultipleTimepoints, numericKeys],
+  );
+  const suggestedPowerBaseTest = useMemo(
+    () => chooseSuggestedPowerBaseTest(panelSuggestedTests.map((suggestion) => suggestion.testType)),
+    [panelSuggestedTests],
+  );
+  const activeTestType = testType === "power_planning" ? powerConfig.baseTest : testType;
+  const powerPlannerInput = useMemo(
+    () => ({
+      flatData,
+      numericKeys,
+      measureLabels,
+      measureKey,
+      measureKey2,
+      timeToEventMeasureKey,
+      eventMeasureKey,
+      predictorMeasureKey,
+      scoreMeasureKey,
+      groupingFactor,
+      factorA,
+      factorB,
+      group1,
+      group2,
+      controlGroup,
+      binaryGroupA,
+      binaryGroupB,
+      positiveClass,
+      betweenSubjectFactor,
+      covariateMeasureKey,
+      regressionModelFamily,
+      pAdjustMethod,
+      alpha,
+      targetPower,
+      powerConfig,
+      includedCount,
+      excludedCount,
+    }),
+    [
+      alpha,
+      betweenSubjectFactor,
+      binaryGroupA,
+      binaryGroupB,
+      controlGroup,
+      covariateMeasureKey,
+      eventMeasureKey,
+      excludedCount,
+      factorA,
+      factorB,
+      flatData,
+      group1,
+      group2,
+      groupingFactor,
+      includedCount,
+      measureKey,
+      measureKey2,
+      measureLabels,
+      numericKeys,
+      pAdjustMethod,
+      positiveClass,
+      powerConfig,
+      predictorMeasureKey,
+      regressionModelFamily,
+      scoreMeasureKey,
+      targetPower,
+      timeToEventMeasureKey,
+    ],
+  );
+  const powerPlannerContext = useMemo(() => derivePowerPlannerContext(powerPlannerInput), [powerPlannerInput]);
+  const powerObjectiveOptions = useMemo(() => getPowerObjectiveOptions(), []);
+  const powerTargetOptions = useMemo(() => getPowerTargetOptions(powerConfig.baseTest), [powerConfig.baseTest]);
+
+  const buildObservedPowerConfig = useCallback(
+    (
+      baseTest: PowerBaseTest,
+      options?: {
+        objective?: PowerObjective;
+        preservePlannedSample?: boolean;
+        targetEffect?: PowerConfig["targetEffect"];
+      },
+    ): PowerConfig => {
+      const defaults = defaultPowerConfig(baseTest);
+      const seedConfig: PowerConfig = {
+        ...defaults,
+        objective: options?.objective ?? powerConfig.objective,
+        targetEffect: options?.targetEffect ?? defaults.targetEffect,
+        engine: powerConfig.engine,
+        simulationMeta: powerConfig.simulationMeta,
+      };
+      const observed = derivePowerPlannerContext({
+        ...powerPlannerInput,
+        alpha,
+        targetPower,
+        powerConfig: seedConfig,
+      });
+      const preservedValue = Math.max(2, Math.round(powerConfig.plannedSample.value || observed.observedPlannedSample.value));
+      return {
+        ...seedConfig,
+        effectValue: observed.observedEffectValue,
+        assumptions: observed.observedAssumptions,
+        plannedSample: options?.preservePlannedSample
+          ? { ...defaults.plannedSample, value: preservedValue }
+          : observed.observedPlannedSample,
+        contrastSelection: observed.contrastOptions[0] ?? null,
+      };
+    },
+    [alpha, powerConfig.engine, powerConfig.objective, powerConfig.plannedSample.value, powerConfig.simulationMeta, powerPlannerInput, targetPower],
+  );
 
   /* eslint-disable react-hooks/set-state-in-effect -- dependent controls intentionally snap to valid measure/model selections when source fields change. */
   useEffect(() => {
@@ -4108,10 +4233,28 @@ function StatisticsPanel({
   }, [binaryMeasureKeys, eventMeasureKey, measureKey, measureKey2, numericKeys, predictorMeasureKey, scoreMeasureKey, timeToEventMeasureKey]);
 
   useEffect(() => {
-    if (testType === "repeated_measures_anova") setModelKind("repeated_measures");
-    else if (testType === "mixed_effects") setModelKind("mixed_effects");
+    if (activeTestType === "repeated_measures_anova") setModelKind("repeated_measures");
+    else if (activeTestType === "mixed_effects") setModelKind("mixed_effects");
     else setModelKind("guided");
-  }, [testType]);
+  }, [activeTestType]);
+
+  useEffect(() => {
+    if (testType !== "power_planning") return;
+    const validTarget = powerTargetOptions.some((option) => option.value === powerConfig.targetEffect);
+    const nextContrast =
+      powerConfig.baseTest === "multi_compare" || powerConfig.baseTest === "dunnett"
+        ? powerPlannerContext.contrastOptions.find(
+            (option) =>
+              option.group1 === powerConfig.contrastSelection?.group1 && option.group2 === powerConfig.contrastSelection?.group2,
+          ) ?? powerPlannerContext.contrastOptions[0] ?? null
+        : powerConfig.contrastSelection;
+    if (validTarget && nextContrast === powerConfig.contrastSelection) return;
+    setPowerConfig((current) => ({
+      ...current,
+      targetEffect: validTarget ? current.targetEffect : defaultPowerConfig(current.baseTest).targetEffect,
+      contrastSelection: nextContrast,
+    }));
+  }, [powerConfig.baseTest, powerConfig.contrastSelection, powerConfig.targetEffect, powerPlannerContext.contrastOptions, powerTargetOptions, testType]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
@@ -4143,6 +4286,7 @@ function StatisticsPanel({
       regressionModelFamily,
       alpha,
       targetPower,
+      powerConfig,
       reportMeasureKeys,
       outlierMethod,
       outlierThreshold,
@@ -4152,7 +4296,7 @@ function StatisticsPanel({
     if (lastEmittedConfigRef.current === nextSignature) return;
     lastEmittedConfigRef.current = nextSignature;
     onConfigChange?.(nextConfig);
-  }, [alpha, betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, eventMeasureKey, factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, modelKind, onConfigChange, outlierMethod, outlierThreshold, pAdjustMethod, positiveClass, postHocMethod, predictorMeasureKey, regressionModelFamily, reportMeasureKeys, scoreMeasureKey, subjectFactor, tableExportMode, targetPower, testType, timeToEventMeasureKey, withinSubjectFactor]);
+  }, [alpha, betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, eventMeasureKey, factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, modelKind, onConfigChange, outlierMethod, outlierThreshold, pAdjustMethod, positiveClass, postHocMethod, powerConfig, predictorMeasureKey, regressionModelFamily, reportMeasureKeys, scoreMeasureKey, subjectFactor, tableExportMode, targetPower, testType, timeToEventMeasureKey, withinSubjectFactor]);
 
   useEffect(() => {
     onResultChange?.(currentResult);
@@ -4693,33 +4837,24 @@ function StatisticsPanel({
       }
       case "power_planning":
       case "power_two_group": {
-        const a = getValues(group1);
-        const b = getValues(group2);
-        if (a.length < 2 || b.length < 2) {
-          toast.error("Need at least 2 values in each selected group.");
-          return;
-        }
-        const t = welchTTest(a, b);
-        const observedEffect = Math.abs(t.cohenD);
-        const suggestedN = estimateSampleSizeForTwoGroup(observedEffect, alpha, targetPower);
-        setCurrentResult({
-          test: "Two-group Sample Size Estimate",
-          measure: measureLabels[measureKey] || measureKey,
-          grouped_by: getFactorLabel(groupingFactor),
-          groups_compared: `${group1} vs ${group2}`,
-          included_animals: includedCount,
-          excluded_animals: excludedCount,
-          observed_effect_size: observedEffect,
-          suggested_n_per_group: suggestedN,
-          alpha,
-          target_power: targetPower,
-          reference_p: t.p,
-          reference_t: t.t,
+        setPowerBusy(true);
+        window.requestAnimationFrame(() => {
+          const result = runPowerAnalysis({
+            ...powerPlannerInput,
+            powerConfig,
+          });
+          if ("error" in result) {
+            toast.error(String(result.error));
+            setPowerBusy(false);
+            return;
+          }
+          setCurrentResult(result);
+          setPowerBusy(false);
         });
         break;
       }
     }
-  }, [alpha, betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, eventMeasureKey, excludedCount, factorA, factorB, factorLevels, flatData, group1, group2, groupingFactor, includedCount, measureKey, measureKey2, measureLabels, pAdjustMethod, positiveClass, postHocMethod, predictorMeasureKey, regressionModelFamily, scoreMeasureKey, subjectFactor, targetPower, testType, timeToEventMeasureKey, withinSubjectFactor]);
+  }, [alpha, betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, eventMeasureKey, excludedCount, factorA, factorB, factorLevels, flatData, group1, group2, groupingFactor, includedCount, measureKey, measureKey2, measureLabels, pAdjustMethod, positiveClass, postHocMethod, powerConfig, powerPlannerInput, predictorMeasureKey, regressionModelFamily, scoreMeasureKey, subjectFactor, targetPower, testType, timeToEventMeasureKey, withinSubjectFactor]);
 
   const handleCopyResults = useCallback(() => {
     if (!currentResult) return;
@@ -4728,18 +4863,22 @@ function StatisticsPanel({
     setTimeout(() => setCopied(false), 2000);
   }, [currentResult]);
 
-  const needsGroups = ["t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank", "power_two_group", "power_planning"].includes(testType);
-  const needsFactor = ["descriptive", "t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank", "anova", "kruskal_wallis", "multi_compare", "dunnett", "ancova", "chi_square", "fisher_exact", "roc_auc", "roc_curve", "kaplan_meier", "log_rank", "power_two_group", "power_planning"].includes(testType);
-  const needsTwoFactors = testType === "two_way_anova";
-  const needsSecondMeasure = testType === "pearson" || testType === "spearman";
-  const needsLongitudinalModel = testType === "repeated_measures_anova" || testType === "mixed_effects";
-  const needsPAdjust = ["multi_compare", "repeated_measures_anova", "mixed_effects", "two_way_anova", "dunnett"].includes(testType) || (testType === "anova" && postHocMethod !== "none");
-  const needsCovariate = testType === "ancova";
-  const needsBinaryGroups = ["chi_square", "fisher_exact", "roc_auc", "roc_curve"].includes(testType);
-  const needsControlGroup = testType === "dunnett";
-  const needsSurvivalFields = testType === "kaplan_meier" || testType === "log_rank";
-  const needsRegressionFields = testType === "nonlinear_regression" || testType === "dose_response";
   const needsPowerPlanning = testType === "power_planning" || testType === "power_two_group";
+  const needsGroups =
+    ["t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank"].includes(activeTestType) ||
+    (needsPowerPlanning && activeTestType === "log_rank");
+  const needsFactor = ["descriptive", "t_test", "mann_whitney", "paired_t_test", "wilcoxon_signed_rank", "anova", "kruskal_wallis", "multi_compare", "dunnett", "ancova", "chi_square", "fisher_exact", "roc_auc", "roc_curve", "kaplan_meier", "log_rank"].includes(activeTestType);
+  const needsTwoFactors = activeTestType === "two_way_anova";
+  const needsSecondMeasure = activeTestType === "pearson" || activeTestType === "spearman";
+  const needsLongitudinalModel = activeTestType === "repeated_measures_anova" || activeTestType === "mixed_effects";
+  const needsPAdjust = needsPowerPlanning
+    ? ["multi_compare", "dunnett"].includes(activeTestType)
+    : ["multi_compare", "repeated_measures_anova", "mixed_effects", "two_way_anova", "dunnett"].includes(activeTestType) || (activeTestType === "anova" && postHocMethod !== "none");
+  const needsCovariate = activeTestType === "ancova";
+  const needsBinaryGroups = ["chi_square", "fisher_exact", "roc_auc", "roc_curve"].includes(activeTestType);
+  const needsControlGroup = activeTestType === "dunnett";
+  const needsSurvivalFields = activeTestType === "kaplan_meier" || activeTestType === "log_rank";
+  const needsRegressionFields = activeTestType === "nonlinear_regression" || activeTestType === "dose_response";
 
   return (
     <div className="space-y-4">
@@ -4748,7 +4887,20 @@ function StatisticsPanel({
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
             <div className="min-w-0 sm:col-span-2 lg:col-span-3">
               <Label className="text-xs mb-1 block">Statistical Test</Label>
-              <Select value={testType} onValueChange={(v) => { setTestType(v); setCurrentResult(null); }}>
+              <Select
+                value={testType}
+                onValueChange={(value) => {
+                  if (value === "power_planning") {
+                    const inferredBase = inferPowerBaseTest(testType) ?? suggestedPowerBaseTest;
+                    setPowerConfig(buildObservedPowerConfig(inferredBase, {
+                      objective: powerConfig.objective,
+                      preservePlannedSample: powerConfig.objective !== "sample_size",
+                    }));
+                  }
+                  setTestType(value);
+                  setCurrentResult(null);
+                }}
+              >
                 <SelectTrigger className="w-full min-w-0">
                   <SelectValue />
                 </SelectTrigger>
@@ -5090,6 +5242,134 @@ function StatisticsPanel({
 
             {needsPowerPlanning && (
               <>
+                <div className="min-w-0 sm:col-span-2 lg:col-span-3">
+                  <Label className="text-xs mb-1 block">Power Design</Label>
+                  <Select
+                    value={powerConfig.baseTest}
+                    onValueChange={(value) => {
+                      const nextBase = value as PowerBaseTest;
+                      setPowerConfig(buildObservedPowerConfig(nextBase, {
+                        objective: powerConfig.objective,
+                        preservePlannedSample: powerConfig.objective !== "sample_size",
+                      }));
+                      setCurrentResult(null);
+                    }}
+                  >
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {powerPlannerContext.baseTestOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          <div>
+                            <div className="font-medium">{option.label}</div>
+                            <div className="text-xs text-muted-foreground">{option.desc}</div>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-3">
+                  <Label className="text-xs mb-1 block">Objective</Label>
+                  <Select
+                    value={powerConfig.objective}
+                    onValueChange={(value) => {
+                      const objective = value as PowerObjective;
+                      setPowerConfig((current) =>
+                        objective === current.objective
+                          ? current
+                          : {
+                              ...current,
+                              objective,
+                              plannedSample:
+                                objective === "sample_size"
+                                  ? current.plannedSample
+                                  : {
+                                      ...current.plannedSample,
+                                      value: Math.max(2, Math.round(current.plannedSample.value || powerPlannerContext.observedPlannedSample.value)),
+                                    },
+                            },
+                      );
+                      setCurrentResult(null);
+                    }}
+                  >
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {powerObjectiveOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs mb-1 block">Engine</Label>
+                  <Select
+                    value={powerConfig.engine}
+                    onValueChange={(value) => {
+                      setPowerConfig((current) => ({ ...current, engine: value as PowerConfig["engine"] }));
+                      setCurrentResult(null);
+                    }}
+                  >
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">Auto</SelectItem>
+                      <SelectItem value="analytic">Analytic</SelectItem>
+                      <SelectItem value="simulation">Simulation</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {powerTargetOptions.length > 1 && (
+                  <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                    <Label className="text-xs mb-1 block">Target Effect</Label>
+                    <Select
+                      value={powerConfig.targetEffect}
+                      onValueChange={(value) => {
+                        setPowerConfig(buildObservedPowerConfig(powerConfig.baseTest, {
+                          objective: powerConfig.objective,
+                          preservePlannedSample: powerConfig.objective !== "sample_size",
+                          targetEffect: value as PowerConfig["targetEffect"],
+                        }));
+                        setCurrentResult(null);
+                      }}
+                    >
+                      <SelectTrigger className="w-full min-w-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {powerTargetOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                {(powerConfig.baseTest === "multi_compare" || powerConfig.baseTest === "dunnett") && powerPlannerContext.contrastOptions.length > 0 && (
+                  <div className="min-w-0 sm:col-span-2 lg:col-span-4">
+                    <Label className="text-xs mb-1 block">Primary Contrast</Label>
+                    <Select
+                      value={powerConfig.contrastSelection?.label || powerPlannerContext.contrastOptions[0]?.label || "__none__"}
+                      onValueChange={(value) => {
+                        const nextSelection = powerPlannerContext.contrastOptions.find((option) => option.label === value) || null;
+                        setPowerConfig((current) => ({ ...current, contrastSelection: nextSelection }));
+                        setCurrentResult(null);
+                      }}
+                    >
+                      <SelectTrigger className="w-full min-w-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {powerPlannerContext.contrastOptions.map((option) => (
+                          <SelectItem key={option.label} value={option.label}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <div className="min-w-0 sm:col-span-1 lg:col-span-2">
                   <Label className="text-xs mb-1 block">Alpha</Label>
                   <Input type="number" step="0.01" value={alpha} onChange={(event) => setAlpha(Number.parseFloat(event.target.value || "0.05") || 0.05)} />
@@ -5097,6 +5377,102 @@ function StatisticsPanel({
                 <div className="min-w-0 sm:col-span-1 lg:col-span-2">
                   <Label className="text-xs mb-1 block">Target Power</Label>
                   <Input type="number" step="0.05" value={targetPower} onChange={(event) => setTargetPower(Number.parseFloat(event.target.value || "0.8") || 0.8)} />
+                </div>
+                {powerConfig.effectMetric === "event_rates" && typeof powerConfig.effectValue !== "number" ? (
+                  <>
+                    <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                      <Label className="text-xs mb-1 block">Group 1 Event Rate</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step="0.01"
+                        value={powerConfig.effectValue.group1}
+                        onChange={(event) => {
+                          const nextValue = Number.parseFloat(event.target.value || "0");
+                          setPowerConfig((current) => ({
+                            ...current,
+                            effectValue: {
+                              group1: nextValue,
+                              group2: typeof current.effectValue === "number" ? nextValue : current.effectValue.group2,
+                            },
+                          }));
+                          setCurrentResult(null);
+                        }}
+                      />
+                    </div>
+                    <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                      <Label className="text-xs mb-1 block">Group 2 Event Rate</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step="0.01"
+                        value={powerConfig.effectValue.group2}
+                        onChange={(event) => {
+                          const nextValue = Number.parseFloat(event.target.value || "0");
+                          setPowerConfig((current) => ({
+                            ...current,
+                            effectValue: {
+                              group1: typeof current.effectValue === "number" ? nextValue : current.effectValue.group1,
+                              group2: nextValue,
+                            },
+                          }));
+                          setCurrentResult(null);
+                        }}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                    <Label className="text-xs mb-1 block">Assumed {powerPlannerContext.effectMetricLabel}</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={typeof powerConfig.effectValue === "number" ? powerConfig.effectValue : 0}
+                      onChange={(event) => {
+                        setPowerConfig((current) => ({ ...current, effectValue: Number.parseFloat(event.target.value || "0") || 0 }));
+                        setCurrentResult(null);
+                      }}
+                    />
+                  </div>
+                )}
+                {powerConfig.objective !== "sample_size" && (
+                  <div className="min-w-0 sm:col-span-1 lg:col-span-2">
+                    <Label className="text-xs mb-1 block">{powerPlannerContext.sampleModeLabel}</Label>
+                    <Input
+                      type="number"
+                      min={2}
+                      step="1"
+                      value={powerConfig.plannedSample.value}
+                      onChange={(event) => {
+                        setPowerConfig((current) => ({
+                          ...current,
+                          plannedSample: {
+                            ...current.plannedSample,
+                            value: Math.max(2, Math.round(Number.parseFloat(event.target.value || "2") || 2)),
+                          },
+                        }));
+                        setCurrentResult(null);
+                      }}
+                    />
+                  </div>
+                )}
+                <div className="min-w-0 sm:col-span-2 lg:col-span-2 flex items-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      setPowerConfig(buildObservedPowerConfig(powerConfig.baseTest, {
+                        objective: powerConfig.objective,
+                        preservePlannedSample: powerConfig.objective !== "sample_size",
+                      }));
+                      setCurrentResult(null);
+                    }}
+                  >
+                    Use Observed
+                  </Button>
                 </div>
               </>
             )}
@@ -5176,9 +5552,20 @@ function StatisticsPanel({
 
           {needsLongitudinalModel && (
             <div className="rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-600">
-              {testType === "repeated_measures_anova"
+              {activeTestType === "repeated_measures_anova"
                 ? "Repeated-measures ANOVA only runs on animals with complete values across the selected timepoints."
                 : "Mixed-effects uses per-animal intercept modeling so incomplete longitudinal data can still be analyzed."}
+            </div>
+          )}
+
+          {needsPowerPlanning && (
+            <div className={`rounded-md border px-3 py-2 text-xs ${powerPlannerContext.eligible ? "border-slate-200 bg-slate-50/70 text-slate-600" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+              <div className="font-medium text-slate-800">Planner defaults</div>
+              <div className="mt-1">
+                {powerPlannerContext.assumptionNotes.length > 0
+                  ? powerPlannerContext.assumptionNotes.join(" ")
+                  : "Observed-effect defaults will populate here once the selected design has enough data to estimate nuisance structure."}
+              </div>
             </div>
           )}
 
@@ -5186,8 +5573,12 @@ function StatisticsPanel({
             Outlier screen preference: {outlierMethod.toUpperCase()} at {formatNum(outlierThreshold, 2)}. Export tables will prefer {tableExportMode} format for downstream figure/report packets.
           </div>
 
-          <Button onClick={runTest} disabled={!measureKey} className="w-full gap-1.5 bg-slate-900 text-white hover:bg-slate-800 sm:w-auto">
-            <FlaskConical className="h-4 w-4" /> Run Analysis
+          <Button
+            onClick={runTest}
+            disabled={!measureKey || powerBusy || (needsPowerPlanning && !powerPlannerContext.eligible)}
+            className="w-full gap-1.5 bg-slate-900 text-white hover:bg-slate-800 sm:w-auto"
+          >
+            <FlaskConical className="h-4 w-4" /> {powerBusy ? "Running Planner..." : "Run Analysis"}
           </Button>
         </CardContent>
       </Card>

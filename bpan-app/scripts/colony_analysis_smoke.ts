@@ -6,6 +6,7 @@ import {
   defaultFigureStudioDraft,
   defaultStatsDraft,
   defaultVisualizationDraft,
+  normalizeStatsDraft,
   normalizeSavedResult,
   normalizeSavedRevisionEnvelope,
 } from "../src/lib/colony-analysis/config";
@@ -109,12 +110,51 @@ const regressionResult = {
   ],
 };
 
+const powerResult = {
+  test: "Power Planning (Welch t-test)",
+  measure: "Average Speed",
+  grouped_by: "Genotype × Sex",
+  base_test: "t_test",
+  objective: "sample_size",
+  target_effect: "primary",
+  effect_metric: "d",
+  assumed_effect: 0.62,
+  recommended_n_per_group: 18,
+  recommended_total_n: 36,
+  achieved_power: 0.804,
+  alpha: 0.05,
+  target_power: 0.8,
+  engine: "analytic",
+  contrast: "WT Male vs Hemi Male",
+  assumption_notes: ["Observed contrast seeded from the current analysis set."],
+};
+
 function run() {
   const statsDraft = {
     ...defaultStatsDraft(),
     measureKey: "average_speed",
     reportMeasureKeys: ["average_speed", "score_signal"],
   };
+  const powerStatsDraft = normalizeStatsDraft({
+    ...defaultStatsDraft(),
+    testType: "power_planning",
+    measureKey: "average_speed",
+    alpha: 0.025,
+    targetPower: 0.9,
+    powerConfig: {
+      ...defaultStatsDraft().powerConfig,
+      baseTest: "two_way_anova",
+      objective: "achieved_power",
+      targetEffect: "interaction",
+      effectMetric: "f",
+      effectValue: 0.28,
+      plannedSample: {
+        mode: "per_cell",
+        value: 10,
+      },
+      engine: "simulation",
+    },
+  });
   const visualizationDraft = {
     ...defaultVisualizationDraft(),
     measureKey: "average_speed",
@@ -170,6 +210,8 @@ function run() {
   const rocTables = buildStructuredResultTables(rocResult);
   assert.ok(rocTables.some((table) => table.id === "roc-thresholds"));
   assert.ok(rocTables.some((table) => table.id === "roc-points"));
+  const powerTables = buildStructuredResultTables(powerResult);
+  assert.ok(powerTables.some((table) => table.id === "power-summary"));
 
   const resultDrivenAnnotations = deriveSignificanceAnnotationsFromResult(anovaResult);
   assert.equal(resultDrivenAnnotations.length, 1);
@@ -181,6 +223,15 @@ function run() {
   assert.equal(normalizedOldRevision?.figurePacket.figureMetadata.chartType, "bar_sem");
   assert.equal(normalizedOldRevision?.figurePacket.linkedSummary, "Legacy");
 
+  const migratedPowerDraft = normalizeStatsDraft({
+    testType: "power_planning",
+    measureKey: "average_speed",
+    alpha: 0.01,
+    targetPower: 0.95,
+  });
+  assert.equal(migratedPowerDraft.powerConfig.baseTest, "t_test");
+  assert.equal(migratedPowerDraft.powerConfig.objective, "sample_size");
+
   const configEnvelope = buildRevisionConfigEnvelope({
     description: "Smoke config",
     scope: { runId: "run-1", experiment: "y_maze", timepoint: "30", cohort: "BPAN 6" },
@@ -190,31 +241,31 @@ function run() {
       { animalId: "BPAN6-2", included: false, reason: "Manual QC exclusion", source: "manual" },
     ],
     analysisSetPreset: { runId: "run-1", experiment: "y_maze", timepoint: "30", cohort: "BPAN 6", search: "BPAN6" },
-    statsDraft,
+    statsDraft: powerStatsDraft,
     visualizationDraft,
     figureStudioDraft,
-    resultTables: anovaReport.resultTables,
-    reportWarnings: anovaReport.reportWarnings,
+    resultTables: powerTables,
+    reportWarnings: [],
     figureMetadata: anovaReport.figureMetadata,
     figurePacket: anovaReport.figurePacket,
-    multiEndpointResults: anovaReport.multiEndpointResults,
+    multiEndpointResults: [],
     includedAnimalCount: 12,
     excludedAnimalCount: 1,
     finalized: false,
     revisionNumber: 3,
   });
   const resultsEnvelope = buildRevisionResultsEnvelope({
-    rawResult: anovaResult,
-    reportSummary: anovaReport.reportSummary,
-    reportResultsText: anovaReport.reportResultsText,
-    reportMethodsText: anovaReport.reportMethodsText,
-    reportCaption: anovaReport.reportCaption,
-    reportWarnings: anovaReport.reportWarnings,
-    diagnostics: anovaReport.diagnostics,
-    resultTables: anovaReport.resultTables,
+    rawResult: powerResult,
+    reportSummary: "Power summary",
+    reportResultsText: "Power results",
+    reportMethodsText: "Power methods",
+    reportCaption: "Power caption",
+    reportWarnings: [],
+    diagnostics: [],
+    resultTables: powerTables,
     figurePacket: anovaReport.figurePacket,
     figureMetadata: anovaReport.figureMetadata,
-    multiEndpointResults: anovaReport.multiEndpointResults,
+    multiEndpointResults: [],
     includedAnimalCount: 12,
     excludedAnimalCount: 1,
   });
@@ -226,9 +277,11 @@ function run() {
   assert.equal(normalizedRevision.config.schemaVersion, COLONY_ANALYSIS_SCHEMA_VERSION);
   assert.equal(normalizedRevision.config.visualization.figureStudio.width, 960);
   assert.equal(normalizedRevision.config.visualization.figureStudio.axisY.max, 0.5);
-  assert.equal(normalizedRevision.results.reportSummary, anovaReport.reportSummary);
+  assert.equal(normalizedRevision.results.reportSummary, "Power summary");
   assert.equal(normalizedRevision.results.figureMetadata?.figureWidth, 960);
   assert.equal(normalizedRevision.results.normalizedResult?.includedCount, 12);
+  assert.equal(normalizedRevision.config.statistics.powerConfig.baseTest, "two_way_anova");
+  assert.equal(normalizedRevision.config.statistics.powerConfig.objective, "achieved_power");
 
   console.log("colony_analysis_smoke: ok");
 }

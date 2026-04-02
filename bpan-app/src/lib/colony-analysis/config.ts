@@ -520,7 +520,7 @@ function normalizeResultEnvelope(
   const raw = rawResult ?? (isRecord(source.raw) ? source.raw : {});
   const statisticsSource = normalizeStatisticsRecord(source.statistics);
   const fallbackStatistics = Object.fromEntries(
-    ["t", "F", "H", "U", "W", "r", "rho", "auc", "chi2", "rmse", "r2", "p"].flatMap((key) => {
+    ["t", "F", "H", "U", "W", "r", "rho", "auc", "chi2", "rmse", "r2", "p", "achieved_power", "mde", "recommended_total_n", "recommended_n_per_group", "recommended_n_per_cell", "planned_n", "mcse"].flatMap((key) => {
       const value = raw[key];
       return value === undefined ? [] : [[key, typeof value === "number" || typeof value === "string" ? value : String(value)]];
     }),
