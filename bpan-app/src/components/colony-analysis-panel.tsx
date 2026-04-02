@@ -4022,6 +4022,8 @@ function StatisticsPanel({
   onResultChange?: (next: Record<string, unknown> | null) => void;
 }) {
   const normalizedInitialConfig = useMemo(() => normalizeStatsDraft(initialConfig), [initialConfig]);
+  const initialConfigRef = useRef<ColonyAnalysisStatsDraft>(normalizedInitialConfig);
+  const lastEmittedConfigRef = useRef<string>("");
   const [testType, setTestType] = useState(normalizedInitialConfig.testType);
   const [measureKey, setMeasureKey] = useState(normalizedInitialConfig.measureKey || numericKeys[0] || "");
   const [measureKey2, setMeasureKey2] = useState(normalizedInitialConfig.measureKey2 || numericKeys[1] || numericKeys[0] || "");
@@ -4113,8 +4115,8 @@ function StatisticsPanel({
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
-    onConfigChange?.({
-      ...normalizedInitialConfig,
+    const nextConfig = normalizeStatsDraft({
+      ...initialConfigRef.current,
       testType,
       measureKey,
       measureKey2,
@@ -4146,7 +4148,11 @@ function StatisticsPanel({
       outlierThreshold,
       tableExportMode,
     });
-  }, [alpha, betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, eventMeasureKey, factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, modelKind, normalizedInitialConfig, onConfigChange, outlierMethod, outlierThreshold, pAdjustMethod, positiveClass, postHocMethod, predictorMeasureKey, regressionModelFamily, reportMeasureKeys, scoreMeasureKey, subjectFactor, tableExportMode, targetPower, testType, timeToEventMeasureKey, withinSubjectFactor]);
+    const nextSignature = JSON.stringify(nextConfig);
+    if (lastEmittedConfigRef.current === nextSignature) return;
+    lastEmittedConfigRef.current = nextSignature;
+    onConfigChange?.(nextConfig);
+  }, [alpha, betweenSubjectFactor, binaryGroupA, binaryGroupB, controlGroup, covariateMeasureKey, eventMeasureKey, factorA, factorB, group1, group2, groupingFactor, measureKey, measureKey2, modelKind, onConfigChange, outlierMethod, outlierThreshold, pAdjustMethod, positiveClass, postHocMethod, predictorMeasureKey, regressionModelFamily, reportMeasureKeys, scoreMeasureKey, subjectFactor, tableExportMode, targetPower, testType, timeToEventMeasureKey, withinSubjectFactor]);
 
   useEffect(() => {
     onResultChange?.(currentResult);
@@ -5865,6 +5871,10 @@ function VisualizationPanel({
       ),
     [initialFigureStudioConfig, measureLabels, normalizedInitialConfig],
   );
+  const initialConfigRef = useRef<ColonyAnalysisVisualizationDraft>(normalizedInitialConfig);
+  const initialFigureStudioConfigRef = useRef<FigureStudioDraft>(normalizedInitialFigureStudioConfig);
+  const lastEmittedConfigRef = useRef("");
+  const lastEmittedFigureStudioConfigRef = useRef("");
   const safeNumericKeys = useMemo(() => numericKeys.filter(Boolean), [numericKeys]);
   const [chartType, setChartType] = useState(normalizedInitialConfig.chartType);
   const [measureKey, setMeasureKey] = useState(normalizedInitialConfig.measureKey || safeNumericKeys[0] || "");
@@ -5900,7 +5910,15 @@ function VisualizationPanel({
   }, []);
 
   useEffect(() => {
-    setFigureStudio(normalizedInitialFigureStudioConfig);
+    initialConfigRef.current = normalizedInitialConfig;
+  }, [normalizedInitialConfig]);
+
+  useEffect(() => {
+    initialFigureStudioConfigRef.current = normalizedInitialFigureStudioConfig;
+    const incomingSignature = JSON.stringify(normalizedInitialFigureStudioConfig);
+    setFigureStudio((current) => (
+      JSON.stringify(current) === incomingSignature ? current : normalizedInitialFigureStudioConfig
+    ));
   }, [normalizedInitialFigureStudioConfig]);
 
   const recommendedChartType = reportPayload?.figureMetadata.recommendedChartType || null;
@@ -6018,8 +6036,8 @@ function VisualizationPanel({
   }, [effectiveChartType, measureKey, measureLabels, title]);
 
   useEffect(() => {
-    onConfigChange?.({
-      ...normalizedInitialConfig,
+    const nextConfig = normalizeVisualizationDraft({
+      ...initialConfigRef.current,
       chartType: effectiveChartType,
       measureKey,
       measureKey2,
@@ -6032,17 +6050,34 @@ function VisualizationPanel({
       autoPAdjust,
       includeNsAnnotations,
     });
-    onFigureStudioChange?.({
-      ...figureStudio,
-      chartFamily: effectiveChartType,
-      title: figureStudio.title || title,
-      axisY: {
-        ...figureStudio.axisY,
-        title:
-          figureStudio.axisY.title ||
-          (measureLabels[measureKey] || measureKey || figureStudio.axisY.title),
+    const nextConfigSignature = JSON.stringify(nextConfig);
+    if (lastEmittedConfigRef.current !== nextConfigSignature) {
+      lastEmittedConfigRef.current = nextConfigSignature;
+      onConfigChange?.(nextConfig);
+    }
+
+    const nextFigureStudioConfig = normalizeFigureStudioDraft(
+      {
+        ...initialFigureStudioConfigRef.current,
+        ...figureStudio,
+        chartFamily: effectiveChartType,
+        title: figureStudio.title || title,
+        axisY: {
+          ...figureStudio.axisY,
+          title:
+            figureStudio.axisY.title ||
+            (measureLabels[measureKey] || measureKey || figureStudio.axisY.title),
+        },
       },
-    });
+      effectiveChartType,
+      figureStudio.axisX.title,
+      measureLabels[measureKey] || measureKey,
+    );
+    const nextFigureStudioSignature = JSON.stringify(nextFigureStudioConfig);
+    if (lastEmittedFigureStudioConfigRef.current !== nextFigureStudioSignature) {
+      lastEmittedFigureStudioConfigRef.current = nextFigureStudioSignature;
+      onFigureStudioChange?.(nextFigureStudioConfig);
+    }
   }, [
     autoPAdjust,
     autoRunSigStars,
@@ -6054,7 +6089,6 @@ function VisualizationPanel({
     measureKey,
     measureKey2,
     measureLabels,
-    normalizedInitialConfig,
     onConfigChange,
     onFigureStudioChange,
     showPoints,

@@ -26,6 +26,61 @@ export type AnalysisFactor = "group" | "sex" | "genotype" | "cohort" | "timepoin
 export type OutlierMethod = "iqr" | "zscore";
 export type OutlierMode = "mark" | "exclude" | "restore";
 export type AnalysisAuditSource = "manual" | "rule" | "outlier" | "restored";
+export type PowerBaseTest =
+  | "t_test"
+  | "paired_t_test"
+  | "mann_whitney"
+  | "wilcoxon_signed_rank"
+  | "anova"
+  | "kruskal_wallis"
+  | "two_way_anova"
+  | "repeated_measures_anova"
+  | "mixed_effects"
+  | "multi_compare"
+  | "dunnett"
+  | "ancova"
+  | "chi_square"
+  | "fisher_exact"
+  | "pearson"
+  | "spearman"
+  | "log_rank"
+  | "roc_curve"
+  | "nonlinear_regression"
+  | "dose_response";
+export type PowerObjective = "sample_size" | "achieved_power" | "mde";
+export type PowerTargetEffect =
+  | "primary"
+  | "omnibus"
+  | "main_effect_a"
+  | "main_effect_b"
+  | "interaction"
+  | "time"
+  | "between"
+  | "adjusted_factor"
+  | "contrast"
+  | "association"
+  | "survival"
+  | "discrimination"
+  | "model_fit";
+export type PowerContrastScope = "primary_contrast";
+export type PowerEffectMetric =
+  | "d"
+  | "dz"
+  | "f"
+  | "partial_eta_sq"
+  | "r"
+  | "event_rates"
+  | "hazard_ratio"
+  | "auc"
+  | "r2";
+export type PowerEngine = "auto" | "analytic" | "simulation";
+export type PowerSampleMode =
+  | "per_group"
+  | "per_cell"
+  | "subjects_total"
+  | "subjects_per_group"
+  | "pairs_total"
+  | "total";
 export type AnalysisTableKind =
   | "column"
   | "grouped"
@@ -83,6 +138,7 @@ export interface ColonyAnalysisStatsDraft {
   regressionModelFamily: "linear" | "exponential" | "logistic";
   alpha: number;
   targetPower: number;
+  powerConfig: PowerConfig;
   reportMeasureKeys: string[];
   outlierMethod: OutlierMethod;
   outlierThreshold: number;
@@ -90,6 +146,52 @@ export interface ColonyAnalysisStatsDraft {
 }
 
 export type ModelKind = ColonyAnalysisStatsDraft["modelKind"];
+
+export interface PowerContrastSelection {
+  group1: string;
+  group2: string;
+  label: string;
+}
+
+export interface PowerPlannedSample {
+  mode: PowerSampleMode;
+  value: number;
+}
+
+export interface PowerSimulationMeta {
+  iterations: number;
+  seed: number;
+  mcse: number | null;
+}
+
+export interface PowerAssumptions {
+  nuisanceScale: number | null;
+  residualSd: number | null;
+  withinSubjectCorr: number | null;
+  eventRates: {
+    group1: number;
+    group2: number;
+  } | null;
+  classPrevalence: number | null;
+  censoringRate: number | null;
+  predictorMean: number | null;
+  predictorSd: number | null;
+  effectNotes: string[];
+}
+
+export interface PowerConfig {
+  baseTest: PowerBaseTest;
+  objective: PowerObjective;
+  targetEffect: PowerTargetEffect;
+  contrastScope: PowerContrastScope;
+  contrastSelection: PowerContrastSelection | null;
+  effectMetric: PowerEffectMetric;
+  effectValue: number | { group1: number; group2: number };
+  plannedSample: PowerPlannedSample;
+  engine: PowerEngine;
+  simulationMeta: PowerSimulationMeta;
+  assumptions: PowerAssumptions;
+}
 
 export type VisualizationChartType =
   | "bar_sem"

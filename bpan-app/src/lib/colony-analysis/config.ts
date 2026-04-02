@@ -16,6 +16,16 @@ import type {
   LegendDraft,
   MultiEndpointResultSummary,
   NormalizedColonyAnalysisRevision,
+  PowerAssumptions,
+  PowerBaseTest,
+  PowerConfig,
+  PowerContrastSelection,
+  PowerEffectMetric,
+  PowerEngine,
+  PowerObjective,
+  PowerPlannedSample,
+  PowerSimulationMeta,
+  PowerTargetEffect,
   ProvenanceDraft,
   ResultEnvelope,
   StructuredResultTable,
@@ -48,6 +58,302 @@ const VALID_TABLE_KINDS: AnalysisTableKind[] = [
   "contingency",
   "multi_endpoint_bundle",
 ];
+
+const POWER_BASE_TESTS: PowerBaseTest[] = [
+  "t_test",
+  "paired_t_test",
+  "mann_whitney",
+  "wilcoxon_signed_rank",
+  "anova",
+  "kruskal_wallis",
+  "two_way_anova",
+  "repeated_measures_anova",
+  "mixed_effects",
+  "multi_compare",
+  "dunnett",
+  "ancova",
+  "chi_square",
+  "fisher_exact",
+  "pearson",
+  "spearman",
+  "log_rank",
+  "roc_curve",
+  "nonlinear_regression",
+  "dose_response",
+];
+
+const POWER_TARGET_EFFECTS: PowerTargetEffect[] = [
+  "primary",
+  "omnibus",
+  "main_effect_a",
+  "main_effect_b",
+  "interaction",
+  "time",
+  "between",
+  "adjusted_factor",
+  "contrast",
+  "association",
+  "survival",
+  "discrimination",
+  "model_fit",
+];
+
+const POWER_EFFECT_METRICS: PowerEffectMetric[] = [
+  "d",
+  "dz",
+  "f",
+  "partial_eta_sq",
+  "r",
+  "event_rates",
+  "hazard_ratio",
+  "auc",
+  "r2",
+];
+
+const POWER_ENGINES: PowerEngine[] = ["auto", "analytic", "simulation"];
+const POWER_OBJECTIVES: PowerObjective[] = ["sample_size", "achieved_power", "mde"];
+
+function defaultPowerAssumptions(): PowerAssumptions {
+  return {
+    nuisanceScale: null,
+    residualSd: null,
+    withinSubjectCorr: null,
+    eventRates: null,
+    classPrevalence: null,
+    censoringRate: null,
+    predictorMean: null,
+    predictorSd: null,
+    effectNotes: [],
+  };
+}
+
+function defaultPlannedSample(mode: PowerPlannedSample["mode"] = "per_group", value = 10): PowerPlannedSample {
+  return {
+    mode,
+    value,
+  };
+}
+
+function defaultSimulationMeta(): PowerSimulationMeta {
+  return {
+    iterations: 400,
+    seed: 42,
+    mcse: null,
+  };
+}
+
+function getDefaultPowerMetric(baseTest: PowerBaseTest): PowerEffectMetric {
+  switch (baseTest) {
+    case "paired_t_test":
+    case "wilcoxon_signed_rank":
+      return "dz";
+    case "anova":
+    case "kruskal_wallis":
+    case "two_way_anova":
+    case "repeated_measures_anova":
+    case "mixed_effects":
+    case "ancova":
+      return "f";
+    case "pearson":
+    case "spearman":
+    case "nonlinear_regression":
+    case "dose_response":
+      return baseTest === "pearson" || baseTest === "spearman" ? "r" : "r2";
+    case "chi_square":
+    case "fisher_exact":
+      return "event_rates";
+    case "log_rank":
+      return "hazard_ratio";
+    case "roc_curve":
+      return "auc";
+    case "multi_compare":
+    case "dunnett":
+    case "t_test":
+    case "mann_whitney":
+    default:
+      return "d";
+  }
+}
+
+function getDefaultPowerTarget(baseTest: PowerBaseTest): PowerTargetEffect {
+  switch (baseTest) {
+    case "anova":
+    case "kruskal_wallis":
+      return "omnibus";
+    case "two_way_anova":
+      return "main_effect_a";
+    case "repeated_measures_anova":
+      return "time";
+    case "mixed_effects":
+      return "time";
+    case "ancova":
+      return "adjusted_factor";
+    case "multi_compare":
+    case "dunnett":
+      return "contrast";
+    case "pearson":
+    case "spearman":
+      return "association";
+    case "log_rank":
+      return "survival";
+    case "roc_curve":
+      return "discrimination";
+    case "nonlinear_regression":
+    case "dose_response":
+      return "model_fit";
+    default:
+      return "primary";
+  }
+}
+
+function getDefaultPowerSample(baseTest: PowerBaseTest): PowerPlannedSample {
+  switch (baseTest) {
+    case "two_way_anova":
+      return defaultPlannedSample("per_cell", 8);
+    case "repeated_measures_anova":
+    case "mixed_effects":
+      return defaultPlannedSample("subjects_per_group", 10);
+    case "paired_t_test":
+    case "wilcoxon_signed_rank":
+      return defaultPlannedSample("pairs_total", 20);
+    case "pearson":
+    case "spearman":
+    case "nonlinear_regression":
+    case "dose_response":
+      return defaultPlannedSample("total", 24);
+    case "log_rank":
+      return defaultPlannedSample("subjects_total", 30);
+    default:
+      return defaultPlannedSample("per_group", 10);
+  }
+}
+
+export function defaultPowerConfig(baseTest: PowerBaseTest = "t_test"): PowerConfig {
+  return {
+    baseTest,
+    objective: "sample_size",
+    targetEffect: getDefaultPowerTarget(baseTest),
+    contrastScope: "primary_contrast",
+    contrastSelection: null,
+    effectMetric: getDefaultPowerMetric(baseTest),
+    effectValue:
+      getDefaultPowerMetric(baseTest) === "event_rates"
+        ? { group1: 0.35, group2: 0.6 }
+        : getDefaultPowerMetric(baseTest) === "hazard_ratio"
+          ? 0.7
+          : getDefaultPowerMetric(baseTest) === "auc"
+            ? 0.7
+            : getDefaultPowerMetric(baseTest) === "r2"
+              ? 0.2
+              : getDefaultPowerMetric(baseTest) === "r"
+                ? 0.35
+                : 0.5,
+    plannedSample: getDefaultPowerSample(baseTest),
+    engine: "auto",
+    simulationMeta: defaultSimulationMeta(),
+    assumptions: defaultPowerAssumptions(),
+  };
+}
+
+function normalizeContrastSelection(input: unknown): PowerContrastSelection | null {
+  if (!isRecord(input)) return null;
+  const group1 = stringOrDefault(input.group1);
+  const group2 = stringOrDefault(input.group2);
+  if (!group1 || !group2) return null;
+  return {
+    group1,
+    group2,
+    label: stringOrDefault(input.label, `${group1} vs ${group2}`),
+  };
+}
+
+function normalizePowerAssumptions(input: unknown): PowerAssumptions {
+  const source = isRecord(input) ? input : {};
+  const eventRatesSource = isRecord(source.eventRates) ? source.eventRates : null;
+  return {
+    nuisanceScale: numericOrNull(source.nuisanceScale),
+    residualSd: numericOrNull(source.residualSd),
+    withinSubjectCorr: numericOrNull(source.withinSubjectCorr),
+    eventRates:
+      eventRatesSource &&
+      numericOrNull(eventRatesSource.group1) !== null &&
+      numericOrNull(eventRatesSource.group2) !== null
+        ? {
+            group1: Number(eventRatesSource.group1),
+            group2: Number(eventRatesSource.group2),
+          }
+        : null,
+    classPrevalence: numericOrNull(source.classPrevalence),
+    censoringRate: numericOrNull(source.censoringRate),
+    predictorMean: numericOrNull(source.predictorMean),
+    predictorSd: numericOrNull(source.predictorSd),
+    effectNotes: stringArray(source.effectNotes),
+  };
+}
+
+function inferLegacyPowerBaseTest(input?: Partial<ColonyAnalysisStatsDraft>): PowerBaseTest {
+  if (input?.testType === "power_two_group") return "t_test";
+  return "t_test";
+}
+
+export function normalizePowerConfig(
+  input?: Partial<PowerConfig> | null,
+  legacyStats?: Partial<ColonyAnalysisStatsDraft> | null,
+): PowerConfig {
+  const baseFallback = inferLegacyPowerBaseTest(legacyStats || undefined);
+  const source = {
+    ...defaultPowerConfig(baseFallback),
+    ...(input || {}),
+  };
+  const baseTest = POWER_BASE_TESTS.includes(source.baseTest as PowerBaseTest)
+    ? (source.baseTest as PowerBaseTest)
+    : baseFallback;
+  const effectMetric = POWER_EFFECT_METRICS.includes(source.effectMetric as PowerEffectMetric)
+    ? (source.effectMetric as PowerEffectMetric)
+    : getDefaultPowerMetric(baseTest);
+  const effectValue =
+    effectMetric === "event_rates"
+      ? isRecord(source.effectValue)
+        ? {
+            group1: numericOrDefault(source.effectValue.group1, 0.35),
+            group2: numericOrDefault(source.effectValue.group2, 0.6),
+          }
+        : defaultPowerConfig(baseTest).effectValue
+      : numericOrDefault(source.effectValue, numericOrDefault(defaultPowerConfig(baseTest).effectValue, 0.5));
+
+  return {
+    ...defaultPowerConfig(baseTest),
+    ...source,
+    baseTest,
+    objective: POWER_OBJECTIVES.includes(source.objective as PowerObjective)
+      ? (source.objective as PowerObjective)
+      : "sample_size",
+    targetEffect: POWER_TARGET_EFFECTS.includes(source.targetEffect as PowerTargetEffect)
+      ? (source.targetEffect as PowerTargetEffect)
+      : getDefaultPowerTarget(baseTest),
+    contrastScope: "primary_contrast",
+    contrastSelection: normalizeContrastSelection(source.contrastSelection),
+    effectMetric,
+    effectValue,
+    plannedSample: isRecord(source.plannedSample)
+      ? {
+          mode: stringOrDefault(source.plannedSample.mode, getDefaultPowerSample(baseTest).mode) as PowerPlannedSample["mode"],
+          value: Math.max(2, Math.round(numericOrDefault(source.plannedSample.value, getDefaultPowerSample(baseTest).value))),
+        }
+      : getDefaultPowerSample(baseTest),
+    engine: POWER_ENGINES.includes(source.engine as PowerEngine)
+      ? (source.engine as PowerEngine)
+      : "auto",
+    simulationMeta: isRecord(source.simulationMeta)
+      ? {
+          iterations: Math.max(100, Math.round(numericOrDefault(source.simulationMeta.iterations, 400))),
+          seed: Math.round(numericOrDefault(source.simulationMeta.seed, 42)),
+          mcse: numericOrNull(source.simulationMeta.mcse),
+        }
+      : defaultSimulationMeta(),
+    assumptions: normalizePowerAssumptions(source.assumptions),
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -456,6 +762,7 @@ export function defaultStatsDraft(): ColonyAnalysisStatsDraft {
     regressionModelFamily: "linear",
     alpha: 0.05,
     targetPower: 0.8,
+    powerConfig: defaultPowerConfig("t_test"),
     reportMeasureKeys: [],
     outlierMethod: "iqr",
     outlierThreshold: 1.5,
@@ -510,10 +817,18 @@ export function normalizeStatsDraft(input?: Partial<ColonyAnalysisStatsDraft>): 
     ...defaultStatsDraft(),
     ...(input || {}),
   };
+  const legacyPowerConfig =
+    merged.testType === "power_planning" || merged.testType === "power_two_group"
+      ? normalizePowerConfig(
+          isRecord(merged.powerConfig) ? (merged.powerConfig as Partial<PowerConfig>) : null,
+          merged,
+        )
+      : normalizePowerConfig(isRecord(merged.powerConfig) ? (merged.powerConfig as Partial<PowerConfig>) : null, merged);
   return {
     ...merged,
     alpha: Number.isFinite(Number(merged.alpha)) ? Number(merged.alpha) : 0.05,
     targetPower: Number.isFinite(Number(merged.targetPower)) ? Number(merged.targetPower) : 0.8,
+    powerConfig: legacyPowerConfig,
     outlierThreshold: Number.isFinite(Number(merged.outlierThreshold)) ? Number(merged.outlierThreshold) : 1.5,
     reportMeasureKeys: Array.isArray(merged.reportMeasureKeys)
       ? merged.reportMeasureKeys.map((value) => String(value)).filter(Boolean)
