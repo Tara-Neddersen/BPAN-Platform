@@ -585,7 +585,7 @@ export interface ColonyResult {
 
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 export type TaskStatus = "pending" | "in_progress" | "completed" | "skipped";
-export type TaskSource = "manual" | "meeting_action" | "experiment" | "cage_change" | "animal_care" | "reminder";
+export type TaskSource = "manual" | "meeting_action" | "experiment" | "cage_change" | "animal_care" | "reminder" | "pi_portal";
 
 export interface Task {
   id: string;

@@ -40,7 +40,7 @@ interface SpeechRecognition extends EventTarget {
   abort(): void;
 }
 
-declare var SpeechRecognition: {
+declare const SpeechRecognition: {
   prototype: SpeechRecognition;
   new (): SpeechRecognition;
 };
@@ -49,4 +49,3 @@ interface Window {
   SpeechRecognition?: typeof SpeechRecognition;
   webkitSpeechRecognition?: typeof SpeechRecognition;
 }
-

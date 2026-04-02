@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/service";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 
@@ -55,6 +56,9 @@ export async function POST(
     }
 
     await refreshWorkspaceBackstageIndexBestEffort(supabase, String(portal.user_id));
+    revalidatePath("/tasks");
+    revalidatePath("/dashboard");
+    revalidatePath("/pi/[token]");
 
     return NextResponse.json({ success: true, task: inserted });
   } catch (err) {
@@ -64,4 +68,3 @@ export async function POST(
     );
   }
 }
-

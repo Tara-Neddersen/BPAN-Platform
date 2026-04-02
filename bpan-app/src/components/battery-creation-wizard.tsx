@@ -5,7 +5,13 @@ import * as XLSX from "xlsx";
 import { ArrowLeft, ArrowRight, Loader2, Pencil, Plus, Save, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { createExperiment, createProtocol, replaceExperimentTimepoints, updateExperiment } from "@/app/(protected)/experiments/actions";
+import {
+  createExperiment,
+  createProtocol,
+  replaceExperimentTimepoints,
+  syncBatteryWindowsToColonyTimepoints,
+  updateExperiment,
+} from "@/app/(protected)/experiments/actions";
 import { saveScheduleTemplate } from "@/app/(protected)/experiments/schedule-actions";
 import { saveExperimentTemplate } from "@/app/(protected)/experiments/template-actions";
 import type { ExperimentTemplateRecord } from "@/components/experiment-template-builder";
@@ -1259,6 +1265,27 @@ export function BatteryCreationWizard({
           ),
         );
         await replaceExperimentTimepoints(timepointForm);
+
+        await syncBatteryWindowsToColonyTimepoints({
+          batteryName: batteryName.trim(),
+          windows: timepointWindows
+            .map((window, index) => ({
+              label: window.name.trim(),
+              minAgeDays: Number(window.minAgeDays),
+              maxAgeDays: Number(window.maxAgeDays),
+              sortOrder: index,
+              experiments: Array.from(
+                new Map(
+                  layoutItems
+                    .filter((item) => item.timepointWindowId === window.id)
+                    .map((item) => experimentDrafts.find((draft) => draft.id === item.experimentId))
+                    .filter((draft): draft is ExperimentDraft => Boolean(draft?.name.trim()))
+                    .map((draft) => [draft.id, { name: draft.name.trim(), category: draft.category.trim() }]),
+                ).values(),
+              ),
+            }))
+            .filter((window) => window.label && Number.isFinite(window.minAgeDays)),
+        });
 
         router.refresh();
         toast.success(editingBattery ? "Battery updated." : "Battery created.");

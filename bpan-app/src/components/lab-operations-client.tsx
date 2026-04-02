@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -785,12 +785,12 @@ export function LabOperationsClient({
   const shouldUseSlidingInventoryDetail = embedded && showInventoryDetailCard && !showInventoryChatCard;
   const showInlineInventoryRightRail = showInventoryRightRail && !shouldUseSlidingInventoryDetail;
 
-  function selectInventory(itemId: string, openDetailPanel = false) {
+  const selectInventory = useCallback((itemId: string, openDetailPanel = false) => {
     setSelectedInventoryId(itemId);
     if (shouldUseSlidingInventoryDetail && openDetailPanel) {
       setInventoryDetailOpen(true);
     }
-  }
+  }, [shouldUseSlidingInventoryDetail]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -833,7 +833,7 @@ export function LabOperationsClient({
     if (!localInventory.some((item) => item.id === initialSelectedInventoryId)) return;
     selectInventory(initialSelectedInventoryId);
     setInventoryTab("all");
-  }, [initialSelectedInventoryId, localInventory]);
+  }, [initialSelectedInventoryId, localInventory, selectInventory]);
 
   useEffect(() => {
     if (inventoryEntryMode === "search") {

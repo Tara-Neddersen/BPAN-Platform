@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
 import { notifyProtocolChange, notifyReagentStock } from "@/lib/automation-workflows";
+import { inferExperimentTypeFromTitle, normalizeExperimentType } from "@/lib/experiment-types";
 
 function parseFileLinks(formData: FormData) {
   const raw = (formData.get("file_links") as string) || "";
@@ -21,6 +22,30 @@ function parseFigureLinks(formData: FormData) {
     .map((s) => s.trim())
     .filter(Boolean)
     .filter((s, i, arr) => arr.indexOf(s) === i);
+}
+
+type BatteryWindowSyncInput = {
+  label: string;
+  minAgeDays: number;
+  maxAgeDays: number;
+  sortOrder: number;
+  experiments: Array<{ name: string; category?: string }>;
+};
+
+function inferWindowExperimentTypes(experiments: BatteryWindowSyncInput["experiments"]) {
+  return Array.from(
+    new Set(
+      experiments
+        .flatMap((experiment) => {
+          const candidates = [
+            inferExperimentTypeFromTitle(experiment.name),
+            normalizeExperimentType(experiment.category),
+            inferExperimentTypeFromTitle(experiment.category),
+          ];
+          return candidates.filter((value): value is NonNullable<typeof value> => Boolean(value));
+        }),
+    ),
+  );
 }
 
 // ─── Experiments ─────────────────────────────────────────────────────────────
@@ -286,6 +311,113 @@ export async function replaceExperimentTimepoints(formData: FormData) {
 
   revalidatePath("/experiments");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+}
+
+export async function syncBatteryWindowsToColonyTimepoints(args: {
+  batteryName: string;
+  windows: BatteryWindowSyncInput[];
+}) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const normalizedWindows = Array.isArray(args.windows)
+    ? args.windows.flatMap((window, index) => {
+        const label = String(window?.label || "").trim();
+        const minAgeDays = Number(window?.minAgeDays);
+        const maxAgeDaysRaw = Number(window?.maxAgeDays);
+        if (!label || !Number.isFinite(minAgeDays)) return [];
+        const maxAgeDays = Number.isFinite(maxAgeDaysRaw) ? maxAgeDaysRaw : minAgeDays;
+        const experiments = Array.isArray(window?.experiments)
+          ? window.experiments
+              .map((experiment) => ({
+                name: String(experiment?.name || "").trim(),
+                category: String(experiment?.category || "").trim(),
+              }))
+              .filter((experiment) => experiment.name)
+          : [];
+        return [{
+          label,
+          minAgeDays,
+          maxAgeDays,
+          sortOrder: Number.isFinite(Number(window?.sortOrder)) ? Number(window.sortOrder) : index,
+          experiments,
+        } satisfies BatteryWindowSyncInput];
+      })
+    : [];
+
+  if (normalizedWindows.length === 0) {
+    return { success: true, synced: 0 };
+  }
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from("colony_timepoints")
+    .select(
+      "id,name,age_days,experiments,handling_days_before,duration_days,includes_eeg_implant,eeg_implant_timing,eeg_recovery_days,eeg_recording_days,grace_period_days,sort_order,notes",
+    )
+    .eq("user_id", user.id)
+    .order("sort_order", { ascending: true });
+
+  if (existingError) throw new Error(existingError.message);
+
+  let synced = 0;
+
+  for (const window of normalizedWindows) {
+    const experimentTypes = inferWindowExperimentTypes(window.experiments);
+    if (experimentTypes.length === 0) continue;
+
+    const existing = (existingRows || []).find((row) => row.name.trim().toLowerCase() === window.label.toLowerCase()) ||
+      (existingRows || []).find((row) => row.age_days === window.minAgeDays) ||
+      null;
+    const mergedExperiments = Array.from(
+      new Set([...(Array.isArray(existing?.experiments) ? existing.experiments : []), ...experimentTypes]),
+    );
+    const durationDays = Math.max(1, window.maxAgeDays - window.minAgeDays + 1);
+    const rangeNote =
+      window.maxAgeDays > window.minAgeDays
+        ? `${window.minAgeDays}-${window.maxAgeDays} days`
+        : `${window.minAgeDays} days`;
+    const nextPayload = {
+      user_id: user.id,
+      name: window.label,
+      age_days: window.minAgeDays,
+      experiments: mergedExperiments,
+      handling_days_before: existing?.handling_days_before ?? 3,
+      duration_days: existing?.duration_days && existing.duration_days > 0 ? existing.duration_days : durationDays,
+      includes_eeg_implant: Boolean(existing?.includes_eeg_implant) || experimentTypes.includes("eeg_implant"),
+      eeg_implant_timing: existing?.eeg_implant_timing || "after",
+      eeg_recovery_days: existing?.eeg_recovery_days ?? 7,
+      eeg_recording_days: existing?.eeg_recording_days ?? (experimentTypes.includes("eeg_recording") ? 3 : 0),
+      grace_period_days: existing?.grace_period_days ?? 30,
+      sort_order: typeof existing?.sort_order === "number" ? existing.sort_order : window.sortOrder,
+      notes: existing?.notes || `${rangeNote} • synced from ${args.batteryName}`,
+    };
+
+    if (existing?.id) {
+      const { error } = await supabase
+        .from("colony_timepoints")
+        .update(nextPayload)
+        .eq("id", existing.id)
+        .eq("user_id", user.id);
+      if (error) throw new Error(error.message);
+    } else {
+      const { error } = await supabase.from("colony_timepoints").insert(nextPayload);
+      if (error) throw new Error(error.message);
+    }
+
+    synced += 1;
+  }
+
+  revalidatePath("/experiments");
+  revalidatePath("/colony");
+  revalidatePath("/colony/tracker");
+  revalidatePath("/colony/results");
+  revalidatePath("/colony/analysis");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+
+  return { success: true, synced };
 }
 
 // ─── Protocols ───────────────────────────────────────────────────────────────

@@ -120,6 +120,9 @@ export async function resyncMeetingActionTasks() {
   revalidatePath("/dashboard");
   revalidatePath("/meetings");
   revalidatePath("/tasks");
+  void synced;
+  void removed;
+  void preserved;
 }
 
 export async function backfillStarterExperimentTimepoints() {

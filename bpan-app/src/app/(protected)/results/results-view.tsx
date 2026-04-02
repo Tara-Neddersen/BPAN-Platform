@@ -45,6 +45,10 @@ export type ResultsSearchParams = {
   prefill_starter_analyses?: string;
 };
 
+type ResultsViewOptions = {
+  emptyStateVariant?: "default" | "colony";
+};
+
 async function fetchOptionalRows(supabase: unknown, table: string, orderBy?: Array<{ column: string; ascending?: boolean }>) {
   try {
     type OptionalRowsQuery = {
@@ -74,7 +78,7 @@ async function fetchOptionalRows(supabase: unknown, table: string, orderBy?: Arr
   }
 }
 
-export async function renderResultsView(params?: ResultsSearchParams) {
+export async function renderResultsView(params?: ResultsSearchParams, options?: ResultsViewOptions) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -190,6 +194,7 @@ export async function renderResultsView(params?: ResultsSearchParams) {
       initialPrefillDatasetDescription={params?.prefill_dataset_description ?? null}
       initialPrefillExperimentId={params?.prefill_experiment_id ?? null}
       initialPrefillStarterAnalyses={params?.prefill_starter_analyses === "1"}
+      emptyStateVariant={options?.emptyStateVariant ?? "default"}
     />
   );
 }

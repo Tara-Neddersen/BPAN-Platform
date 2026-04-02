@@ -26,6 +26,14 @@ export type AnalysisFactor = "group" | "sex" | "genotype" | "cohort" | "timepoin
 export type OutlierMethod = "iqr" | "zscore";
 export type OutlierMode = "mark" | "exclude" | "restore";
 export type AnalysisAuditSource = "manual" | "rule" | "outlier" | "restored";
+export type AnalysisTableKind =
+  | "column"
+  | "grouped"
+  | "paired"
+  | "xy"
+  | "survival"
+  | "contingency"
+  | "multi_endpoint_bundle";
 
 export interface AnalysisAnimalRow {
   animal_id: string;
@@ -95,6 +103,85 @@ export type VisualizationChartType =
   | "roc_curve"
   | "regression_fit"
   | "paired_slope";
+
+export interface AxisDraft {
+  title: string;
+  min: number | null;
+  max: number | null;
+  autoScale: boolean;
+  zeroLock: boolean;
+  logScale: boolean;
+  invert: boolean;
+  tickStep: number | null;
+  tickDecimals: number | null;
+  showGrid: boolean;
+  labelFontSize: number;
+  tickFontSize: number;
+}
+
+export interface TraceStyleDraft {
+  dotSize: number;
+  dotOpacity: number;
+  dotJitter: number;
+  dotSymbol: string;
+  outlineWidth: number;
+  barOpacity: number;
+  lineWidth: number;
+  errorBarStyle: "sem" | "sd" | "ci" | "none";
+  errorBarCapWidth: number;
+  palette: string;
+  groupColorOverrides: Record<string, string>;
+  controlGroupEmphasis: boolean;
+  showMeanOverlay: boolean;
+  showMedianOverlay: boolean;
+  showCiOverlay: boolean;
+  showMatchedConnectors: boolean;
+}
+
+export interface LegendDraft {
+  visible: boolean;
+  position: "top" | "right" | "bottom" | "left";
+  order: "normal" | "reversed";
+  labelSource: "grouping" | "trace";
+}
+
+export interface AnnotationDraft {
+  id: string;
+  type: "text" | "arrow" | "panel_label";
+  text: string;
+  x: string;
+  y: number | null;
+  color: string;
+  fontSize: number;
+  arrowToX?: string;
+  arrowToY?: number | null;
+}
+
+export interface FigureStudioDraft {
+  chartFamily: VisualizationChartType;
+  chartSubstyle: string;
+  title: string;
+  subtitle: string;
+  width: number;
+  height: number;
+  backgroundColor: string;
+  borderColor: string;
+  borderWidth: number;
+  marginTop: number;
+  marginRight: number;
+  marginBottom: number;
+  marginLeft: number;
+  panelSpacing: number;
+  sharedXAxis: boolean;
+  sharedYAxis: boolean;
+  significanceMode: "result-driven" | "manual-override" | "hidden";
+  axisX: AxisDraft;
+  axisY: AxisDraft;
+  traceStyle: TraceStyleDraft;
+  legend: LegendDraft;
+  annotations: AnnotationDraft[];
+  panelLabels: string[];
+}
 
 export interface ColonyAnalysisVisualizationDraft {
   chartType: VisualizationChartType;
@@ -166,6 +253,34 @@ export interface AnalysisDiagnosticEntry {
   source?: string;
 }
 
+export interface ResultEnvelope {
+  schemaVersion: number;
+  testName: string;
+  measureLabel: string;
+  modelTerms: string[];
+  df: Array<number | null>;
+  statistics: Record<string, number | string | null>;
+  pValue: number | null;
+  effectSizes: Array<{ label: string; value: number | null }>;
+  correctionMethod: string | null;
+  assumptions: AssumptionCheck[];
+  warnings: string[];
+  postHoc: Array<Record<string, unknown>>;
+  includedCount: number;
+  excludedCount: number;
+  raw: Record<string, unknown>;
+}
+
+export interface ResultTableSet {
+  tables: StructuredResultTable[];
+}
+
+export interface ModelDiagnostics {
+  entries: AnalysisDiagnosticEntry[];
+  warnings: string[];
+  residualSummary?: Record<string, unknown> | null;
+}
+
 export interface FigurePacket {
   figureMetadata: {
     chartType: string;
@@ -177,6 +292,11 @@ export interface FigurePacket {
     annotationCount: number;
     recommendedChartType?: VisualizationChartType;
     resultFamily?: string;
+    tableKind?: AnalysisTableKind;
+    figureWidth?: number;
+    figureHeight?: number;
+    palette?: string;
+    schemaVersion?: number;
   };
   caption: string;
   linkedSummary: string;
@@ -202,4 +322,92 @@ export interface AnalysisReportPayload {
   figurePacket: FigurePacket;
   multiEndpointResults: MultiEndpointResultSummary[];
   figureMetadata: FigurePacket["figureMetadata"];
+}
+
+export interface ColonyAnalysisScopeDraft {
+  runId: string;
+  experiment: string;
+  timepoint: string;
+  cohort: string;
+}
+
+export interface AnalysisSetPreset {
+  runId: string;
+  experiment: string;
+  timepoint: string;
+  cohort: string;
+  search: string;
+}
+
+export interface ProvenanceDraft {
+  schemaVersion: number;
+  revisionNumber?: number | null;
+  savedAt?: string | null;
+  finalized: boolean;
+  finalizedAt?: string | null;
+  duplicatedFromRevisionId?: string | null;
+  figureVersion: string;
+  exportBundleVersion: string;
+  analysisSetCounts: {
+    included: number;
+    excluded: number;
+  };
+}
+
+export interface ColonyAnalysisRevisionConfigEnvelope {
+  kind: "colony_analysis";
+  schemaVersion: number;
+  revision_number?: number;
+  description: string | null;
+  scope: ColonyAnalysisScopeDraft;
+  analysisSet: {
+    excludedAnimals: Array<{ animalId: string; reason: string }>;
+    entries: AnalysisSetEntry[];
+    preset: AnalysisSetPreset;
+    counts: {
+      included: number;
+      excluded: number;
+    };
+  };
+  statistics: ColonyAnalysisStatsDraft;
+  visualization: {
+    tableKind: AnalysisTableKind;
+    draft: ColonyAnalysisVisualizationDraft;
+    figureStudio: FigureStudioDraft;
+  };
+  tables: {
+    exportMode: "long" | "wide";
+    resultTables: StructuredResultTable[];
+  };
+  reporting: {
+    reportWarnings: string[];
+    figureMetadata: FigurePacket["figureMetadata"] | null;
+    figurePacket: FigurePacket | null;
+    multiEndpointResults: MultiEndpointResultSummary[];
+  };
+  provenance: ProvenanceDraft;
+  finalized?: boolean;
+  finalizedAt?: string | null;
+  duplicatedFromRevisionId?: string | null;
+}
+
+export interface ColonyAnalysisRevisionResultsEnvelope {
+  schemaVersion: number;
+  rawResult: Record<string, unknown> | null;
+  normalizedResult: ResultEnvelope | null;
+  reportSummary: string;
+  reportResultsText: string;
+  reportMethodsText: string;
+  reportCaption: string;
+  reportWarnings: string[];
+  diagnostics: AnalysisDiagnosticEntry[];
+  resultTables: StructuredResultTable[];
+  figurePacket: FigurePacket | null;
+  figureMetadata: FigurePacket["figureMetadata"] | null;
+  multiEndpointResults: MultiEndpointResultSummary[];
+}
+
+export interface NormalizedColonyAnalysisRevision {
+  config: ColonyAnalysisRevisionConfigEnvelope;
+  results: ColonyAnalysisRevisionResultsEnvelope;
 }

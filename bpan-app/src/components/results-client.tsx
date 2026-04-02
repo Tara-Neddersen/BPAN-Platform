@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { HelpHint } from "@/components/ui/help-hint";
+import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
 import { UI_SURFACE_TITLES } from "@/lib/ui-copy";
 import {
   Dialog,
@@ -297,6 +298,7 @@ interface Props {
   initialPrefillDatasetDescription?: string | null;
   initialPrefillExperimentId?: string | null;
   initialPrefillStarterAnalyses?: boolean;
+  emptyStateVariant?: "default" | "colony";
 }
 
 type ResultsDatasetRecord = Dataset & {
@@ -473,6 +475,7 @@ export function ResultsClient({
   initialPrefillDatasetDescription = null,
   initialPrefillExperimentId = null,
   initialPrefillStarterAnalyses = false,
+  emptyStateVariant = "default",
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -1028,64 +1031,107 @@ export function ResultsClient({
           }}
         />
       ) : !selectedDataset ? (
-        <div className="rounded-2xl border border-dashed bg-gradient-to-b from-white to-slate-50/80 p-8 text-center sm:p-12">
-          <div className="mb-4 inline-flex rounded-2xl border border-primary/20 bg-primary/5 p-3">
-            <BarChart3 className="h-8 w-8 text-primary" />
-          </div>
-          <div className="mb-4 flex items-center justify-center gap-1.5">
-            <h3 className="font-medium text-lg">
-              {activeScope === WORKSPACE_SCOPE ? "No data yet" : "No data for this run yet"}
-            </h3>
-            <HelpHint text="Upload a CSV or Excel file, or paste table data to create your first dataset." />
-          </div>
-          <p className="mx-auto mb-5 max-w-xl text-sm text-muted-foreground">
-            {selectedScopeRun ? (
-              <>
-                Import or paste data for <span className="font-medium">{selectedScopeRun.name}</span>, or use{" "}
-                <span className="font-medium">Create Dataset from Run</span> on the run screen.
-              </>
-            ) : (
-              <>
-                For run-linked capture, use <span className="font-medium">Create Dataset from Run</span> on the run screen.
-              </>
-            )}
-          </p>
-          <div className="mx-auto mb-6 grid max-w-lg grid-cols-1 gap-2 text-left text-xs text-muted-foreground sm:grid-cols-3">
-            <div className="rounded-lg border bg-background/80 px-3 py-2">
-              <span className="font-medium text-foreground">1.</span> Import or paste raw values
+        emptyStateVariant === "colony" ? (
+          <div className="space-y-5">
+            <WorkspaceEmptyState
+              icon="results"
+              title={activeScope === WORKSPACE_SCOPE ? "No colony results yet" : "No results for this run yet"}
+              description={
+                selectedScopeRun
+                  ? `Start from the colony tracker for ${selectedScopeRun.name}, then capture or import result data here once the run is ready.`
+                  : "Start from the colony tracker to schedule and capture run data, then import or build result tables here."
+              }
+              primaryAction={{ label: "Open colony tracker", href: "/colony/tracker" }}
+              secondaryAction={{ label: "Open experiments", href: "/experiments" }}
+            />
+            <div className="rounded-2xl border border-dashed bg-gradient-to-b from-white to-slate-50/80 p-6 text-center">
+              <div className="mb-4 flex items-center justify-center gap-1.5">
+                <p className="font-medium text-slate-900">You can still start a dataset here</p>
+                <HelpHint text="Upload a CSV or Excel file, or paste table data to create your first dataset." />
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Button onClick={() => setShowManualBuilder(true)} className="gap-2">
+                  <Plus className="h-4 w-4" />
+                  {selectedScopeRun ? "Create dataset for this run" : "Create table manually"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setImportPrefillBlockId(null);
+                    setShowImport(true);
+                  }}
+                  className="gap-2"
+                >
+                  <Upload className="h-4 w-4" />
+                  Import file
+                </Button>
+                <Button variant="outline" onClick={() => setShowPaste(true)} className="gap-2">
+                  <ClipboardPaste className="h-4 w-4" />
+                  Paste data
+                </Button>
+              </div>
             </div>
-            <div className="rounded-lg border bg-background/80 px-3 py-2">
-              <span className="font-medium text-foreground">2.</span> Or build a table manually
-            </div>
-            <div className="rounded-lg border bg-background/80 px-3 py-2">
-              <span className="font-medium text-foreground">3.</span> Export figures and report packs
-            </div>
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <Button onClick={() => setShowManualBuilder(true)} className="gap-2">
-              <Plus className="h-4 w-4" />
-              {selectedScopeRun ? "Create dataset for this run" : "Create table manually"}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setImportPrefillBlockId(null);
-                setShowImport(true);
-              }}
-              className="gap-2"
-            >
-              <Upload className="h-4 w-4" />
-              Import file
-            </Button>
-            <Button variant="outline" onClick={() => setShowPaste(true)} className="gap-2">
-              <ClipboardPaste className="h-4 w-4" />
-              Paste data
-            </Button>
+        ) : (
+          <div className="rounded-2xl border border-dashed bg-gradient-to-b from-white to-slate-50/80 p-8 text-center sm:p-12">
+            <div className="mb-4 inline-flex rounded-2xl border border-primary/20 bg-primary/5 p-3">
+              <BarChart3 className="h-8 w-8 text-primary" />
+            </div>
+            <div className="mb-4 flex items-center justify-center gap-1.5">
+              <h3 className="font-medium text-lg">
+                {activeScope === WORKSPACE_SCOPE ? "No data yet" : "No data for this run yet"}
+              </h3>
+              <HelpHint text="Upload a CSV or Excel file, or paste table data to create your first dataset." />
+            </div>
+            <p className="mx-auto mb-5 max-w-xl text-sm text-muted-foreground">
+              {selectedScopeRun ? (
+                <>
+                  Import or paste data for <span className="font-medium">{selectedScopeRun.name}</span>, or use{" "}
+                  <span className="font-medium">Create Dataset from Run</span> on the run screen.
+                </>
+              ) : (
+                <>
+                  For run-linked capture, use <span className="font-medium">Create Dataset from Run</span> on the run screen.
+                </>
+              )}
+            </p>
+            <div className="mx-auto mb-6 grid max-w-lg grid-cols-1 gap-2 text-left text-xs text-muted-foreground sm:grid-cols-3">
+              <div className="rounded-lg border bg-background/80 px-3 py-2">
+                <span className="font-medium text-foreground">1.</span> Import or paste raw values
+              </div>
+              <div className="rounded-lg border bg-background/80 px-3 py-2">
+                <span className="font-medium text-foreground">2.</span> Or build a table manually
+              </div>
+              <div className="rounded-lg border bg-background/80 px-3 py-2">
+                <span className="font-medium text-foreground">3.</span> Export figures and report packs
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button onClick={() => setShowManualBuilder(true)} className="gap-2">
+                <Plus className="h-4 w-4" />
+                {selectedScopeRun ? "Create dataset for this run" : "Create table manually"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setImportPrefillBlockId(null);
+                  setShowImport(true);
+                }}
+                className="gap-2"
+              >
+                <Upload className="h-4 w-4" />
+                Import file
+              </Button>
+              <Button variant="outline" onClick={() => setShowPaste(true)} className="gap-2">
+                <ClipboardPaste className="h-4 w-4" />
+                Paste data
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Use the <span className="font-medium">Import file</span> button in the header to get started.
+            </p>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Use the <span className="font-medium">Import file</span> button in the header to get started.
-          </p>
-        </div>
+        )
       ) : (
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "data" | "visualize")} className="space-y-4">
           <TabsList className="sticky-section-switcher h-auto w-full justify-start gap-1 px-1 py-1">

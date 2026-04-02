@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Plus, Trash2, Loader2, Check, X,
   MessageSquare, Mic, MicOff, Sparkles, Upload,
@@ -12,14 +13,12 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import type { MeetingNote, ActionItem } from "@/types";
 import { syncMeetingActionsToTasks } from "@/app/(protected)/tasks/actions";
-
-const DEFAULT_ACTION_OWNER = "Tara";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -262,7 +261,7 @@ function MeetingDetail({
   const [content, setContent] = useState(meeting.content);
   const [actionItems, setActionItems] = useState<ActionItem[]>(meeting.action_items || []);
   const [newAction, setNewAction] = useState("");
-  const [newActionOwner, setNewActionOwner] = useState(DEFAULT_ACTION_OWNER);
+  const [newActionOwner, setNewActionOwner] = useState("Unassigned");
   const [aiSummary, setAiSummary] = useState(meeting.ai_summary || "");
   const [hasRecoverableDraft, setHasRecoverableDraft] = useState(false);
   const [draftUpdatedAt, setDraftUpdatedAt] = useState<string | null>(null);
@@ -558,7 +557,6 @@ function MeetingDetail({
 
   const ownerOptions = [
     "Unassigned",
-    DEFAULT_ACTION_OWNER,
     ...meeting.attendees,
     ...actionItems.map((item) => item.owner || ""),
   ].filter((value, idx, arr) => {
@@ -589,6 +587,9 @@ function MeetingDetail({
           {meeting.title}
           <Badge variant="outline" className="text-xs">{meeting.meeting_date}</Badge>
         </DialogTitle>
+        <DialogDescription>
+          Capture notes, summarize the discussion, and sync action items into your task workspace.
+        </DialogDescription>
       </DialogHeader>
 
       {meeting.attendees.length > 0 && (
@@ -833,8 +834,11 @@ export function MeetingsClient({
   linkedTaskCounts = {},
   actions,
 }: MeetingsClientProps) {
+  const router = useRouter();
   const [meetings, setMeetings] = useState(initMeetings);
-  const [viewMode, setViewMode] = useState<"meetings" | "create">("meetings");
+  const [viewMode, setViewMode] = useState<"meetings" | "create">(
+    () => (initMeetings.length === 0 ? "create" : "meetings")
+  );
   const [showAddMeeting, setShowAddMeeting] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<MeetingNote | null>(null);
   const [busy, setBusy] = useState(false);
@@ -854,7 +858,7 @@ export function MeetingsClient({
     if (res?.error) toast.error(res.error);
     else {
       toast.success("Done!");
-      // Optimistic: refetch from props on next render via revalidation
+      startTransition(() => router.refresh());
     }
     setBusy(false);
   }
@@ -869,7 +873,11 @@ export function MeetingsClient({
     const fd = new FormData(e.currentTarget);
     const res = await action(fd);
     if (res?.error) toast.error(res.error);
-    else { toast.success("Done!"); onSuccess(); }
+    else {
+      toast.success("Done!");
+      onSuccess();
+      startTransition(() => router.refresh());
+    }
     setBusy(false);
   }
 
@@ -895,7 +903,10 @@ export function MeetingsClient({
         <div className="text-center py-16 text-muted-foreground">
           <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-30" />
           <p className="text-lg">No meeting notes yet</p>
-          <p className="text-sm mt-1">Click &quot;New Meeting&quot; to record your first advisor meeting.</p>
+          <p className="text-sm mt-1">Click &quot;Create&quot; to record your first advisor meeting.</p>
+          <Button type="button" size="sm" className="mt-4" onClick={() => setViewMode("create")}>
+            <Plus className="mr-1 h-4 w-4" /> Create first meeting
+          </Button>
         </div>
       ) : (
         <div className="space-y-3">
@@ -966,8 +977,21 @@ export function MeetingsClient({
       {/* Add Meeting Dialog */}
       <Dialog open={showAddMeeting} onOpenChange={setShowAddMeeting}>
         <DialogContent>
-          <DialogHeader><DialogTitle>New Meeting</DialogTitle></DialogHeader>
-          <form onSubmit={(e) => handleFormAction(actions.createMeetingNote, e, () => setShowAddMeeting(false))} className="space-y-3">
+          <DialogHeader>
+            <DialogTitle>New Meeting</DialogTitle>
+            <DialogDescription>
+              Start a meeting note so you can capture attendees, transcript, and follow-up actions.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) =>
+              handleFormAction(actions.createMeetingNote, e, () => {
+                setShowAddMeeting(false);
+                setViewMode("meetings");
+              })
+            }
+            className="space-y-3"
+          >
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="text-xs">Title *</Label>
@@ -1049,6 +1073,7 @@ export function MeetingsClient({
                     }
                   } catch { /* sync is best-effort */ }
                   setEditingMeeting(null);
+                  startTransition(() => router.refresh());
                 }
               }}
               onClose={() => setEditingMeeting(null)}

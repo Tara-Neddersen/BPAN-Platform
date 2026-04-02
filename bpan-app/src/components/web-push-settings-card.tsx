@@ -33,6 +33,7 @@ export function WebPushSettingsCard() {
     () => support === "supported" && permission !== "denied" && vapidPublicKey.length > 0,
     [support, permission, vapidPublicKey],
   );
+  const canDisable = status === "enabled" || status === "enabling";
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -165,7 +166,7 @@ export function WebPushSettingsCard() {
           <Button onClick={enablePush} disabled={!canEnable || status === "enabling"}>
             {status === "enabling" ? "Enabling..." : "Enable Push"}
           </Button>
-          <Button variant="outline" onClick={disablePush}>
+          <Button variant="outline" onClick={disablePush} disabled={!canDisable}>
             Disable Push
           </Button>
           <Button variant="secondary" onClick={sendTestPush} disabled={status !== "enabled"}>

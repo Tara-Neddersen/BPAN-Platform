@@ -421,6 +421,7 @@ export default async function ExperimentsPage() {
   if (!user) {
     redirect("/auth/login?next=%2Fexperiments");
   }
+  const userId = user.id;
 
   const [
     { data: experiments },
@@ -441,58 +442,58 @@ export default async function ExperimentsPage() {
     supabase
       .from("experiments")
       .select("*")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .order("start_date", { ascending: true, nullsFirst: false }),
     supabase
       .from("experiment_timepoints")
       .select("*")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .order("scheduled_at", { ascending: true }),
     supabase
       .from("protocols")
       .select("*")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .order("created_at", { ascending: false }),
     supabase
       .from("reagents")
       .select("*")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .order("name", { ascending: true }),
-    fetchAllRows(supabase, "animal_experiments", user!.id),
-    fetchAllRows(supabase, "animals", user!.id),
+    fetchAllRows(supabase, "animal_experiments", userId),
+    fetchAllRows(supabase, "animals", userId),
     supabase
       .from("cohorts")
       .select("*")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .order("name"),
     supabase
       .from("colony_timepoints")
       .select("*")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .order("sort_order"),
     supabase
       .from("datasets")
       .select("id,name,experiment_id,created_at,updated_at,row_count")
-      .eq("user_id", user!.id),
+      .eq("user_id", userId),
     supabase
       .from("analyses")
       .select("id,name,dataset_id,created_at,test_type")
-      .eq("user_id", user!.id),
+      .eq("user_id", userId),
     supabase
       .from("figures")
       .select("id,name,dataset_id,analysis_id,created_at,updated_at,chart_type")
-      .eq("user_id", user!.id),
+      .eq("user_id", userId),
     supabase
       .from("tasks")
       .select("id,title,source_id,source_type,status,due_date,updated_at")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .eq("source_type", "experiment"),
     supabase
       .from("workspace_calendar_events")
       .select("*")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .order("start_at", { ascending: true }),
-    fetchExperimentTemplates(supabase, user!.id),
+    fetchExperimentTemplates(supabase, userId),
   ]);
 
   const traceCards = buildExperimentTraceabilityCards({

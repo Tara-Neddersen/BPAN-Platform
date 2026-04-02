@@ -15,7 +15,7 @@ function LoginPageContent() {
   const nextPath =
     requestedNext && requestedNext.startsWith("/") && !requestedNext.startsWith("//")
       ? requestedNext
-      : "/operations";
+      : "/tasks";
   const callbackError = searchParams.get("error");
   const callbackErrorMessage = callbackError ? callbackError.replace(/\+/g, " ") : null;
   const hasSupabaseEnv = Boolean(
@@ -64,7 +64,7 @@ function LoginPageContent() {
       <div className="rounded-2xl border border-white/80 bg-white/84 p-5 shadow-[0_16px_30px_-20px_rgba(15,23,42,0.36)] backdrop-blur-xl sm:p-6">
         <div className="mb-5">
           <h2 className="text-xl font-semibold text-slate-900">Sign in</h2>
-          <p className="mt-1 text-sm text-slate-600">Continue to your LabLynx dashboard</p>
+          <p className="mt-1 text-sm text-slate-600">Continue to your LabLynx task workspace</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
@@ -78,6 +78,7 @@ function LoginPageContent() {
             <Input
               id="email"
               type="email"
+              autoComplete="email"
               placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -90,6 +91,7 @@ function LoginPageContent() {
             <Input
               id="password"
               type="password"
+              autoComplete="current-password"
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -126,7 +128,7 @@ function LoginPageContent() {
               href="/preview/dashboard"
               className="block rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-center text-sm font-medium text-slate-700 transition hover:bg-slate-100"
             >
-              Open dashboard preview (local only)
+              Open literature hub preview (local only)
             </Link>
           </div>
         )}

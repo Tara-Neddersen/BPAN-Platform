@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
 const fs = require("fs");

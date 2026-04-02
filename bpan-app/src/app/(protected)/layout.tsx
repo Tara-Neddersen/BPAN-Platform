@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
 import { Nav } from "@/components/nav";
 import { fetchLabShellSummary } from "@/lib/labs";
 import { getRequestedActiveLabId, resolveActiveLabContext } from "@/lib/active-lab-context";
@@ -14,53 +15,54 @@ export default async function ProtectedLayout({
 }) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  const [labSummary, unreadNotificationCount] = user
-    ? await Promise.all([
-        fetchLabShellSummary(supabase, user.id),
-        (async () => {
-          const { data, error } = await supabase.rpc("count_unread_notification_tasks", { p_user_id: user.id });
-          if (!error && typeof data === "number") return data;
+  if (!user) {
+    redirect("/auth/login");
+  }
+  const [labSummary, unreadNotificationCount] = await Promise.all([
+      fetchLabShellSummary(supabase, user.id),
+      (async () => {
+        const { data, error } = await supabase.rpc("count_unread_notification_tasks", { p_user_id: user.id });
+        if (!error && typeof data === "number") return data;
 
-          // Fallback for environments where the RPC has not been migrated yet.
-          const { data: tasks } = await supabase
-            .from("tasks")
-            .select("source_type,tags,status")
-            .eq("user_id", user.id)
-            .neq("status", "skipped")
-            .neq("status", "completed")
-            .order("updated_at", { ascending: false })
-            .limit(300);
+        // Fallback for environments where the RPC has not been migrated yet.
+        const { data: tasks } = await supabase
+          .from("tasks")
+          .select("source_type,tags,status")
+          .eq("user_id", user.id)
+          .neq("status", "skipped")
+          .neq("status", "completed")
+          .order("updated_at", { ascending: false })
+          .limit(300);
 
-          return (tasks || []).filter((task) => {
-            const tags = Array.isArray(task.tags) ? task.tags.filter((tag): tag is string => typeof tag === "string") : [];
-            const isNotification =
-              task.source_type === "reminder"
-              || tags.some((tag) =>
-                [
-                  "automation",
-                  "notification",
-                  "protocol_change",
-                  "low_stock",
-                  "booking_conflict",
-                  "template_workflow",
-                  "ai_assist",
-                  "ops_update",
-                ].includes(tag),
-              );
-            return isNotification && !tags.includes("notification_read");
-          }).length;
-        })(),
-      ])
-    : [null, 0];
-  const requestedActiveLabId = user ? await getRequestedActiveLabId() : null;
+        return (tasks || []).filter((task) => {
+          const tags = Array.isArray(task.tags) ? task.tags.filter((tag): tag is string => typeof tag === "string") : [];
+          const isNotification =
+            task.source_type === "reminder"
+            || tags.some((tag) =>
+              [
+                "automation",
+                "notification",
+                "protocol_change",
+                "low_stock",
+                "booking_conflict",
+                "template_workflow",
+                "ai_assist",
+                "ops_update",
+              ].includes(tag),
+            );
+          return isNotification && !tags.includes("notification_read");
+        }).length;
+      })(),
+    ]);
+  const requestedActiveLabId = await getRequestedActiveLabId();
   const activeLabContext = labSummary
     ? resolveActiveLabContext(labSummary, requestedActiveLabId)
     : null;
   return (
     <div className="native-app-bg min-h-screen">
-      {user ? <PwaBootstrap /> : null}
+      <PwaBootstrap />
       <Nav
-        userEmail={user?.email ?? null}
+        userEmail={user.email ?? null}
         labMemberships={labSummary?.memberships ?? []}
         activeLabId={activeLabContext?.activeMembership?.lab.id ?? null}
         unreadNotificationCount={unreadNotificationCount}
@@ -70,7 +72,7 @@ export default async function ProtectedLayout({
           {children}
         </div>
       </main>
-      {user && <DeferredGlobalTools />}
+      <DeferredGlobalTools />
     </div>
   );
 }

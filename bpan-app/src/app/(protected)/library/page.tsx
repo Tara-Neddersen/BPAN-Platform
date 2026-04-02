@@ -1,16 +1,22 @@
 import { createClient } from "@/lib/supabase/server";
 import { SavedPaperCard } from "@/components/saved-paper-card";
+import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
 import { unsavePaper } from "./actions";
 import type { SavedPaper } from "@/types";
+import { redirect } from "next/navigation";
 
 export default async function LibraryPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/auth/login?next=%2Flibrary");
+  }
+  const userId = user.id;
 
   const { data: papers } = await supabase
     .from("saved_papers")
     .select("*")
-    .eq("user_id", user!.id)
+    .eq("user_id", userId)
     .order("created_at", { ascending: false });
 
   const typedPapers = (papers ?? []) as SavedPaper[];
@@ -22,7 +28,7 @@ export default async function LibraryPage() {
     const { data: notes } = await supabase
       .from("notes")
       .select("paper_id")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .in("paper_id", paperIds);
 
     if (notes) {
@@ -43,11 +49,13 @@ export default async function LibraryPage() {
 
       <section className="section-card card-density-comfy">
         {typedPapers.length === 0 ? (
-          <div className="rounded-2xl border-2 border-dashed border-primary/20 bg-primary/[0.02] p-12 text-center">
-            <p className="text-muted-foreground">
-              No saved papers yet. Search for papers and click &ldquo;Save&rdquo; to add them here.
-            </p>
-          </div>
+          <WorkspaceEmptyState
+            icon="library"
+            title="No saved papers yet"
+            description="Build your library by saving papers from the literature hub, then come back here to read, organize, and annotate them."
+            primaryAction={{ label: "Open literature hub", href: "/dashboard" }}
+            secondaryAction={{ label: "Scout fresh papers", href: "/scout" }}
+          />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2">
             {typedPapers.map((paper) => (

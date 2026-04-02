@@ -615,7 +615,7 @@ export function ExperimentTrackerMatrix({
         {columns.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
             <p>No timepoints with experiments configured yet.</p>
-            <p className="text-xs mt-1">Go to the Timepoints tab to set up your experimental protocol.</p>
+            <p className="text-xs mt-1">Create a battery or add colony timepoints in Experiments, then they will appear here.</p>
           </div>
         ) : (
           <div className="overflow-auto max-h-[75vh]">

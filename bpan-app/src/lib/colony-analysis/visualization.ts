@@ -1,4 +1,11 @@
-import type { ColonyAnalysisVisualizationDraft, VisualizationChartType } from "@/lib/colony-analysis/types";
+import type {
+  AnnotationDraft,
+  AxisDraft,
+  ColonyAnalysisVisualizationDraft,
+  FigureStudioDraft,
+  LegendDraft,
+  VisualizationChartType,
+} from "@/lib/colony-analysis/types";
 
 type SigAnnotation = ColonyAnalysisVisualizationDraft["sigAnnotations"][number];
 
@@ -68,12 +75,32 @@ export function deriveSignificanceAnnotationsFromResult(
   return deduped.slice(0, maxAnnotations).map(({ group1, group2, label }) => ({ group1, group2, label }));
 }
 
+export function getEffectiveSigAnnotations(args: {
+  result: Record<string, unknown> | null;
+  current: ColonyAnalysisVisualizationDraft;
+  figureStudio?: FigureStudioDraft | null;
+  allowedGroups?: string[];
+}) {
+  const resultDriven = deriveSignificanceAnnotationsFromResult(args.result, {
+    allowedGroups: args.allowedGroups,
+    includeNs: args.current.includeNsAnnotations,
+    maxAnnotations: args.current.includeNsAnnotations ? 6 : 4,
+  });
+  const mode = args.figureStudio?.significanceMode ?? "result-driven";
+  if (mode === "hidden") return [] as SigAnnotation[];
+  if (mode === "manual-override") return args.current.sigAnnotations;
+  return args.current.sigAnnotations.length > 0 ? args.current.sigAnnotations : resultDriven;
+}
+
 export function getFigureSignificanceSource(
   result: Record<string, unknown> | null,
   current: ColonyAnalysisVisualizationDraft,
+  figureStudio?: FigureStudioDraft | null,
 ) {
   const resultDriven = deriveSignificanceAnnotationsFromResult(result);
+  if (figureStudio?.significanceMode === "hidden") return "Significance hidden";
   if (current.chartType === "scatter" || current.chartType === "timepoint_line") return "No discrete significance brackets applied";
+  if (figureStudio?.significanceMode === "manual-override" && current.sigAnnotations.length > 0) return "Manual significance annotations";
   if (current.autoRunSigStars && current.sigAnnotations.length > 0) {
     return `Auto significance (${current.autoStatsMethod}, ${current.autoPAdjust})`;
   }
@@ -102,4 +129,71 @@ export function deriveVisualizationDraftFromResult(
     chartType,
     title: current.title || String(result.measure || current.title || ""),
   };
+}
+
+export function getLegendLayout(legend: LegendDraft): Partial<Plotly.Layout["legend"]> {
+  if (!legend.visible) return { orientation: "h", x: 0.5, xanchor: "center", y: -0.2 };
+  switch (legend.position) {
+    case "top":
+      return { orientation: "h", x: 0.5, xanchor: "center", y: 1.14, yanchor: "bottom", traceorder: legend.order };
+    case "bottom":
+      return { orientation: "h", x: 0.5, xanchor: "center", y: -0.22, yanchor: "top", traceorder: legend.order };
+    case "left":
+      return { orientation: "v", x: -0.18, xanchor: "right", y: 1, yanchor: "top", traceorder: legend.order };
+    case "right":
+    default:
+      return { orientation: "v", x: 1.02, xanchor: "left", y: 1, yanchor: "top", traceorder: legend.order };
+  }
+}
+
+export function getAxisLayout(axis: AxisDraft, fallbackTitle: string, type: "xaxis" | "yaxis"): Partial<Plotly.LayoutAxis> {
+  const layout: Partial<Plotly.LayoutAxis> = {
+    title: { text: axis.title || fallbackTitle, font: { size: axis.labelFontSize } },
+    showgrid: axis.showGrid,
+    tickfont: { size: axis.tickFontSize },
+    automargin: true,
+  };
+  if (!axis.autoScale && (axis.min !== null || axis.max !== null)) {
+    layout.range = [axis.min ?? undefined, axis.max ?? undefined] as [number | undefined, number | undefined];
+  }
+  if (axis.zeroLock && type === "yaxis") {
+    const currentRange = Array.isArray(layout.range) ? layout.range : [];
+    layout.range = [0, currentRange[1]] as [number | undefined, number | undefined];
+    layout.rangemode = "tozero";
+  }
+  if (axis.logScale) {
+    layout.type = "log";
+  }
+  if (axis.invert) {
+    layout.autorange = "reversed";
+  }
+  if (axis.tickStep !== null) {
+    layout.dtick = axis.tickStep;
+  }
+  if (axis.tickDecimals !== null) {
+    layout.tickformat = `.${Math.max(0, Math.trunc(axis.tickDecimals))}f`;
+  }
+  return layout;
+}
+
+export function annotationDraftsToPlotly(annotations: AnnotationDraft[]): Array<Partial<Plotly.Annotations>> {
+  return annotations
+    .filter((annotation) => annotation.text.trim())
+    .map((annotation) => ({
+      x: annotation.x,
+      y: annotation.y ?? 0,
+      text: annotation.text,
+      showarrow: annotation.type === "arrow",
+      ax: annotation.type === "arrow" ? 0 : undefined,
+      ay:
+        annotation.type === "arrow"
+          ? -Math.max(24, Math.abs((annotation.arrowToY ?? annotation.y ?? 0) - (annotation.y ?? 0)) * 12)
+          : undefined,
+      font: { size: annotation.fontSize, color: annotation.color },
+      xref: "x",
+      yref: "y",
+      bgcolor: annotation.type === "panel_label" ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.75)",
+      borderpad: annotation.type === "panel_label" ? 2 : 1,
+      bordercolor: "rgba(0,0,0,0)",
+    }));
 }

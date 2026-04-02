@@ -544,6 +544,7 @@ export async function syncImportedDatasetToRunCapture(payload: {
     const { error: colonyError } = await supabase.from("colony_results").upsert(colonyUpserts, { onConflict: "id" });
     if (colonyError) throw new Error(colonyError.message);
     revalidatePath("/colony");
+    await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
     await syncColonyMirrorsBestEffort(user.id);
   }
 

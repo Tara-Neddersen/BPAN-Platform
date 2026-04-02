@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { fetchLabRoster, fetchLabShellSummary } from "@/lib/labs";
@@ -513,6 +514,7 @@ async function loadLabChatPanelData({
       .insert({
         lab_id: activeLabId,
         owner_user_id: null,
+        recipient_scope: "lab",
         subject: "General",
         linked_object_type: "lab",
         linked_object_id: activeLabId,
@@ -523,6 +525,13 @@ async function loadLabChatPanelData({
     if (generalThread) {
       threads = [generalThread as MessageThread, ...threads];
     }
+  }
+
+  const generalThreadIds = threads.filter(isGeneralThread).map((thread) => thread.id);
+  const duplicateGeneralThreadIds = generalThreadIds.slice(1);
+  if (duplicateGeneralThreadIds.length > 0) {
+    const duplicateSet = new Set(duplicateGeneralThreadIds);
+    threads = threads.filter((thread) => !duplicateSet.has(thread.id));
   }
 
   const threadIds = threads.map((thread) => thread.id);
@@ -578,6 +587,18 @@ async function loadLabChatPanelData({
     const list = messagesByThread.get(message.thread_id) ?? [];
     list.push(message);
     messagesByThread.set(message.thread_id, list);
+  }
+
+  if (duplicateGeneralThreadIds.length > 0) {
+    const duplicateIdsWithoutMessages = duplicateGeneralThreadIds.filter(
+      (threadId) => !messagesByThread.has(threadId),
+    );
+    if (duplicateIdsWithoutMessages.length > 0) {
+      await supabase
+        .from("message_threads")
+        .delete()
+        .in("id", duplicateIdsWithoutMessages);
+    }
   }
 
   const threadItems: ChatThreadItem[] = threads
@@ -789,7 +810,7 @@ async function loadLabMeetingsPanelData({
 export default async function LabsPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ panel?: string; reagent_id?: string; scan?: string; lab_id?: string }>;
+  searchParams?: Promise<{ panel?: string; reagent_id?: string; scan?: string; lab_id?: string; create?: string }>;
 }) {
   const params = searchParams ? await searchParams : undefined;
   const initialScanReagentId =
@@ -803,7 +824,7 @@ export default async function LabsPage({
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return null;
+    redirect("/auth/login?next=%2Flabs");
   }
 
   const shellSummary = await fetchLabShellSummary(supabase, user.id);
@@ -1014,6 +1035,7 @@ export default async function LabsPage({
       featureUnavailable={shellSummary.featureUnavailable}
       selectedLabId={activeLabContext.activeMembership?.lab.id ?? null}
       initialPanel={params?.panel ?? null}
+      initialCreateLabOpen={params?.create === "1"}
       operationsReagentsPanel={operationsReagentsPanel}
       operationsEquipmentPanel={operationsEquipmentPanel}
       labsAssistantPanel={labsAssistantPanel}

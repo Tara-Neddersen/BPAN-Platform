@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { syncRunResultsLayoutFromScheduleBlocks } from "@/lib/run-results-layout";
+import { inferExperimentTypeFromTitle, normalizeExperimentType } from "@/lib/experiment-types";
 import type { ExperimentType, PlatformAssignmentScope, PlatformRunStatus, PlatformSlotKind, ScheduledBlock } from "@/types";
 
 type RunScheduleBlockInput = {
@@ -43,26 +44,6 @@ type WindowAgeRange = {
   minAgeDays: number;
   maxAgeDays: number | null;
 };
-
-const VALID_EXPERIMENT_TYPES: ExperimentType[] = [
-  "y_maze",
-  "ldb",
-  "marble",
-  "nesting",
-  "social_interaction",
-  "catwalk",
-  "rotarod_hab",
-  "rotarod_test1",
-  "rotarod_test2",
-  "rotarod",
-  "stamina",
-  "blood_draw",
-  "data_collection",
-  "core_acclimation",
-  "eeg_implant",
-  "eeg_recording",
-  "handling",
-];
 
 const WEEKDAY_TO_INDEX: Record<string, number> = {
   sunday: 0,
@@ -201,55 +182,6 @@ function getMetadataNumber(metadata: Record<string, unknown>, key: string) {
 function getPreferredStartWeekday(metadata: Record<string, unknown>) {
   const weekday = getMetadataString(metadata, "preferredStartWeekday").toLowerCase();
   return weekday in WEEKDAY_TO_INDEX ? weekday : "";
-}
-
-function normalizeExperimentType(value: string) {
-  return VALID_EXPERIMENT_TYPES.includes(value as ExperimentType) ? (value as ExperimentType) : null;
-}
-
-function inferExperimentTypeFromTitle(title: string) {
-  const slug = title
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-
-  const aliases: Record<string, ExperimentType> = {
-    y_maze: "y_maze",
-    ymmaze: "y_maze",
-    light_dark_box: "ldb",
-    ldb: "ldb",
-    marble_burying: "marble",
-    nesting: "nesting",
-    si: "social_interaction",
-    social_interaction: "social_interaction",
-    catwalk: "catwalk",
-    rr_hab: "rotarod_hab",
-    rotarod_hab: "rotarod_hab",
-    rotarod_habituation: "rotarod_hab",
-    rr_1: "rotarod_test1",
-    rotarod_test_1: "rotarod_test1",
-    rotarod_test1: "rotarod_test1",
-    rr_2: "rotarod_test2",
-    rotarod_test_2: "rotarod_test2",
-    rotarod_test2: "rotarod_test2",
-    rr_stamina: "stamina",
-    rotarod: "rotarod",
-    stamina: "stamina",
-    blood_draw: "blood_draw",
-    plasma: "blood_draw",
-    plasma_collection: "blood_draw",
-    eeg_implant: "eeg_implant",
-    eeg_surgery: "eeg_implant",
-    eeg_recording: "eeg_recording",
-    handling: "handling",
-    transport: "data_collection",
-    rest_day: "core_acclimation",
-    data_collection: "data_collection",
-    core_acclimation: "core_acclimation",
-  };
-
-  return aliases[slug] || normalizeExperimentType(slug);
 }
 
 function buildNormalizedRunBlockMetadata(

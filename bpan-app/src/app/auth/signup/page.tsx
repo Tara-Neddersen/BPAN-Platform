@@ -102,6 +102,7 @@ export default function SignupPage() {
             <Input
               id="displayName"
               type="text"
+              autoComplete="name"
               placeholder="Your name"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
@@ -113,6 +114,7 @@ export default function SignupPage() {
             <Input
               id="email"
               type="email"
+              autoComplete="email"
               placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -125,6 +127,7 @@ export default function SignupPage() {
             <Input
               id="password"
               type="password"
+              autoComplete="new-password"
               placeholder="At least 6 characters"
               value={password}
               onChange={(e) => setPassword(e.target.value)}

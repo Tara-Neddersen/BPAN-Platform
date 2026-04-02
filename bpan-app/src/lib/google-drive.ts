@@ -15,6 +15,8 @@
  *   6. Copy Client ID + Client Secret to your env vars
  */
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 const SCOPES = "https://www.googleapis.com/auth/drive.file";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -121,7 +123,7 @@ export function getGoogleDriveReconnectMessage() {
   return GOOGLE_DRIVE_RECONNECT_MESSAGE;
 }
 
-async function invalidateGoogleDriveToken(supabase: any, userId: string) {
+async function invalidateGoogleDriveToken(supabase: SupabaseClient, userId: string) {
   try {
     await supabase.from("google_drive_tokens").delete().eq("user_id", userId);
   } catch {
@@ -148,7 +150,7 @@ export async function validateGoogleDriveAccess(accessToken: string) {
 }
 
 export async function getUsableGoogleDriveTokenRow(
-  supabase: any,
+  supabase: SupabaseClient,
   userId: string
 ) {
   const { data: tokenRow, error: tokenErr } = await supabase

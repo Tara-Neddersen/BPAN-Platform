@@ -5,15 +5,25 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, Sparkles, Search, FileText, RefreshCw } from "lucide-react";
+import { Loader2, Sparkles, Search, FileText, RefreshCw, Info } from "lucide-react";
 import Link from "next/link";
 import type { NoteWithPaper } from "@/types";
+import type { NotesSemanticCapability, NotesSemanticErrorCode } from "@/lib/notes-semantic";
 
 interface SemanticResult extends NoteWithPaper {
   similarity: number;
 }
 
-export function SemanticSearch() {
+type SemanticApiFailure = {
+  errorCode?: NotesSemanticErrorCode;
+  error?: string;
+};
+
+interface SemanticSearchProps {
+  capability: NotesSemanticCapability;
+}
+
+export function SemanticSearch({ capability }: SemanticSearchProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SemanticResult[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -45,11 +55,11 @@ export function SemanticSearch() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        const data = (await res.json()) as SemanticApiFailure;
         throw new Error(data.error || "Semantic search failed");
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as { notes: SemanticResult[] };
       setResults(data.notes);
     } catch (err) {
       setError(
@@ -69,7 +79,10 @@ export function SemanticSearch() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ backfill: true }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as SemanticApiFailure & {
+        embedded?: number;
+        total?: number;
+      };
       if (res.ok) {
         setBackfillResult(
           `Embedded ${data.embedded} of ${data.total} notes`
@@ -103,6 +116,15 @@ export function SemanticSearch() {
 
       {expanded && (
         <div className="space-y-4 rounded-lg border bg-primary/5 p-4">
+          {!capability.canSearch || !capability.canBackfill ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+              <div className="flex items-start gap-2">
+                <Info className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <p>{capability.message}</p>
+              </div>
+            </div>
+          ) : null}
+
           <form onSubmit={handleSearch} className="flex gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -113,7 +135,7 @@ export function SemanticSearch() {
                 className="pl-9"
               />
             </div>
-            <Button type="submit" disabled={loading || !query.trim()}>
+            <Button type="submit" disabled={!capability.canSearch || loading || !query.trim()}>
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin mr-1" /> Searching...
@@ -134,7 +156,7 @@ export function SemanticSearch() {
               size="sm"
               className="text-xs gap-1"
               onClick={handleBackfill}
-              disabled={backfilling}
+              disabled={!capability.canBackfill || backfilling}
             >
               {backfilling ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -222,4 +244,3 @@ export function SemanticSearch() {
     </div>
   );
 }
-

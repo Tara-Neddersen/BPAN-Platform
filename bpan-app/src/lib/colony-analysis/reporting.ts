@@ -3,10 +3,12 @@ import type {
   AnalysisReportPayload,
   ColonyAnalysisStatsDraft,
   ColonyAnalysisVisualizationDraft,
+  FigureStudioDraft,
   FigurePacket,
   MultiEndpointResultSummary,
   StructuredResultTable,
 } from "@/lib/colony-analysis/types";
+import { COLONY_ANALYSIS_SCHEMA_VERSION, determineAnalysisTableKind } from "@/lib/colony-analysis/config";
 import { deriveSignificanceAnnotationsFromResult, getFigureSignificanceSource } from "@/lib/colony-analysis/visualization";
 
 function round(n: number, d = 4): number {
@@ -331,13 +333,14 @@ export function generateAnalysisReport(params: {
   result: Record<string, unknown> | null;
   statsDraft: ColonyAnalysisStatsDraft;
   visualizationDraft: ColonyAnalysisVisualizationDraft;
+  figureStudioDraft?: FigureStudioDraft | null;
   measureLabels: Record<string, string>;
   includedCount: number;
   excludedCount: number;
   analysisName: string;
   exclusions: Array<{ animalId: string; reason: string }>;
 }): AnalysisReportPayload | null {
-  const { result, statsDraft, visualizationDraft, measureLabels, includedCount, excludedCount } = params;
+  const { result, statsDraft, visualizationDraft, figureStudioDraft, measureLabels, includedCount, excludedCount } = params;
   if (!result) return null;
 
   const measure = String(result.measure || measureLabels[statsDraft.measureKey] || statsDraft.measureKey || "selected measure");
@@ -415,6 +418,7 @@ export function generateAnalysisReport(params: {
   const caption = [
     `${figureTitle}.`,
     `${visualizationDraft.chartType.replace(/_/g, " ")} plot of ${primaryMeasure}${secondaryMeasure ? ` versus ${secondaryMeasure}` : ""} grouped by ${getFigureGroupingLabel(visualizationDraft.groupBy)}.`,
+    figureStudioDraft?.subtitle ? `${figureStudioDraft.subtitle}.` : "",
     `Linked analysis: ${String(result.test || "Analysis")} (${formatPValueForReport(result.p)}).`,
     warnings.length > 0 ? `Warnings: ${warnings.join(" ")}` : "",
   ]
@@ -442,6 +446,11 @@ export function generateAnalysisReport(params: {
     annotationCount,
     recommendedChartType: getRecommendedChartType(result, visualizationDraft),
     resultFamily: getResultFamily(result),
+    tableKind: determineAnalysisTableKind(result, statsDraft, visualizationDraft),
+    figureWidth: figureStudioDraft?.width,
+    figureHeight: figureStudioDraft?.height,
+    palette: figureStudioDraft?.traceStyle.palette,
+    schemaVersion: COLONY_ANALYSIS_SCHEMA_VERSION,
   };
 
   const reportPayload: AnalysisReportPayload = {

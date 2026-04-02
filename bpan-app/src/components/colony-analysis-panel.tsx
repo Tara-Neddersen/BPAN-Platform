@@ -45,6 +45,7 @@ import type {
   AssumptionCheck,
   ColonyAnalysisStatsDraft,
   ColonyAnalysisVisualizationDraft,
+  FigureStudioDraft,
   FlatRow,
   GroupStats,
   ModelKind,
@@ -56,11 +57,17 @@ import type {
   VisualizationChartType,
 } from "@/lib/colony-analysis/types";
 import {
+  buildRevisionConfigEnvelope,
+  buildRevisionResultsEnvelope,
+  COLONY_ANALYSIS_SCHEMA_VERSION,
   defaultStatsDraft,
+  defaultFigureStudioDraft,
   defaultVisualizationDraft,
   normalizeAnalysisSetEntry,
+  normalizeSavedRevisionEnvelope,
   normalizeSavedResult,
   normalizeStatsDraft,
+  normalizeFigureStudioDraft,
   normalizeVisualizationDraft,
 } from "@/lib/colony-analysis/config";
 import {
@@ -70,7 +77,14 @@ import {
   renderAnalysisReportMarkdown,
   summarizeAnalysisResult,
 } from "@/lib/colony-analysis/reporting";
-import { deriveSignificanceAnnotationsFromResult, deriveVisualizationDraftFromResult } from "@/lib/colony-analysis/visualization";
+import {
+  annotationDraftsToPlotly,
+  deriveSignificanceAnnotationsFromResult,
+  deriveVisualizationDraftFromResult,
+  getAxisLayout,
+  getEffectiveSigAnnotations,
+  getLegendLayout,
+} from "@/lib/colony-analysis/visualization";
 
 // Dynamically import Plotly
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -135,6 +149,21 @@ const CHART_COMPATIBILITY_MAP: Record<string, VisualizationChartType[]> = {
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+function normalizeOptionValue(value: unknown): string | null {
+  const normalized = String(value ?? "").trim();
+  return normalized ? normalized : null;
+}
+
+function uniqueNonEmptyOptions(values: unknown[]): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map(normalizeOptionValue)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
 
 function mean(arr: number[]): number {
   return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
@@ -2033,6 +2062,9 @@ export function ColonyAnalysisPanel({
   const [compareRevisionId, setCompareRevisionId] = useState<string>("__none__");
   const [statsDraft, setStatsDraft] = useState<ColonyAnalysisStatsDraft>(defaultStatsDraft());
   const [visualizationDraft, setVisualizationDraft] = useState<ColonyAnalysisVisualizationDraft>(defaultVisualizationDraft());
+  const [figureStudioDraft, setFigureStudioDraft] = useState<FigureStudioDraft>(
+    defaultFigureStudioDraft(defaultVisualizationDraft().chartType),
+  );
   const [savedResult, setSavedResult] = useState<Record<string, unknown> | null>(null);
   const [loadedRevisionKey, setLoadedRevisionKey] = useState<string>("draft");
   const [activeTab, setActiveTab] = useState("summary");
@@ -2131,16 +2163,17 @@ export function ColonyAnalysisPanel({
   // Available experiment types from results
   const availableExperiments = useMemo(() => {
     if (selectedRun) {
-      return selectedRunExperiments.map((experiment) => experiment.experiment_key);
+      return uniqueNonEmptyOptions(selectedRunExperiments.map((experiment) => experiment.experiment_key));
     }
-    const exps = new Set(filteredResults.map((r) => r.experiment_type));
-    return Array.from(exps).sort();
+    return uniqueNonEmptyOptions(filteredResults.map((result) => result.experiment_type)).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true }),
+    );
   }, [filteredResults, selectedRun, selectedRunExperiments]);
 
+  const resolvedSelectedExperiment =
+    selectedExperiment === "__all__" || availableExperiments.includes(selectedExperiment) ? selectedExperiment : "__all__";
   const effectiveSelectedExperiment =
-    selectedExperiment === "__all__" && availableExperiments.length > 0
-      ? availableExperiments[0]
-      : selectedExperiment;
+    resolvedSelectedExperiment;
 
   // Available timepoints from results, scoped by selected experiment.
   const availableTimepoints = useMemo(() => {
@@ -2209,9 +2242,10 @@ export function ColonyAnalysisPanel({
             : result.experiment_type,
       };
 
-      const measures = result.measures as Record<string, string | number | null>;
-      for (const [key, value] of Object.entries(measures)) {
-        if (key.startsWith("__")) continue; // Skip internal fields (__cage_image, __raw_data_url)
+      const measures = (result.measures || {}) as Record<string, string | number | null>;
+      for (const [rawKey, value] of Object.entries(measures)) {
+        const key = normalizeOptionValue(rawKey);
+        if (!key || key.startsWith("__")) continue; // Skip internal fields (__cage_image, __raw_data_url)
         if (value !== null && value !== undefined) {
           row[key] = typeof value === "string" && !isNaN(Number(value)) ? Number(value) : value;
           keySet.add(key);
@@ -2354,6 +2388,7 @@ export function ColonyAnalysisPanel({
         result: savedResult,
         statsDraft,
         visualizationDraft,
+        figureStudioDraft,
         measureLabels,
         includedCount: includedAnimalCount,
         excludedCount: excludedAnimalCount,
@@ -2364,6 +2399,7 @@ export function ColonyAnalysisPanel({
       activeExclusions,
       analysisName,
       excludedAnimalCount,
+      figureStudioDraft,
       includedAnimalCount,
       measureLabels,
       savedResult,
@@ -2406,25 +2442,22 @@ export function ColonyAnalysisPanel({
 
   useEffect(() => {
     if (!selectedSavedRevision) return;
-    const scope = (selectedSavedRevision.config.scope || {}) as Record<string, unknown>;
-    const exclusions = Array.isArray(selectedSavedRevision.config.excludedAnimals)
-      ? (selectedSavedRevision.config.excludedAnimals as Array<Record<string, unknown>>)
-      : [];
-    const analysisSetEntries = Array.isArray(selectedSavedRevision.config.analysisSetEntries)
-      ? (selectedSavedRevision.config.analysisSetEntries as Array<Record<string, unknown>>).map(normalizeAnalysisSetEntry)
-      : [];
-    const stats = normalizeStatsDraft((selectedSavedRevision.config.statistics || {}) as Partial<ColonyAnalysisStatsDraft>);
-    const loadedResult = normalizeSavedResult(selectedSavedRevision.results || null);
+    const normalizedRevision = normalizeSavedRevisionEnvelope({
+      config: selectedSavedRevision.config || null,
+      results: selectedSavedRevision.results || null,
+    });
+    const scope = normalizedRevision.config.scope;
+    const analysisSetEntries = normalizedRevision.config.analysisSet.entries;
+    const stats = normalizedRevision.config.statistics;
+    const loadedResult = normalizedRevision.results.rawResult || normalizeSavedResult(selectedSavedRevision.results || null);
     const visualization = deriveVisualizationDraftFromResult(
       loadedResult,
-      normalizeVisualizationDraft(
-        (selectedSavedRevision.config.visualization || {}) as Partial<ColonyAnalysisVisualizationDraft>,
-      ),
+      normalizedRevision.config.visualization.draft,
     );
     const effectiveEntries =
       analysisSetEntries.length > 0
         ? analysisSetEntries
-        : exclusions.map((entry) =>
+        : normalizedRevision.config.analysisSet.excludedAnimals.map((entry) =>
             normalizeAnalysisSetEntry({
               animalId: entry.animalId,
               included: false,
@@ -2434,11 +2467,12 @@ export function ColonyAnalysisPanel({
           );
 
     setAnalysisName(selectedSavedRevision.name || "Untitled Colony Analysis");
-    setAnalysisDescription(String(selectedSavedRevision.config.description || ""));
+    setAnalysisDescription(String(normalizedRevision.config.description || ""));
     setActiveRunId(typeof scope.runId === "string" ? scope.runId : "__all__");
     setSelectedExperiment(typeof scope.experiment === "string" ? scope.experiment : "__all__");
     setSelectedTimepoint(typeof scope.timepoint === "string" ? scope.timepoint : "__all__");
     setSelectedCohort(typeof scope.cohort === "string" ? scope.cohort : "__all__");
+    setAnimalSearch(String(normalizedRevision.config.analysisSet.preset.search || ""));
     setExcludedAnimalIds(
       new Set(
         effectiveEntries
@@ -2490,6 +2524,14 @@ export function ColonyAnalysisPanel({
     );
     setStatsDraft(stats);
     setVisualizationDraft(visualization);
+    setFigureStudioDraft(
+      normalizeFigureStudioDraft(
+        normalizedRevision.config.visualization.figureStudio,
+        visualization.chartType,
+        "",
+        visualization.measureKey,
+      ),
+    );
     setSavedResult(loadedResult);
     setLoadedRevisionKey(selectedSavedRevision.id);
   }, [selectedSavedRevision]);
@@ -2528,9 +2570,8 @@ export function ColonyAnalysisPanel({
     [measureKeys],
   );
 
-  const handleExportSummary = useCallback(() => {
-    const payload = {
-      name: analysisName,
+  const handleExportSummary = () => {
+    const configEnvelope = buildRevisionConfigEnvelope({
       description: analysisDescription,
       scope: {
         runId: resolvedRunId,
@@ -2538,6 +2579,59 @@ export function ColonyAnalysisPanel({
         timepoint: effectiveSelectedTimepoint,
         cohort: selectedCohort,
       },
+      excludedAnimals: activeExclusions,
+      analysisSetEntries: currentAnalysisSetEntries,
+      analysisSetPreset: {
+        runId: resolvedRunId,
+        experiment: effectiveSelectedExperiment,
+        timepoint: effectiveSelectedTimepoint,
+        cohort: selectedCohort,
+        search: animalSearch,
+      },
+      statsDraft,
+      visualizationDraft,
+      figureStudioDraft,
+      resultTables: currentReportPayload?.resultTables || [],
+      reportWarnings: currentReportPayload?.reportWarnings || [],
+      figureMetadata: currentReportPayload?.figureMetadata || null,
+      figurePacket: currentReportPayload?.figurePacket || null,
+      multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
+      includedAnimalCount,
+      excludedAnimalCount,
+      finalized: Boolean(selectedSavedRevision?.config?.finalized),
+      finalizedAt:
+        typeof selectedSavedRevision?.config?.finalizedAt === "string"
+          ? String(selectedSavedRevision?.config?.finalizedAt)
+          : null,
+      duplicatedFromRevisionId:
+        typeof selectedSavedRevision?.config?.duplicatedFromRevisionId === "string"
+          ? String(selectedSavedRevision?.config?.duplicatedFromRevisionId)
+          : null,
+      revisionNumber: selectedSavedRevision?.revisionNumber || null,
+    });
+    const resultsEnvelope = buildRevisionResultsEnvelope({
+      rawResult: savedResult,
+      reportSummary:
+        currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount) || "",
+      reportResultsText: currentReportPayload?.reportResultsText || "",
+      reportMethodsText: currentReportPayload?.reportMethodsText || "",
+      reportCaption: currentReportPayload?.reportCaption || "",
+      reportWarnings: currentReportPayload?.reportWarnings || [],
+      diagnostics: currentReportPayload?.diagnostics || [],
+      resultTables: currentReportPayload?.resultTables || [],
+      figurePacket: currentReportPayload?.figurePacket || null,
+      figureMetadata: currentReportPayload?.figureMetadata || null,
+      multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
+      includedAnimalCount,
+      excludedAnimalCount,
+    });
+    const payload = {
+      name: analysisName,
+      description: analysisDescription,
+      schemaVersion: COLONY_ANALYSIS_SCHEMA_VERSION,
+      scope: configEnvelope.scope,
+      config: configEnvelope,
+      resultsEnvelope,
       summary: currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
       report: currentReportPayload,
       results: savedResult,
@@ -2553,7 +2647,7 @@ export function ColonyAnalysisPanel({
     anchor.click();
     URL.revokeObjectURL(url);
     toast.success("Analysis summary exported.");
-  }, [activeExclusions, analysisDescription, analysisName, currentReportPayload, effectiveSelectedExperiment, effectiveSelectedTimepoint, excludedAnimalCount, includedAnimalCount, resolvedRunId, savedResult, selectedCohort]);
+  };
 
   const handleExportReport = useCallback(() => {
     if (!currentReportPayload) {
@@ -2599,57 +2693,67 @@ export function ColonyAnalysisPanel({
       toast.error("Run an analysis first so there is something meaningful to save.");
       return;
     }
+    const configEnvelope = buildRevisionConfigEnvelope({
+      description: analysisDescription.trim() || null,
+      scope: {
+        runId: resolvedRunId,
+        experiment: effectiveSelectedExperiment,
+        timepoint: effectiveSelectedTimepoint,
+        cohort: selectedCohort,
+      },
+      excludedAnimals: Array.from(excludedAnimalIds).map((animalId) => ({
+        animalId,
+        reason: exclusionReasons[animalId] || "",
+      })),
+      analysisSetEntries: currentAnalysisSetEntries,
+      analysisSetPreset: {
+        runId: resolvedRunId,
+        experiment: effectiveSelectedExperiment,
+        timepoint: effectiveSelectedTimepoint,
+        cohort: selectedCohort,
+        search: animalSearch,
+      },
+      statsDraft,
+      visualizationDraft,
+      figureStudioDraft,
+      resultTables: currentReportPayload?.resultTables || [],
+      reportWarnings: currentReportPayload?.reportWarnings || [],
+      figureMetadata: currentReportPayload?.figureMetadata || null,
+      figurePacket: currentReportPayload?.figurePacket || null,
+      multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
+      includedAnimalCount,
+      excludedAnimalCount,
+      finalized: Boolean(selectedSavedRevision?.config?.finalized),
+      finalizedAt:
+        typeof selectedSavedRevision?.config?.finalizedAt === "string"
+          ? String(selectedSavedRevision?.config?.finalizedAt)
+          : null,
+      revisionNumber: selectedSavedRevision?.revisionNumber || null,
+    });
+    const resultsEnvelope = buildRevisionResultsEnvelope({
+      rawResult: savedResult,
+      reportSummary:
+        currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount) || "",
+      reportResultsText: currentReportPayload?.reportResultsText || "",
+      reportMethodsText: currentReportPayload?.reportMethodsText || "",
+      reportCaption: currentReportPayload?.reportCaption || "",
+      reportWarnings: currentReportPayload?.reportWarnings || [],
+      diagnostics: currentReportPayload?.diagnostics || [],
+      resultTables: currentReportPayload?.resultTables || [],
+      figurePacket: currentReportPayload?.figurePacket || null,
+      figureMetadata: currentReportPayload?.figureMetadata || null,
+      multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
+      includedAnimalCount,
+      excludedAnimalCount,
+    });
     const payload = {
       reportPayload: currentReportPayload,
       analysisId: mode === "revision" && selectedSavedAnalysisId !== "__new__" ? selectedSavedAnalysisId : null,
       name: analysisName.trim() || "Untitled Colony Analysis",
       description: analysisDescription.trim() || null,
-      config: {
-        description: analysisDescription.trim() || null,
-        scope: {
-          runId: resolvedRunId,
-          experiment: effectiveSelectedExperiment,
-          timepoint: effectiveSelectedTimepoint,
-          cohort: selectedCohort,
-        },
-        excludedAnimals: Array.from(excludedAnimalIds).map((animalId) => ({
-          animalId,
-          reason: exclusionReasons[animalId] || "",
-        })),
-        analysisSetEntries: currentAnalysisSetEntries,
-        analysisSetPreset: {
-          runId: resolvedRunId,
-          experiment: effectiveSelectedExperiment,
-          timepoint: effectiveSelectedTimepoint,
-          cohort: selectedCohort,
-          search: animalSearch,
-        },
-        statistics: statsDraft,
-        visualization: visualizationDraft,
-        reportWarnings: currentReportPayload?.reportWarnings || [],
-        figureMetadata: currentReportPayload?.figureMetadata || null,
-        diagnostics: currentReportPayload?.diagnostics || [],
-        resultTables: currentReportPayload?.resultTables || [],
-        figurePacket: currentReportPayload?.figurePacket || null,
-        multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
-        includedAnimalCount,
-        excludedAnimalCount,
-        finalized: selectedSavedRevision?.config?.finalized || false,
-      },
-      results: {
-        ...savedResult,
-        reportSummary: currentReportPayload?.reportSummary || "",
-        reportResultsText: currentReportPayload?.reportResultsText || "",
-        reportMethodsText: currentReportPayload?.reportMethodsText || "",
-        reportCaption: currentReportPayload?.reportCaption || "",
-        reportWarnings: currentReportPayload?.reportWarnings || [],
-        figureMetadata: currentReportPayload?.figureMetadata || null,
-        diagnostics: currentReportPayload?.diagnostics || [],
-        resultTables: currentReportPayload?.resultTables || [],
-        figurePacket: currentReportPayload?.figurePacket || null,
-        multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
-      },
-      summaryText: currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
+      config: configEnvelope as unknown as Record<string, unknown>,
+      results: resultsEnvelope as unknown as Record<string, unknown>,
+      summaryText: resultsEnvelope.reportSummary,
     };
     try {
       const result = await saveAnalysisRevision(payload);
@@ -2739,49 +2843,63 @@ export function ColonyAnalysisPanel({
       toast.error("Run or load an analysis first.");
       return;
     }
+    const configEnvelope = buildRevisionConfigEnvelope({
+      description: analysisDescription.trim() || null,
+      scope: {
+        runId: resolvedRunId,
+        experiment: effectiveSelectedExperiment,
+        timepoint: effectiveSelectedTimepoint,
+        cohort: selectedCohort,
+      },
+      excludedAnimals: Array.from(excludedAnimalIds).map((animalId) => ({
+        animalId,
+        reason: exclusionReasons[animalId] || "",
+      })),
+      analysisSetEntries: currentAnalysisSetEntries,
+      analysisSetPreset: {
+        runId: resolvedRunId,
+        experiment: effectiveSelectedExperiment,
+        timepoint: effectiveSelectedTimepoint,
+        cohort: selectedCohort,
+        search: animalSearch,
+      },
+      statsDraft,
+      visualizationDraft,
+      figureStudioDraft,
+      resultTables: currentReportPayload?.resultTables || [],
+      reportWarnings: currentReportPayload?.reportWarnings || [],
+      figureMetadata: currentReportPayload?.figureMetadata || null,
+      figurePacket: currentReportPayload?.figurePacket || null,
+      multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
+      includedAnimalCount,
+      excludedAnimalCount,
+      finalized: false,
+      duplicatedFromRevisionId: selectedSavedRevision?.id || null,
+      revisionNumber: null,
+    });
+    const resultsEnvelope = buildRevisionResultsEnvelope({
+      rawResult: savedResult,
+      reportSummary:
+        currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount) || "",
+      reportResultsText: currentReportPayload?.reportResultsText || "",
+      reportMethodsText: currentReportPayload?.reportMethodsText || "",
+      reportCaption: currentReportPayload?.reportCaption || "",
+      reportWarnings: currentReportPayload?.reportWarnings || [],
+      diagnostics: currentReportPayload?.diagnostics || [],
+      resultTables: currentReportPayload?.resultTables || [],
+      figurePacket: currentReportPayload?.figurePacket || null,
+      figureMetadata: currentReportPayload?.figureMetadata || null,
+      multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
+      includedAnimalCount,
+      excludedAnimalCount,
+    });
     const payload = {
       analysisId: null,
       name: `${analysisName.trim() || "Colony Analysis"} Copy`,
       description: analysisDescription.trim() || null,
-      config: {
-        description: analysisDescription.trim() || null,
-        scope: {
-          runId: resolvedRunId,
-          experiment: effectiveSelectedExperiment,
-          timepoint: effectiveSelectedTimepoint,
-          cohort: selectedCohort,
-        },
-        excludedAnimals: Array.from(excludedAnimalIds).map((animalId) => ({
-          animalId,
-          reason: exclusionReasons[animalId] || "",
-        })),
-        analysisSetEntries: currentAnalysisSetEntries,
-        statistics: statsDraft,
-        visualization: visualizationDraft,
-        reportWarnings: currentReportPayload?.reportWarnings || [],
-        figureMetadata: currentReportPayload?.figureMetadata || null,
-        diagnostics: currentReportPayload?.diagnostics || [],
-        resultTables: currentReportPayload?.resultTables || [],
-        figurePacket: currentReportPayload?.figurePacket || null,
-        multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
-        includedAnimalCount,
-        excludedAnimalCount,
-        duplicatedFromRevisionId: selectedSavedRevision?.id || null,
-      },
-      results: {
-        ...savedResult,
-        reportSummary: currentReportPayload?.reportSummary || "",
-        reportResultsText: currentReportPayload?.reportResultsText || "",
-        reportMethodsText: currentReportPayload?.reportMethodsText || "",
-        reportCaption: currentReportPayload?.reportCaption || "",
-        reportWarnings: currentReportPayload?.reportWarnings || [],
-        figureMetadata: currentReportPayload?.figureMetadata || null,
-        diagnostics: currentReportPayload?.diagnostics || [],
-        resultTables: currentReportPayload?.resultTables || [],
-        figurePacket: currentReportPayload?.figurePacket || null,
-        multiEndpointResults: currentReportPayload?.multiEndpointResults || [],
-      },
-      summaryText: currentReportPayload?.reportSummary || summarizeAnalysisResult(savedResult, includedAnimalCount, excludedAnimalCount),
+      config: configEnvelope as unknown as Record<string, unknown>,
+      results: resultsEnvelope as unknown as Record<string, unknown>,
+      summaryText: resultsEnvelope.reportSummary,
     };
     const result = await saveAnalysisRevision(payload);
     if (result.success && result.analysisId) {
@@ -3048,7 +3166,7 @@ export function ColonyAnalysisPanel({
             </div>
             <div>
               <Label className="text-xs mb-1 block">Experiment Type</Label>
-              <Select value={selectedExperiment} onValueChange={setSelectedExperiment}>
+              <Select value={resolvedSelectedExperiment} onValueChange={setSelectedExperiment}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -3490,9 +3608,11 @@ export function ColonyAnalysisPanel({
               measureLabels={measureLabels}
               groups={availableGroups}
               initialConfig={visualizationDraft}
+              initialFigureStudioConfig={figureStudioDraft}
               result={savedResult}
               reportPayload={currentReportPayload}
               onConfigChange={setVisualizationDraft}
+              onFigureStudioChange={setFigureStudioDraft}
             />
           </TabsContent>
         </Tabs>
@@ -5717,20 +5837,34 @@ function VisualizationPanel({
   measureLabels,
   groups,
   initialConfig,
+  initialFigureStudioConfig,
   result,
   reportPayload,
   onConfigChange,
+  onFigureStudioChange,
 }: {
   flatData: FlatRow[];
   numericKeys: string[];
   measureLabels: Record<string, string>;
   groups: string[];
   initialConfig?: ColonyAnalysisVisualizationDraft;
+  initialFigureStudioConfig?: FigureStudioDraft;
   result: Record<string, unknown> | null;
   reportPayload: AnalysisReportPayload | null;
   onConfigChange?: (next: ColonyAnalysisVisualizationDraft) => void;
+  onFigureStudioChange?: (next: FigureStudioDraft) => void;
 }) {
   const normalizedInitialConfig = useMemo(() => normalizeVisualizationDraft(initialConfig), [initialConfig]);
+  const normalizedInitialFigureStudioConfig = useMemo(
+    () =>
+      normalizeFigureStudioDraft(
+        initialFigureStudioConfig,
+        normalizedInitialConfig.chartType,
+        "",
+        measureLabels[normalizedInitialConfig.measureKey] || normalizedInitialConfig.measureKey,
+      ),
+    [initialFigureStudioConfig, measureLabels, normalizedInitialConfig],
+  );
   const safeNumericKeys = useMemo(() => numericKeys.filter(Boolean), [numericKeys]);
   const [chartType, setChartType] = useState(normalizedInitialConfig.chartType);
   const [measureKey, setMeasureKey] = useState(normalizedInitialConfig.measureKey || safeNumericKeys[0] || "");
@@ -5738,6 +5872,7 @@ function VisualizationPanel({
   const [groupBy, setGroupBy] = useState<"group" | "sex" | "genotype" | "cohort">(normalizedInitialConfig.groupBy);
   const [title, setTitle] = useState(normalizedInitialConfig.title);
   const [showPoints, setShowPoints] = useState(normalizedInitialConfig.showPoints);
+  const [figureStudio, setFigureStudio] = useState<FigureStudioDraft>(normalizedInitialFigureStudioConfig);
   const plotRef = useRef<HTMLDivElement>(null);
   const [hasMounted, setHasMounted] = useState(false);
 
@@ -5763,6 +5898,10 @@ function VisualizationPanel({
   useEffect(() => {
     setHasMounted(true);
   }, []);
+
+  useEffect(() => {
+    setFigureStudio(normalizedInitialFigureStudioConfig);
+  }, [normalizedInitialFigureStudioConfig]);
 
   const recommendedChartType = reportPayload?.figureMetadata.recommendedChartType || null;
   const effectiveChartType = useMemo<VisualizationChartType>(() => {
@@ -5811,7 +5950,45 @@ function VisualizationPanel({
       }),
     [groupLabels, includeNsAnnotations, result],
   );
-  const effectiveSigAnnotations = sigAnnotations.length > 0 ? sigAnnotations : resultDrivenSigAnnotations;
+  const effectiveSigAnnotations = useMemo(
+    () =>
+      getEffectiveSigAnnotations({
+        result,
+        current: {
+          ...normalizedInitialConfig,
+          chartType: effectiveChartType,
+          measureKey,
+          measureKey2,
+          groupBy,
+          title,
+          showPoints,
+          sigAnnotations,
+          autoRunSigStars,
+          autoStatsMethod,
+          autoPAdjust,
+          includeNsAnnotations,
+        },
+        figureStudio,
+        allowedGroups: groupLabels,
+      }),
+    [
+      autoPAdjust,
+      autoRunSigStars,
+      autoStatsMethod,
+      effectiveChartType,
+      figureStudio,
+      groupBy,
+      groupLabels,
+      includeNsAnnotations,
+      measureKey,
+      measureKey2,
+      normalizedInitialConfig,
+      result,
+      showPoints,
+      sigAnnotations,
+      title,
+    ],
+  );
 
   useEffect(() => {
     if (safeNumericKeys.length === 0) return;
@@ -5820,6 +5997,25 @@ function VisualizationPanel({
       setMeasureKey2(safeNumericKeys.find((key) => key !== measureKey) || safeNumericKeys[1] || "");
     }
   }, [measureKey, measureKey2, safeNumericKeys]);
+
+  useEffect(() => {
+    setFigureStudio((current) =>
+      normalizeFigureStudioDraft(
+        {
+          ...current,
+          chartFamily: effectiveChartType,
+          title: current.title || title,
+          axisY: {
+            ...current.axisY,
+            title: current.axisY.title || measureLabels[measureKey] || measureKey,
+          },
+        },
+        effectiveChartType,
+        current.axisX.title,
+        measureLabels[measureKey] || measureKey,
+      ),
+    );
+  }, [effectiveChartType, measureKey, measureLabels, title]);
 
   useEffect(() => {
     onConfigChange?.({
@@ -5836,17 +6032,31 @@ function VisualizationPanel({
       autoPAdjust,
       includeNsAnnotations,
     });
+    onFigureStudioChange?.({
+      ...figureStudio,
+      chartFamily: effectiveChartType,
+      title: figureStudio.title || title,
+      axisY: {
+        ...figureStudio.axisY,
+        title:
+          figureStudio.axisY.title ||
+          (measureLabels[measureKey] || measureKey || figureStudio.axisY.title),
+      },
+    });
   }, [
     autoPAdjust,
     autoRunSigStars,
     autoStatsMethod,
     effectiveChartType,
+    figureStudio,
     groupBy,
     includeNsAnnotations,
     measureKey,
     measureKey2,
+    measureLabels,
     normalizedInitialConfig,
     onConfigChange,
+    onFigureStudioChange,
     showPoints,
     sigAnnotations,
     title,
@@ -5933,6 +6143,30 @@ function VisualizationPanel({
     applyAutoSigAnnotations(false);
   }, [autoRunSigStars, applyAutoSigAnnotations]);
 
+  const resolveGroupColor = useCallback(
+    (group: string, index: number) =>
+      figureStudio.traceStyle.groupColorOverrides[group] ||
+      GROUP_COLORS[group] ||
+      CHART_COLORS[index % CHART_COLORS.length],
+    [figureStudio.traceStyle.groupColorOverrides],
+  );
+  const patchFigureStudio = useCallback((patch: Partial<FigureStudioDraft>) => {
+    setFigureStudio((current) =>
+      normalizeFigureStudioDraft(
+        {
+          ...current,
+          ...patch,
+        },
+        effectiveChartType,
+        current.axisX.title,
+        measureLabels[measureKey] || measureKey,
+      ),
+    );
+  }, [effectiveChartType, measureKey, measureLabels]);
+
+  const xAxisTitle = figureStudio.axisX.title;
+  const yAxisTitle = figureStudio.axisY.title || measureLabels[measureKey] || measureKey;
+
   const plotData = useMemo(() => {
     const measureLabel = measureLabels[measureKey] || measureKey;
     const chartTitle = title || reportPayload?.figureMetadata.title || measureLabel || String(result?.measure || "Analysis Figure");
@@ -5943,14 +6177,18 @@ function VisualizationPanel({
         if (!Array.isArray(result?.survival_curves) || result.survival_curves.length === 0) return null;
         const traces = (result.survival_curves as Array<Record<string, unknown>>).map((curve, index) => {
           const points = Array.isArray(curve.points) ? (curve.points as Array<Record<string, unknown>>) : [];
-          const color = GROUP_COLORS[String(curve.group || "")] || CHART_COLORS[index % CHART_COLORS.length];
+          const color = resolveGroupColor(String(curve.group || ""), index);
           return {
             x: points.map((point) => Number(point.time ?? 0)),
             y: points.map((point) => Number(point.survival ?? 0)),
             type: "scatter" as const,
             mode: "lines+markers" as const,
-            line: { color, width: 2, shape: "hv" as const },
-            marker: { color, size: 7 },
+            line: { color, width: figureStudio.traceStyle.lineWidth, shape: "hv" as const },
+            marker: {
+              color,
+              size: figureStudio.traceStyle.dotSize,
+              symbol: figureStudio.traceStyle.dotSymbol,
+            },
             name: String(curve.group || `Group ${index + 1}`),
           };
         });
@@ -5979,8 +6217,12 @@ function VisualizationPanel({
           type: "scatter",
           mode: "lines+markers",
           name: "ROC",
-          line: { color: "#2563eb", width: 2.5 },
-          marker: { color: "#2563eb", size: 7 },
+          line: { color: "#2563eb", width: figureStudio.traceStyle.lineWidth },
+          marker: {
+            color: "#2563eb",
+            size: figureStudio.traceStyle.dotSize,
+            symbol: figureStudio.traceStyle.dotSymbol,
+          },
         };
         const traces: Plotly.Data[] = [
           curveTrace,
@@ -6000,7 +6242,7 @@ function VisualizationPanel({
             type: "scatter",
             mode: "markers",
             name: "Optimal threshold",
-            marker: { color: "#dc2626", size: 10, symbol: "diamond" },
+            marker: { color: "#dc2626", size: figureStudio.traceStyle.dotSize + 2, symbol: "diamond" },
           });
         }
         return {
@@ -6028,7 +6270,12 @@ function VisualizationPanel({
             type: "scatter",
             mode: "markers",
             name: "Observed",
-            marker: { color: "#0f766e", size: 9, opacity: 0.75 },
+            marker: {
+              color: "#0f766e",
+              size: figureStudio.traceStyle.dotSize + 1,
+              opacity: figureStudio.traceStyle.dotOpacity,
+              symbol: figureStudio.traceStyle.dotSymbol,
+            },
           },
           {
             x: fitted.map((point) => Number(point.x ?? 0)),
@@ -6036,7 +6283,7 @@ function VisualizationPanel({
             type: "scatter",
             mode: "lines",
             name: "Fitted",
-            line: { color: "#c2410c", width: 2.5 },
+            line: { color: "#c2410c", width: figureStudio.traceStyle.lineWidth },
           },
         ];
         return {
@@ -6078,8 +6325,12 @@ function VisualizationPanel({
           y: [Number(values[leftGroup]), Number(values[rightGroup])],
           type: "scatter",
           mode: "lines+markers",
-          line: { color: "#94a3b8", width: 1.4 },
-          marker: { color: "#0f172a", size: 7 },
+          line: { color: "#94a3b8", width: figureStudio.traceStyle.showMatchedConnectors ? figureStudio.traceStyle.lineWidth : 0 },
+          marker: {
+            color: "#0f172a",
+            size: figureStudio.traceStyle.dotSize,
+            symbol: figureStudio.traceStyle.dotSymbol,
+          },
           name: animalId,
           showlegend: false,
         }));
@@ -6110,20 +6361,24 @@ function VisualizationPanel({
             .filter((v) => !isNaN(v));
           means.push(mean(values));
           errors.push(useSEM ? sem(values) : stdDev(values));
-          colors.push(GROUP_COLORS[g] || CHART_COLORS[groupLabels.indexOf(g) % CHART_COLORS.length]);
+          colors.push(resolveGroupColor(g, groupLabels.indexOf(g)));
         }
 
         const traces: Plotly.Data[] = [{
           x: groupLabels,
           y: means,
           type: "bar",
-          marker: { color: colors, opacity: 0.85 },
+          marker: {
+            color: colors,
+            opacity: figureStudio.traceStyle.barOpacity,
+            line: { color: "#ffffff", width: figureStudio.traceStyle.outlineWidth },
+          },
           error_y: {
             type: "data",
             array: errors,
-            visible: true,
-            thickness: 2,
-            width: 6,
+            visible: figureStudio.traceStyle.errorBarStyle !== "none",
+            thickness: figureStudio.traceStyle.lineWidth,
+            width: figureStudio.traceStyle.errorBarCapWidth,
           },
           name: measureLabel,
         }];
@@ -6143,9 +6398,10 @@ function VisualizationPanel({
               mode: "markers",
               marker: {
                 color: colors[i],
-                size: 7,
-                opacity: 0.6,
-                line: { color: "white", width: 1 },
+                size: figureStudio.traceStyle.dotSize,
+                opacity: figureStudio.traceStyle.dotOpacity,
+                symbol: figureStudio.traceStyle.dotSymbol,
+                line: { color: "white", width: figureStudio.traceStyle.outlineWidth },
               },
               showlegend: false,
               name: g,
@@ -6181,9 +6437,18 @@ function VisualizationPanel({
             x: values.map(() => g),
             name: g,
             type: effectiveChartType as "box" | "violin",
-            marker: { color: GROUP_COLORS[g] || CHART_COLORS[i % CHART_COLORS.length] },
-            ...(effectiveChartType === "box" ? { boxpoints: showPoints ? ("all" as const) : ("outliers" as const), jitter: 0.3, pointpos: -1.8 } : {}),
-            ...(effectiveChartType === "violin" ? { points: showPoints ? ("all" as const) : (false as const), jitter: 0.3 } : {}),
+            marker: {
+              color: resolveGroupColor(g, i),
+              opacity: figureStudio.traceStyle.dotOpacity,
+              size: figureStudio.traceStyle.dotSize,
+              symbol: figureStudio.traceStyle.dotSymbol,
+            },
+            ...(effectiveChartType === "box"
+              ? { boxpoints: showPoints ? ("all" as const) : ("outliers" as const), jitter: figureStudio.traceStyle.dotJitter, pointpos: -1.8 }
+              : {}),
+            ...(effectiveChartType === "violin"
+              ? { points: showPoints ? ("all" as const) : (false as const), jitter: figureStudio.traceStyle.dotJitter }
+              : {}),
           };
         });
 
@@ -6213,9 +6478,10 @@ function VisualizationPanel({
             mode: "markers" as const,
             name: g,
             marker: {
-              color: GROUP_COLORS[g] || CHART_COLORS[i % CHART_COLORS.length],
-              size: 10,
-              opacity: 0.8,
+              color: resolveGroupColor(g, i),
+              size: figureStudio.traceStyle.dotSize + 2,
+              opacity: figureStudio.traceStyle.dotOpacity,
+              symbol: figureStudio.traceStyle.dotSymbol,
             },
           };
         });
@@ -6252,9 +6518,10 @@ function VisualizationPanel({
               type: "scatter" as const,
               mode: "markers" as const,
               marker: {
-                color: GROUP_COLORS[g] || CHART_COLORS[i % CHART_COLORS.length],
-                size: 9,
-                opacity: 0.7,
+                color: resolveGroupColor(g, i),
+                size: figureStudio.traceStyle.dotSize,
+                opacity: figureStudio.traceStyle.dotOpacity,
+                symbol: figureStudio.traceStyle.dotSymbol,
               },
               showlegend: false,
               name: g,
@@ -6265,7 +6532,13 @@ function VisualizationPanel({
               y: [m],
               type: "scatter" as const,
               mode: "markers" as const,
-              error_y: { type: "data" as const, array: [s], visible: true, thickness: 3, width: 12 },
+              error_y: {
+                type: "data" as const,
+                array: [s],
+                visible: figureStudio.traceStyle.errorBarStyle !== "none",
+                thickness: figureStudio.traceStyle.lineWidth,
+                width: figureStudio.traceStyle.errorBarCapWidth + 6,
+              },
               marker: { color: "black", size: 0, symbol: "line-ew" as const },
               showlegend: false,
               name: `${g} mean`,
@@ -6308,8 +6581,12 @@ function VisualizationPanel({
             type: "scatter" as const,
             mode: "lines+markers" as const,
             name: g,
-            marker: { color: GROUP_COLORS[g] || CHART_COLORS[i % CHART_COLORS.length], size: 8 },
-            line: { color: GROUP_COLORS[g] || CHART_COLORS[i % CHART_COLORS.length], width: 2 },
+            marker: {
+              color: resolveGroupColor(g, i),
+              size: figureStudio.traceStyle.dotSize,
+              symbol: figureStudio.traceStyle.dotSymbol,
+            },
+            line: { color: resolveGroupColor(g, i), width: figureStudio.traceStyle.lineWidth },
           };
         });
 
@@ -6330,7 +6607,21 @@ function VisualizationPanel({
       default:
         return null;
     }
-  }, [effectiveChartType, flatData, getGrouping, groupLabels, measureKey, measureKey2, measureLabels, reportPayload?.figureMetadata.title, result, showPoints, title]);
+  }, [
+    effectiveChartType,
+    figureStudio,
+    flatData,
+    getGrouping,
+    groupLabels,
+    measureKey,
+    measureKey2,
+    measureLabels,
+    reportPayload?.figureMetadata.title,
+    resolveGroupColor,
+    result,
+    showPoints,
+    title,
+  ]);
 
   // Build Plotly shapes + annotations for significance brackets
   const sigShapesAndAnnotations = useMemo(() => {
@@ -6443,19 +6734,55 @@ function VisualizationPanel({
   }, [plotData, effectiveSigAnnotations, effectiveChartType, supportsSignificance, getGrouping, flatData, groupLabels, measureKey]);
 
   const handleExport = useCallback(
-    async (format: "svg" | "png") => {
+    async (format: "svg" | "png" | "pdf") => {
       const plotlyModule = await import("plotly.js-dist-min");
       const Plotly = plotlyModule.default || plotlyModule;
       const gd = plotRef.current?.querySelector(".js-plotly-plot") as HTMLElement | null;
       if (!gd) return;
+      if (format === "pdf") {
+        const win = window.open("", "_blank", "noopener,noreferrer,width=1280,height=960");
+        if (!win) {
+          toast.error("Unable to open the print window for PDF export.");
+          return;
+        }
+        const image = await Plotly.toImage(gd, {
+          format: "png",
+          width: figureStudio.width,
+          height: figureStudio.height,
+        });
+        const titleText = figureStudio.title || title || "Colony analysis figure";
+        const caption = reportPayload?.reportCaption || "";
+        win.document.write(`
+          <html>
+            <head>
+              <title>${titleText}</title>
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 24px; color: #0f172a; }
+                h1 { font-size: 20px; margin-bottom: 12px; }
+                img { width: 100%; max-width: 1000px; border: 1px solid #cbd5e1; }
+                p { font-size: 12px; line-height: 1.5; margin-top: 12px; }
+              </style>
+            </head>
+            <body>
+              <h1>${titleText}</h1>
+              <img src="${image}" alt="${titleText}" />
+              ${caption ? `<p>${caption}</p>` : ""}
+            </body>
+          </html>
+        `);
+        win.document.close();
+        win.focus();
+        win.print();
+        return;
+      }
       await Plotly.downloadImage(gd, {
         format,
-        width: 1200,
-        height: 800,
-        filename: title || "colony-analysis",
+        width: figureStudio.width,
+        height: figureStudio.height,
+        filename: figureStudio.title || title || "colony-analysis",
       });
     },
-    [title]
+    [figureStudio.height, figureStudio.title, figureStudio.width, reportPayload?.reportCaption, title]
   );
 
   const handleExportFigureMetadata = useCallback(() => {
@@ -6563,6 +6890,309 @@ function VisualizationPanel({
               />
               Show individual data points
             </label>
+          </div>
+
+          <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50/70 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs font-medium">Figure Studio</Label>
+              <Badge variant="secondary" className="text-[10px]">
+                Schema v{COLONY_ANALYSIS_SCHEMA_VERSION}
+              </Badge>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-12">
+              <div className="lg:col-span-3">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Figure title</Label>
+                <Input
+                  value={figureStudio.title}
+                  onChange={(event) => patchFigureStudio({ title: event.target.value })}
+                  placeholder="Publication title"
+                />
+              </div>
+              <div className="lg:col-span-3">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Subtitle</Label>
+                <Input
+                  value={figureStudio.subtitle}
+                  onChange={(event) => patchFigureStudio({ subtitle: event.target.value })}
+                  placeholder="Optional subtitle"
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Canvas width</Label>
+                <Input
+                  type="number"
+                  min={320}
+                  value={figureStudio.width}
+                  onChange={(event) => patchFigureStudio({ width: Number(event.target.value) || 1200 })}
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Canvas height</Label>
+                <Input
+                  type="number"
+                  min={320}
+                  value={figureStudio.height}
+                  onChange={(event) => patchFigureStudio({ height: Number(event.target.value) || 800 })}
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Significance source</Label>
+                <Select
+                  value={figureStudio.significanceMode}
+                  onValueChange={(value) =>
+                    patchFigureStudio({
+                      significanceMode: value as FigureStudioDraft["significanceMode"],
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="result-driven">Result-driven</SelectItem>
+                    <SelectItem value="manual-override">Manual override</SelectItem>
+                    <SelectItem value="hidden">Hidden</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-12">
+              <div className="lg:col-span-3">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">X axis title</Label>
+                <Input
+                  value={xAxisTitle}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      axisX: { ...figureStudio.axisX, title: event.target.value },
+                    })
+                  }
+                />
+              </div>
+              <div className="lg:col-span-3">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Y axis title</Label>
+                <Input
+                  value={yAxisTitle}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      axisY: { ...figureStudio.axisY, title: event.target.value },
+                    })
+                  }
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Y min</Label>
+                <Input
+                  type="number"
+                  value={figureStudio.axisY.min ?? ""}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      axisY: {
+                        ...figureStudio.axisY,
+                        autoScale: false,
+                        min: event.target.value === "" ? null : Number(event.target.value),
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Y max</Label>
+                <Input
+                  type="number"
+                  value={figureStudio.axisY.max ?? ""}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      axisY: {
+                        ...figureStudio.axisY,
+                        autoScale: false,
+                        max: event.target.value === "" ? null : Number(event.target.value),
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Legend</Label>
+                <Select
+                  value={figureStudio.legend.position}
+                  onValueChange={(value) =>
+                    patchFigureStudio({
+                      legend: {
+                        ...figureStudio.legend,
+                        position: value as FigureStudioDraft["legend"]["position"],
+                      },
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="right">Right</SelectItem>
+                    <SelectItem value="top">Top</SelectItem>
+                    <SelectItem value="bottom">Bottom</SelectItem>
+                    <SelectItem value="left">Left</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-12">
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Dot size</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={figureStudio.traceStyle.dotSize}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      traceStyle: {
+                        ...figureStudio.traceStyle,
+                        dotSize: Number(event.target.value) || figureStudio.traceStyle.dotSize,
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Dot opacity</Label>
+                <Input
+                  type="number"
+                  min={0.05}
+                  max={1}
+                  step="0.05"
+                  value={figureStudio.traceStyle.dotOpacity}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      traceStyle: {
+                        ...figureStudio.traceStyle,
+                        dotOpacity: Number(event.target.value) || figureStudio.traceStyle.dotOpacity,
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Line width</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.5"
+                  value={figureStudio.traceStyle.lineWidth}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      traceStyle: {
+                        ...figureStudio.traceStyle,
+                        lineWidth: Number(event.target.value) || figureStudio.traceStyle.lineWidth,
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Bar opacity</Label>
+                <Input
+                  type="number"
+                  min={0.05}
+                  max={1}
+                  step="0.05"
+                  value={figureStudio.traceStyle.barOpacity}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      traceStyle: {
+                        ...figureStudio.traceStyle,
+                        barOpacity: Number(event.target.value) || figureStudio.traceStyle.barOpacity,
+                      },
+                    })
+                  }
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Tick font size</Label>
+                <Input
+                  type="number"
+                  min={8}
+                  value={figureStudio.axisY.tickFontSize}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      axisX: { ...figureStudio.axisX, tickFontSize: Number(event.target.value) || figureStudio.axisX.tickFontSize },
+                      axisY: { ...figureStudio.axisY, tickFontSize: Number(event.target.value) || figureStudio.axisY.tickFontSize },
+                    })
+                  }
+                />
+              </div>
+              <div className="lg:col-span-2">
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Label font size</Label>
+                <Input
+                  type="number"
+                  min={8}
+                  value={figureStudio.axisY.labelFontSize}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      axisX: { ...figureStudio.axisX, labelFontSize: Number(event.target.value) || figureStudio.axisX.labelFontSize },
+                      axisY: { ...figureStudio.axisY, labelFontSize: Number(event.target.value) || figureStudio.axisY.labelFontSize },
+                    })
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 text-xs">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={figureStudio.axisY.autoScale}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      axisY: { ...figureStudio.axisY, autoScale: event.target.checked },
+                    })
+                  }
+                  className="h-3.5 w-3.5 rounded"
+                />
+                Auto-scale Y axis
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={figureStudio.axisY.zeroLock}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      axisY: { ...figureStudio.axisY, zeroLock: event.target.checked },
+                    })
+                  }
+                  className="h-3.5 w-3.5 rounded"
+                />
+                Lock Y axis to zero
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={figureStudio.axisY.showGrid}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      axisY: { ...figureStudio.axisY, showGrid: event.target.checked },
+                      axisX: { ...figureStudio.axisX, showGrid: event.target.checked },
+                    })
+                  }
+                  className="h-3.5 w-3.5 rounded"
+                />
+                Show gridlines
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={figureStudio.legend.visible}
+                  onChange={(event) =>
+                    patchFigureStudio({
+                      legend: { ...figureStudio.legend, visible: event.target.checked },
+                    })
+                  }
+                  className="h-3.5 w-3.5 rounded"
+                />
+                Show legend
+              </label>
+            </div>
           </div>
 
           {/* ─── Significance Annotations ─────────────── */}
@@ -6763,6 +7393,9 @@ function VisualizationPanel({
                 <Button variant="outline" size="sm" className="gap-1 text-xs h-7" onClick={handleExportFigureMetadata}>
                   <Download className="h-3 w-3" /> Packet
                 </Button>
+                <Button variant="outline" size="sm" className="gap-1 text-xs h-7" onClick={() => handleExport("pdf")}>
+                  <Download className="h-3 w-3" /> PDF
+                </Button>
                 <Button variant="outline" size="sm" className="gap-1 text-xs h-7" onClick={() => handleExport("svg")}>
                   <Download className="h-3 w-3" /> SVG
                 </Button>
@@ -6780,13 +7413,37 @@ function VisualizationPanel({
                     data={plotData.data}
                     layout={{
                       ...plotData.layout,
+                      title: {
+                        text: figureStudio.title || title || ((plotData.layout as { title?: { text?: string } }).title?.text ?? ""),
+                        font: { size: figureStudio.axisY.labelFontSize + 2, color: "#0f172a" },
+                      },
                       autosize: true,
-                      paper_bgcolor: "rgba(255,255,255,0.96)",
+                      width: figureStudio.width,
+                      height: figureStudio.height,
+                      paper_bgcolor: figureStudio.backgroundColor,
                       plot_bgcolor: "rgba(248,250,252,0.85)",
                       font: { color: "#0f172a" },
-                      margin: { l: 70, r: 30, t: effectiveSigAnnotations.length > 0 ? 80 + effectiveSigAnnotations.length * 20 : 60, b: 60 },
+                      legend: getLegendLayout(figureStudio.legend),
+                      showlegend:
+                        figureStudio.legend.visible &&
+                        ((plotData.layout as Record<string, unknown>).showlegend as boolean | undefined) !== false,
+                      margin: {
+                        l: figureStudio.marginLeft,
+                        r: figureStudio.marginRight,
+                        t:
+                          Math.max(
+                            figureStudio.marginTop,
+                            effectiveSigAnnotations.length > 0 ? 80 + effectiveSigAnnotations.length * 20 : figureStudio.marginTop,
+                          ),
+                        b: figureStudio.marginBottom,
+                      },
+                      xaxis: {
+                        ...((plotData.layout as Record<string, unknown>).xaxis as Partial<Plotly.Layout["xaxis"]> || {}),
+                        ...getAxisLayout(figureStudio.axisX, xAxisTitle, "xaxis"),
+                      },
                       yaxis: {
                         ...((plotData.layout as Record<string, unknown>).yaxis as Partial<Plotly.Layout["yaxis"]> || {}),
+                        ...getAxisLayout(figureStudio.axisY, yAxisTitle, "yaxis"),
                         ...(sigShapesAndAnnotations.yRangeMax !== null
                           ? { range: [sigShapesAndAnnotations.yRangeMin ?? 0, sigShapesAndAnnotations.yRangeMax] as [number, number] }
                           : {}),
@@ -6798,6 +7455,7 @@ function VisualizationPanel({
                       annotations: [
                         ...((plotData.layout as Record<string, unknown>).annotations as Partial<Plotly.Annotations>[] || []),
                         ...sigShapesAndAnnotations.annotations,
+                        ...annotationDraftsToPlotly(figureStudio.annotations),
                       ],
                     } as Partial<Plotly.Layout>}
                     config={{
@@ -6810,11 +7468,20 @@ function VisualizationPanel({
                       },
                     }}
                     useResizeHandler
-                    style={{ width: "100%", height: 500 }}
+                    style={{
+                      width: "100%",
+                      height: figureStudio.height,
+                      border: `${figureStudio.borderWidth}px solid ${figureStudio.borderColor}`,
+                      borderRadius: 12,
+                      background: figureStudio.backgroundColor,
+                    }}
                   />
                 </AnalysisPlotErrorBoundary>
               ) : (
-                <div className="flex h-[500px] items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50/50 text-sm text-slate-500">
+                <div
+                  className="flex items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50/50 text-sm text-slate-500"
+                  style={{ height: figureStudio.height }}
+                >
                   Preparing figure renderer...
                 </div>
               )}
@@ -6868,6 +7535,16 @@ function VisualizationPanel({
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Result Family</p>
                 <p className="mt-1">{reportPayload.figureMetadata.resultFamily || "general"}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Figure Size</p>
+                <p className="mt-1">
+                  {reportPayload.figureMetadata.figureWidth ?? "Auto"} × {reportPayload.figureMetadata.figureHeight ?? "Auto"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Table Kind</p>
+                <p className="mt-1">{reportPayload.figureMetadata.tableKind || "grouped"}</p>
               </div>
             </div>
             <div>

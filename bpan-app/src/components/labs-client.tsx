@@ -16,6 +16,7 @@ import {
 import { toast } from "sonner";
 import {
   addLabMemberByEmail,
+  createLab,
   deactivateLabMember,
   updateLabMemberDisplayName,
   updateLabMemberRole,
@@ -28,6 +29,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { HelpHint } from "@/components/ui/help-hint";
+import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
 import { cn } from "@/lib/utils";
 import {
   canDeactivateLabMembers,
@@ -158,6 +160,7 @@ interface LabsClientProps {
   featureUnavailable: boolean;
   selectedLabId: string | null;
   initialPanel?: string | null;
+  initialCreateLabOpen?: boolean;
   operationsReagentsPanel?: ReactNode;
   operationsEquipmentPanel?: ReactNode;
   labsAssistantPanel?: ReactNode;
@@ -393,6 +396,7 @@ export function LabsClient({
   featureUnavailable,
   selectedLabId,
   initialPanel = null,
+  initialCreateLabOpen = false,
   operationsReagentsPanel,
   operationsEquipmentPanel,
   labsAssistantPanel,
@@ -429,9 +433,48 @@ export function LabsClient({
   const [selectedAnnouncementIdByLab, setSelectedAnnouncementIdByLab] = useState<Record<string, string>>({});
   const [selectedInspectionTaskIdByLab, setSelectedInspectionTaskIdByLab] = useState<Record<string, string>>({});
   const [opsPanelPulseKey, setOpsPanelPulseKey] = useState<string | null>(null);
+  const [showCreateLabForm, setShowCreateLabForm] = useState(initialCreateLabOpen);
+  const [createLabName, setCreateLabName] = useState("");
+  const [createLabDescription, setCreateLabDescription] = useState("");
+  const [creatingLab, setCreatingLab] = useState(false);
   const effectiveActiveLabId = selectedLabId ?? workspaces[0]?.membership.lab.id ?? null;
   const labsView = normalizeIncomingView(initialPanel);
   const normalizedInitialPanel = normalizeIncomingPanel(initialPanel);
+
+  async function handleCreateLabSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = createLabName.trim();
+    const description = createLabDescription.trim();
+
+    if (!name) {
+      toast.error("Enter a lab name to create your workspace.");
+      return;
+    }
+
+    setCreatingLab(true);
+
+    try {
+      const formData = new FormData();
+      formData.set("name", name);
+      if (description) {
+        formData.set("description", description);
+      }
+      formData.set("timezone", Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles");
+      await createLab(formData);
+      toast.success("Lab workspace created.");
+      setCreateLabName("");
+      setCreateLabDescription("");
+      setShowCreateLabForm(false);
+      startTransition(() => {
+        router.replace("/labs");
+        router.refresh();
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to create the lab workspace.");
+    } finally {
+      setCreatingLab(false);
+    }
+  }
 
   function readStoredEvents<T>(key: string): T[] {
     if (typeof window === "undefined") return [];
@@ -840,15 +883,62 @@ export function LabsClient({
       ) : null}
 
       {workspaces.length === 0 ? (
-        <Card className="border-dashed border-slate-300 bg-white/75">
-          <CardContent className="flex flex-col gap-3 p-6 text-sm text-slate-600">
-            <p className="font-medium text-slate-900">No labs yet.</p>
-            <div className="flex items-center gap-1.5">
-              <p>Create one to invite members.</p>
-              <HelpHint text="Labs keep member roles and shared records in one place." />
-            </div>
-          </CardContent>
-        </Card>
+        <div className="space-y-4">
+          <WorkspaceEmptyState
+            icon="labs"
+            title="No labs yet"
+            description="Create a shared lab workspace to invite members, coordinate operations, and unlock lab chat, meetings, and equipment booking."
+            primaryAction={{ label: "Create your first lab", href: "/labs?create=1" }}
+            secondaryAction={{ label: "Return to tasks", href: "/tasks" }}
+          />
+          {showCreateLabForm ? (
+            <Card className="border-white/80 bg-white/90 shadow-[0_18px_38px_-30px_rgba(15,23,42,0.24)]">
+              <CardHeader className="space-y-1">
+                <CardTitle className="text-lg">Create your first lab</CardTitle>
+                <p className="text-sm text-slate-600">
+                  Start with a shared workspace name. You can invite members and refine policies right after creation.
+                </p>
+              </CardHeader>
+              <CardContent>
+                <form className="space-y-3" onSubmit={handleCreateLabSubmit}>
+                  <Input
+                    value={createLabName}
+                    onChange={(event) => setCreateLabName(event.target.value)}
+                    placeholder="Neuroscience Core Lab"
+                    disabled={creatingLab}
+                  />
+                  <Textarea
+                    value={createLabDescription}
+                    onChange={(event) => setCreateLabDescription(event.target.value)}
+                    placeholder="Optional description for your team's shared workspace"
+                    rows={4}
+                    disabled={creatingLab}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button type="submit" disabled={creatingLab}>
+                      {creatingLab ? "Creating lab..." : "Create lab"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setShowCreateLabForm(false);
+                        router.replace("/labs");
+                      }}
+                      disabled={creatingLab}
+                    >
+                      Cancel
+                    </Button>
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <span>Labs keep member roles and shared records in one place.</span>
+                      <HelpHint text="You can invite members, set shared editing policies, and manage shared operations after the workspace is created." />
+                    </div>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
       ) : (
         visibleWorkspaces.map((workspace) => {
           const isSelected = effectiveActiveLabId === workspace.membership.lab.id;

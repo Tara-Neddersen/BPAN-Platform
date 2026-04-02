@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
-import { defaultStatsDraft, defaultVisualizationDraft, normalizeSavedResult } from "@/lib/colony-analysis/config";
-import { buildStructuredResultTables, generateAnalysisReport, renderAnalysisReportMarkdown } from "@/lib/colony-analysis/reporting";
-import { deriveSignificanceAnnotationsFromResult, deriveVisualizationDraftFromResult } from "@/lib/colony-analysis/visualization";
+import {
+  buildRevisionConfigEnvelope,
+  buildRevisionResultsEnvelope,
+  COLONY_ANALYSIS_SCHEMA_VERSION,
+  defaultFigureStudioDraft,
+  defaultStatsDraft,
+  defaultVisualizationDraft,
+  normalizeSavedResult,
+  normalizeSavedRevisionEnvelope,
+} from "../src/lib/colony-analysis/config";
+import { buildStructuredResultTables, generateAnalysisReport, renderAnalysisReportMarkdown } from "../src/lib/colony-analysis/reporting";
+import { deriveSignificanceAnnotationsFromResult, deriveVisualizationDraftFromResult } from "../src/lib/colony-analysis/visualization";
 
 const measureLabels = {
   average_speed: "Average Speed",
@@ -110,11 +119,26 @@ function run() {
     ...defaultVisualizationDraft(),
     measureKey: "average_speed",
   };
+  const figureStudioDraft = {
+    ...defaultFigureStudioDraft("bar_sem"),
+    title: "Y-Maze Figure",
+    subtitle: "Revision-linked figure studio",
+    width: 960,
+    height: 640,
+    axisY: {
+      ...defaultFigureStudioDraft("bar_sem").axisY,
+      title: "Average speed (m/s)",
+      min: 0,
+      max: 0.5,
+      autoScale: false,
+    },
+  };
 
   const anovaReport = generateAnalysisReport({
     result: anovaResult,
     statsDraft,
     visualizationDraft,
+    figureStudioDraft,
     measureLabels,
     includedCount: 12,
     excludedCount: 1,
@@ -128,6 +152,9 @@ function run() {
   assert.equal(anovaReport.figurePacket.figureMetadata.recommendedChartType, "bar_sem");
   assert.equal(anovaReport.figurePacket.figureMetadata.annotationCount, 1);
   assert.match(anovaReport.figurePacket.figureMetadata.significanceSource, /Result-driven significance/);
+  assert.equal(anovaReport.figurePacket.figureMetadata.figureWidth, 960);
+  assert.equal(anovaReport.figurePacket.figureMetadata.figureHeight, 640);
+  assert.equal(anovaReport.figurePacket.figureMetadata.schemaVersion, COLONY_ANALYSIS_SCHEMA_VERSION);
 
   const markdown = renderAnalysisReportMarkdown({
     analysisName: "Smoke Analysis",
@@ -153,6 +180,55 @@ function run() {
   assert.deepEqual(normalizedOldRevision?.resultTables, []);
   assert.equal(normalizedOldRevision?.figurePacket.figureMetadata.chartType, "bar_sem");
   assert.equal(normalizedOldRevision?.figurePacket.linkedSummary, "Legacy");
+
+  const configEnvelope = buildRevisionConfigEnvelope({
+    description: "Smoke config",
+    scope: { runId: "run-1", experiment: "y_maze", timepoint: "30", cohort: "BPAN 6" },
+    excludedAnimals: [{ animalId: "BPAN6-2", reason: "Manual QC exclusion" }],
+    analysisSetEntries: [
+      { animalId: "BPAN6-1", included: true, reason: "", source: "manual" },
+      { animalId: "BPAN6-2", included: false, reason: "Manual QC exclusion", source: "manual" },
+    ],
+    analysisSetPreset: { runId: "run-1", experiment: "y_maze", timepoint: "30", cohort: "BPAN 6", search: "BPAN6" },
+    statsDraft,
+    visualizationDraft,
+    figureStudioDraft,
+    resultTables: anovaReport.resultTables,
+    reportWarnings: anovaReport.reportWarnings,
+    figureMetadata: anovaReport.figureMetadata,
+    figurePacket: anovaReport.figurePacket,
+    multiEndpointResults: anovaReport.multiEndpointResults,
+    includedAnimalCount: 12,
+    excludedAnimalCount: 1,
+    finalized: false,
+    revisionNumber: 3,
+  });
+  const resultsEnvelope = buildRevisionResultsEnvelope({
+    rawResult: anovaResult,
+    reportSummary: anovaReport.reportSummary,
+    reportResultsText: anovaReport.reportResultsText,
+    reportMethodsText: anovaReport.reportMethodsText,
+    reportCaption: anovaReport.reportCaption,
+    reportWarnings: anovaReport.reportWarnings,
+    diagnostics: anovaReport.diagnostics,
+    resultTables: anovaReport.resultTables,
+    figurePacket: anovaReport.figurePacket,
+    figureMetadata: anovaReport.figureMetadata,
+    multiEndpointResults: anovaReport.multiEndpointResults,
+    includedAnimalCount: 12,
+    excludedAnimalCount: 1,
+  });
+  const normalizedRevision = normalizeSavedRevisionEnvelope({
+    config: configEnvelope as unknown as Record<string, unknown>,
+    results: resultsEnvelope as unknown as Record<string, unknown>,
+  });
+
+  assert.equal(normalizedRevision.config.schemaVersion, COLONY_ANALYSIS_SCHEMA_VERSION);
+  assert.equal(normalizedRevision.config.visualization.figureStudio.width, 960);
+  assert.equal(normalizedRevision.config.visualization.figureStudio.axisY.max, 0.5);
+  assert.equal(normalizedRevision.results.reportSummary, anovaReport.reportSummary);
+  assert.equal(normalizedRevision.results.figureMetadata?.figureWidth, 960);
+  assert.equal(normalizedRevision.results.normalizedResult?.includedCount, 12);
 
   console.log("colony_analysis_smoke: ok");
 }

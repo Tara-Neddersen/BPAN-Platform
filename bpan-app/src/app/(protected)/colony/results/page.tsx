@@ -1,4 +1,4 @@
-import { renderColonyPageView } from "../page";
+import { renderColonyPageView } from "../colony-page-view";
 import { renderResultsView, type ResultsSearchParams } from "../../results/results-view";
 
 export default async function ColonyResultsPage({
@@ -10,7 +10,7 @@ export default async function ColonyResultsPage({
 
   return renderColonyPageView({
     defaultTab: "results",
-    title: "Rresults",
+    title: "Results",
     description: "Record and manage colony experiment result data.",
     showTabList: false,
     footer: (
@@ -21,7 +21,7 @@ export default async function ColonyResultsPage({
             Unified data import and visualization tools from Results. Use Analysis for colony-level analytics.
           </p>
         </div>
-        {await renderResultsView(params)}
+        {await renderResultsView(params, { emptyStateVariant: "colony" })}
       </div>
     ),
   });

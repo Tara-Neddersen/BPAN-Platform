@@ -195,12 +195,6 @@ export function UnifiedSearch() {
 
 // Small trigger button for the nav bar
 export function SearchTrigger() {
-  const [, setOpen] = useState(false);
-
-  useEffect(() => {
-    // We use the global keyboard shortcut instead
-  }, []);
-
   return (
     <button
       onClick={() => {
@@ -219,4 +213,3 @@ export function SearchTrigger() {
     </button>
   );
 }
-

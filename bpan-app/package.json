@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev --webpack",
+    "build": "node -e \"require('fs').rmSync('.next', { recursive: true, force: true })\" && next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "test:colony-analysis-smoke": "tsx scripts/colony_analysis_smoke.ts",

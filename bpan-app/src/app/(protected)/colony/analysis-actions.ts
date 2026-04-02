@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { refreshWorkspaceBackstageIndexBestEffort } from "@/lib/workspace-backstage";
+import { COLONY_ANALYSIS_SCHEMA_VERSION } from "@/lib/colony-analysis/config";
 
 type SaveColonyAnalysisRevisionPayload = {
   analysisId?: string | null;
@@ -92,15 +93,29 @@ export async function saveColonyAnalysisRevision(payload: SaveColonyAnalysisRevi
       test_type:
         typeof payload.results.test === "string"
           ? payload.results.test
+          : payload.results.rawResult &&
+            typeof payload.results.rawResult === "object" &&
+            typeof (payload.results.rawResult as Record<string, unknown>).test === "string"
+          ? String((payload.results.rawResult as Record<string, unknown>).test)
           : typeof payload.config === "object" && payload.config !== null && typeof payload.config.testType === "string"
           ? payload.config.testType
           : "descriptive",
       config: {
         kind: "colony_analysis",
+        schemaVersion:
+          typeof payload.config?.schemaVersion === "number"
+            ? payload.config.schemaVersion
+            : COLONY_ANALYSIS_SCHEMA_VERSION,
         revision_number: revisionNumber,
         ...payload.config,
       },
-      results: payload.results,
+      results: {
+        schemaVersion:
+          typeof payload.results?.schemaVersion === "number"
+            ? payload.results.schemaVersion
+            : COLONY_ANALYSIS_SCHEMA_VERSION,
+        ...payload.results,
+      },
       ai_interpretation: payload.summaryText || null,
     })
     .select("id")

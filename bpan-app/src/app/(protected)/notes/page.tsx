@@ -1,11 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
 import { NoteCard } from "@/components/note-card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SemanticSearch } from "@/components/semantic-search";
-import { ExportButtons } from "@/components/export-buttons";
+import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
+import { buildNotesSemanticCapability } from "@/lib/notes-semantic";
 import type { NoteWithPaper } from "@/types";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 interface NotesPageProps {
   searchParams: Promise<{ q?: string; tag?: string; type?: string }>;
@@ -19,11 +22,15 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/auth/login?next=%2Fnotes");
+  }
+  const userId = user.id;
 
   let query = supabase
     .from("notes")
     .select("*, saved_papers(title, pmid, journal)")
-    .eq("user_id", user!.id)
+    .eq("user_id", userId)
     .order("created_at", { ascending: false });
 
   if (filterType) {
@@ -60,8 +67,8 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
 
   const noteTypes = ["finding", "method", "limitation", "general"];
 
-  // Check if any notes lack embeddings (for backfill prompt)
   const totalNotes = (notes ?? []).length;
+  const semanticCapability = buildNotesSemanticCapability(totalNotes);
 
   return (
     <div className="page-shell">
@@ -73,7 +80,16 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
             All your notes across all papers. Filter by tag, type, or search.
           </p>
         </div>
-        <ExportButtons noteCount={totalNotes} />
+        {totalNotes > 0 ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link href="/api/notes/export?format=csv">Export CSV</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/api/notes/export?format=bibtex">Export BibTeX</Link>
+            </Button>
+          </div>
+        ) : null}
       </div>
       </section>
 
@@ -91,10 +107,13 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
         {filterType && <input type="hidden" name="type" value={filterType} />}
         <button type="submit" className="sr-only">Search</button>
       </form>
-
-      {/* Semantic search */}
-      <SemanticSearch />
       </section>
+
+      {semanticCapability.available ? (
+        <section className="section-card card-density-comfy">
+          <SemanticSearch capability={semanticCapability} />
+        </section>
+      ) : null}
 
       <section className="section-card card-density-comfy">
       <div className="flex gap-6">
@@ -152,13 +171,19 @@ export default async function NotesPage({ searchParams }: NotesPageProps) {
         {/* Notes list */}
         <div className="flex-1 space-y-3">
           {typedNotes.length === 0 ? (
-            <div className="rounded-lg border border-dashed p-8 text-center">
-              <p className="text-muted-foreground">
-                {searchQuery || filterTag || filterType
-                  ? "No notes match your filters."
-                  : "No notes yet. Save a paper and start annotating."}
-              </p>
-            </div>
+            searchQuery || filterTag || filterType ? (
+              <div className="rounded-lg border border-dashed p-8 text-center">
+                <p className="text-muted-foreground">No notes match your filters.</p>
+              </div>
+            ) : (
+              <WorkspaceEmptyState
+                icon="notes"
+                title="No notes yet"
+                description="Save a paper from the literature hub, then turn highlights and findings into searchable notes here."
+                primaryAction={{ label: "Open literature hub", href: "/dashboard" }}
+                secondaryAction={{ label: "Scout fresh papers", href: "/scout" }}
+              />
+            )
           ) : (
             <>
               <p className="text-sm text-muted-foreground">

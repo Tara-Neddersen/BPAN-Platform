@@ -1,7 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
-import { NotificationsCenterClient, type NotificationItem } from "@/components/notifications-center-client";
-import { ChatNotificationPreferencesCard } from "@/components/chat-notification-preferences-card";
-import { WebPushSettingsCard } from "@/components/web-push-settings-card";
+import NotificationsPageClient from "@/components/notifications-page";
+import type { NotificationItem } from "@/components/notifications-center-client";
 import {
   bulkDismissNotifications,
   bulkMarkNotificationsRead,
@@ -20,6 +19,7 @@ import {
   type NotificationLinkRef,
 } from "@/lib/notifications";
 import { readChatNotificationPreferences } from "@/lib/chat-notification-delivery";
+import { redirect } from "next/navigation";
 
 type TaskLinkRow = {
   task_id: string;
@@ -39,7 +39,9 @@ export default async function NotificationsPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) return null;
+  if (!user) {
+    redirect("/auth/login?next=%2Fnotifications");
+  }
   const chatNotificationPreferences = readChatNotificationPreferences(user.user_metadata || {});
   const smsFeatureEnabled = process.env.FEATURE_SMS_NOTIFICATIONS === "true";
   const smsProviderConfigured = Boolean(
@@ -119,25 +121,20 @@ export default async function NotificationsPage() {
   });
 
   return (
-    <div className="page-shell">
-      <WebPushSettingsCard />
-      <ChatNotificationPreferencesCard
-        initialPreferences={chatNotificationPreferences}
-        smsFeatureEnabled={smsFeatureEnabled}
-        smsProviderConfigured={smsProviderConfigured}
-        saveAction={saveChatNotificationPreferences}
-      />
-      <NotificationsCenterClient
-        notifications={notifications}
-        actions={{
-          setRead: setNotificationRead,
-          bulkMarkRead: bulkMarkNotificationsRead,
-          bulkMarkUnread: bulkMarkNotificationsUnread,
-          snooze: snoozeNotification,
-          dismiss: dismissNotification,
-          bulkDismiss: bulkDismissNotifications,
-        }}
-      />
-    </div>
+    <NotificationsPageClient
+      notifications={notifications}
+      chatNotificationPreferences={chatNotificationPreferences}
+      smsFeatureEnabled={smsFeatureEnabled}
+      smsProviderConfigured={smsProviderConfigured}
+      actions={{
+        setRead: setNotificationRead,
+        bulkMarkRead: bulkMarkNotificationsRead,
+        bulkMarkUnread: bulkMarkNotificationsUnread,
+        snooze: snoozeNotification,
+        dismiss: dismissNotification,
+        bulkDismiss: bulkDismissNotifications,
+        saveChatPreferences: saveChatNotificationPreferences,
+      }}
+    />
   );
 }

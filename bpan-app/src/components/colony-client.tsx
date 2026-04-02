@@ -21,7 +21,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
@@ -37,6 +37,7 @@ import { ColonyAnalysisPanel } from "@/components/colony-analysis-panel";
 import { ExperimentTrackerMatrix } from "@/components/experiment-tracker-matrix";
 import { EarTagSelector, MiniEarTag, parseEarTag } from "@/components/ear-tag-selector";
 import { HelpHint } from "@/components/ui/help-hint";
+import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -155,6 +156,8 @@ interface ColonyClientProps {
   defaultTab?: string;
   initialFilterCohort?: string;
   showTabList?: boolean;
+  initialOpenAnimalDialog?: boolean;
+  initialOpenPiAccessDialog?: boolean;
   breederCages: BreederCage[];
   cohorts: Cohort[];
   animals: Animal[];
@@ -313,6 +316,8 @@ export function ColonyClient({
   defaultTab = "animals",
   initialFilterCohort = "all",
   showTabList = true,
+  initialOpenAnimalDialog = false,
+  initialOpenPiAccessDialog = false,
   breederCages: initCages,
   cohorts: initCohorts,
   animals: initAnimals,
@@ -366,16 +371,26 @@ export function ColonyClient({
 
   function handleTabChange(nextTab: string) {
     setActiveTab(nextTab);
+    router.replace(buildColonyUrl(nextTab, filterCohort), { scroll: false });
+  }
+
+  function buildColonyUrl(tab: string, cohort: string, create?: "animal") {
     const params = new URLSearchParams();
-    if (nextTab !== "animals") {
-      params.set("tab", nextTab);
+    if (tab !== "animals") {
+      params.set("tab", tab);
     }
-    if (filterCohort !== "all") {
-      params.set("cohort", filterCohort);
+    if (cohort !== "all") {
+      params.set("cohort", cohort);
+    }
+    if (create) {
+      params.set("create", create);
     }
     const query = params.toString();
-    const url = query ? `/colony?${query}` : "/colony";
-    router.replace(url, { scroll: false });
+    return query ? `/colony?${query}` : "/colony";
+  }
+
+  function clearCreateParam() {
+    router.replace(buildColonyUrl(activeTab, filterCohort), { scroll: false });
   }
 
   // Cursor-based pagination helper for large tables (client-side)
@@ -445,9 +460,15 @@ export function ColonyClient({
   const [showAddCohort, setShowAddCohort] = useState(false);
   const [showAddCage, setShowAddCage] = useState(false);
   const [showAddTP, setShowAddTP] = useState(false);
-  const [showAddPI, setShowAddPI] = useState(false);
+  const [showAddPI, setShowAddPI] = useState(initialOpenPiAccessDialog);
   const [showGenerateCageChanges, setShowGenerateCageChanges] = useState(false);
   const [showAddHousingCage, setShowAddHousingCage] = useState(false);
+  useEffect(() => {
+    setShowAddAnimal(initialOpenAnimalDialog);
+  }, [initialOpenAnimalDialog]);
+  useEffect(() => {
+    setShowAddPI(initialOpenPiAccessDialog);
+  }, [initialOpenPiAccessDialog]);
   const [editingCage, setEditingCage] = useState<BreederCage | null>(null);
   const [cageFormType, setCageFormType] = useState<"normal" | "trio" | "harem" | "temp_split">("normal");
   const [newCohortSeed, setNewCohortSeed] = useState<null | {
@@ -1223,7 +1244,12 @@ export function ColonyClient({
               </SelectContent>
             </Select>
             <div className="ml-auto">
-              <Button onClick={() => setShowAddAnimal(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Animal</Button>
+              <Button
+                onClick={() => router.replace(buildColonyUrl("animals", filterCohort, "animal"), { scroll: false })}
+                size="sm"
+              >
+                <Plus className="h-4 w-4 mr-1" /> Add Animal
+              </Button>
             </div>
           </div>
 
@@ -1926,11 +1952,13 @@ export function ColonyClient({
             </Button>
           </div>
           {portals.length === 0 ? (
-            <Card className="border-dashed border-slate-300 bg-white/70">
-              <CardContent className="py-12 text-center text-muted-foreground">
-                <p>No advisor access configured.</p>
-              </CardContent>
-            </Card>
+            <WorkspaceEmptyState
+              icon="pi-access"
+              title="No PI access configured yet"
+              description="Create a read-only advisor link when you want to share colony status, experiment progress, and results without exposing editing controls."
+              primaryAction={{ label: "Add PI access", href: "/colony/pi-access?create=1" }}
+              secondaryAction={{ label: "Return to tasks", href: "/tasks" }}
+            />
           ) : (
             <div className="space-y-3">
               {portals.map((p) => {
@@ -2137,14 +2165,33 @@ export function ColonyClient({
       </Dialog>
 
       {/* Add / Edit Animal */}
-      <Dialog open={showAddAnimal || !!editingAnimal} onOpenChange={(v) => { if (!v) { setShowAddAnimal(false); setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); } }}>
+      <Dialog
+        open={showAddAnimal || !!editingAnimal}
+        onOpenChange={(v) => {
+          if (!v) {
+            setShowAddAnimal(false);
+            setEditingAnimal(null);
+            setAnimalFormCohortId("");
+            setAnimalFormEarTag("0000");
+            setAnimalFormSex("");
+            setAnimalFormGenotype("");
+            setSuggestedIdentifier("");
+            clearCreateParam();
+          }
+        }}
+      >
         <DialogContent>
-          <DialogHeader><DialogTitle>{editingAnimal ? "Edit Animal" : "Add Animal"}</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{editingAnimal ? "Edit Animal" : "Add Animal"}</DialogTitle>
+            <DialogDescription>
+              Add an animal record to a cohort so scheduling, tracking, and results workflows can attach to it.
+            </DialogDescription>
+          </DialogHeader>
           <form onSubmit={(e) => {
             if (editingAnimal) {
-              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => { setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); });
+              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => { setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); clearCreateParam(); });
             } else {
-              handleFormAction(actions.createAnimal, e, () => { setShowAddAnimal(false); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); });
+              handleFormAction(actions.createAnimal, e, () => { setShowAddAnimal(false); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); clearCreateParam(); });
             }
           }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -2243,7 +2290,7 @@ export function ColonyClient({
               <Textarea name="notes" placeholder="Optional notes" rows={2} defaultValue={editingAnimal?.notes || ""} />
             </div>
             <DialogFooter>
-              <Button variant="outline" type="button" onClick={() => { setShowAddAnimal(false); setEditingAnimal(null); }}>Cancel</Button>
+              <Button variant="outline" type="button" onClick={() => { setShowAddAnimal(false); setEditingAnimal(null); clearCreateParam(); }}>Cancel</Button>
               <Button type="submit" disabled={busy}>
                 {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
                 {editingAnimal ? "Save Changes" : "Add Animal"}

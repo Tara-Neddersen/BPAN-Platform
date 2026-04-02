@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { SearchBar } from "@/components/search-bar";
 import { WatchlistCard } from "@/components/watchlist-card";
 import { WatchlistForm } from "@/components/watchlist-form";
@@ -36,17 +37,21 @@ export default async function DashboardPage({
   const activePanel = resolveDashboardPanel(params?.panel);
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/auth/login?next=%2Fdashboard");
+  }
+  const userId = user.id;
 
   const [{ data: watchlists }, { data: profileData }] = await Promise.all([
     supabase
       .from("watchlists")
       .select("*")
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .order("created_at", { ascending: false }),
     supabase
       .from("profiles")
       .select("*")
-      .eq("id", user!.id)
+      .eq("id", userId)
       .single(),
   ]);
 
@@ -59,20 +64,20 @@ export default async function DashboardPage({
     supabase
       .from("tasks")
       .select("*", { count: "exact", head: true })
-      .eq("user_id", user!.id)
+      .eq("user_id", userId)
       .in("status", ["pending", "in_progress"]),
     supabase
       .from("notes")
       .select("*", { count: "exact", head: true })
-      .eq("user_id", user!.id),
+      .eq("user_id", userId),
     supabase
       .from("meeting_notes")
       .select("*", { count: "exact", head: true })
-      .eq("user_id", user!.id),
+      .eq("user_id", userId),
     supabase
       .from("saved_papers")
       .select("*", { count: "exact", head: true })
-      .eq("user_id", user!.id),
+      .eq("user_id", userId),
   ]);
 
   const shouldLoadOverviewChecks = activePanel === "overview";
@@ -84,34 +89,34 @@ export default async function DashboardPage({
   ] = await Promise.all([
     shouldLoadActivityFeed
       ? Promise.all([
-          supabase.from("tasks").select("id,title,status,updated_at,source_type").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-          supabase.from("meeting_notes").select("id,title,updated_at,meeting_date").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-          supabase.from("notes").select("id,content,updated_at,note_type,paper_id").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-          supabase.from("experiments").select("id,title,status,updated_at").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-          supabase.from("datasets").select("id,name,experiment_id,updated_at,row_count").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-          supabase.from("analyses").select("id,name,dataset_id,created_at,test_type").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(6),
-          supabase.from("figures").select("id,name,dataset_id,analysis_id,updated_at,chart_type").eq("user_id", user!.id).order("updated_at", { ascending: false }).limit(6),
-          supabase.from("saved_papers").select("id,title,created_at,journal").eq("user_id", user!.id).order("created_at", { ascending: false }).limit(6),
-          getIndexedWorkspaceActivityFeed(supabase, user!.id, 50),
-          getWorkspaceBackstageIndexStats(supabase, user!.id),
+          supabase.from("tasks").select("id,title,status,updated_at,source_type").eq("user_id", userId).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("meeting_notes").select("id,title,updated_at,meeting_date").eq("user_id", userId).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("notes").select("id,content,updated_at,note_type,paper_id").eq("user_id", userId).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("experiments").select("id,title,status,updated_at").eq("user_id", userId).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("datasets").select("id,name,experiment_id,updated_at,row_count").eq("user_id", userId).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("analyses").select("id,name,dataset_id,created_at,test_type").eq("user_id", userId).order("created_at", { ascending: false }).limit(6),
+          supabase.from("figures").select("id,name,dataset_id,analysis_id,updated_at,chart_type").eq("user_id", userId).order("updated_at", { ascending: false }).limit(6),
+          supabase.from("saved_papers").select("id,title,created_at,journal").eq("user_id", userId).order("created_at", { ascending: false }).limit(6),
+          getIndexedWorkspaceActivityFeed(supabase, userId, 50),
+          getWorkspaceBackstageIndexStats(supabase, userId),
         ])
       : Promise.resolve(null),
     shouldLoadOverviewChecks
       ? Promise.all([
-          supabase.from("experiments").select("id,title,status,start_date,end_date").eq("user_id", user!.id),
-          supabase.from("experiment_timepoints").select("id,experiment_id,scheduled_at,completed_at").eq("user_id", user!.id),
-          supabase.from("datasets").select("id,name,experiment_id,row_count,updated_at").eq("user_id", user!.id),
-          supabase.from("analyses").select("id,name,dataset_id,created_at").eq("user_id", user!.id),
-          supabase.from("figures").select("id,name,dataset_id,analysis_id,updated_at").eq("user_id", user!.id),
-          supabase.from("meeting_notes").select("id,title,action_items,updated_at").eq("user_id", user!.id),
-          supabase.from("tasks").select("id,source_id,source_type").eq("user_id", user!.id).eq("source_type", "meeting_action"),
+          supabase.from("experiments").select("id,title,status,start_date,end_date").eq("user_id", userId),
+          supabase.from("experiment_timepoints").select("id,experiment_id,scheduled_at,completed_at").eq("user_id", userId),
+          supabase.from("datasets").select("id,name,experiment_id,row_count,updated_at").eq("user_id", userId),
+          supabase.from("analyses").select("id,name,dataset_id,created_at").eq("user_id", userId),
+          supabase.from("figures").select("id,name,dataset_id,analysis_id,updated_at").eq("user_id", userId),
+          supabase.from("meeting_notes").select("id,title,action_items,updated_at").eq("user_id", userId),
+          supabase.from("tasks").select("id,source_id,source_type").eq("user_id", userId).eq("source_type", "meeting_action"),
         ])
       : Promise.resolve(null),
   ]);
 
   const typedWatchlists = (watchlists ?? []) as Watchlist[];
   const profile = profileData as Profile | null;
-  const displayName = profile?.display_name || user?.email?.split("@")[0] || "Researcher";
+  const displayName = profile?.display_name || user.email?.split("@")[0] || "Researcher";
 
   // Get time of day for greeting
   const hour = new Date().getHours();
@@ -542,7 +547,7 @@ function ActivityFilterPill({
 }
 
 async function MissingDataFixButton({ alert }: { alert: MissingDataAlert }) {
-  const action = async (_formData: FormData) => {
+  const action = async () => {
     "use server";
     if (alert.fix === "resync_meeting_tasks") {
       await resyncMeetingActionTasks();

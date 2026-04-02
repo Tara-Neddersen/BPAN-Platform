@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 function sanitizeNextPath(next: string | null) {
-  if (!next) return "/operations";
-  if (!next.startsWith("/") || next.startsWith("//")) return "/operations";
+  if (!next) return "/tasks";
+  if (!next.startsWith("/") || next.startsWith("//")) return "/tasks";
   return next;
 }
 

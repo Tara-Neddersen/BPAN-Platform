@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateEmbedding } from "@/lib/ai";
+import {
+  hasEmbeddingProviderConfigured,
+  isEmbeddingsUnavailableError,
+  type NotesSemanticErrorCode,
+} from "@/lib/notes-semantic";
+
+function notesEmbedError(status: number, errorCode: NotesSemanticErrorCode, error: string) {
+  return NextResponse.json({ errorCode, error }, { status });
+}
 
 /**
  * POST /api/notes/embed
@@ -15,10 +24,18 @@ export async function POST(request: Request) {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return notesEmbedError(401, "unauthorized", "Unauthorized");
     }
 
     const { noteId, backfill } = await request.json();
+
+    if (!hasEmbeddingProviderConfigured()) {
+      return notesEmbedError(
+        503,
+        "embeddings_unavailable",
+        "Embeddings are not configured for this deployment, so note backfill is unavailable right now."
+      );
+    }
 
     if (backfill) {
       // Backfill all notes without embeddings
@@ -29,7 +46,7 @@ export async function POST(request: Request) {
         .is("embedding", null);
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        return notesEmbedError(500, "backfill_failed", error.message);
       }
 
       let embedded = 0;
@@ -60,10 +77,7 @@ export async function POST(request: Request) {
 
     // Single note embedding
     if (!noteId) {
-      return NextResponse.json(
-        { error: "noteId or backfill flag required" },
-        { status: 400 }
-      );
+      return notesEmbedError(400, "invalid_request", "noteId or backfill flag required");
     }
 
     const { data: note, error } = await supabase
@@ -74,7 +88,7 @@ export async function POST(request: Request) {
       .single();
 
     if (error || !note) {
-      return NextResponse.json({ error: "Note not found" }, { status: 404 });
+      return notesEmbedError(404, "note_not_found", "Note not found");
     }
 
     const textToEmbed = [note.content, note.highlight_text]
@@ -88,18 +102,21 @@ export async function POST(request: Request) {
       .eq("id", note.id);
 
     if (updateError) {
-      return NextResponse.json(
-        { error: updateError.message },
-        { status: 500 }
-      );
+      return notesEmbedError(500, "embed_failed", updateError.message);
     }
 
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("Embed error:", err);
-    const message =
-      err instanceof Error ? err.message : "Failed to generate embedding";
-    return NextResponse.json({ error: message }, { status: 500 });
+    if (isEmbeddingsUnavailableError(err)) {
+      return notesEmbedError(
+        503,
+        "embeddings_unavailable",
+        "Embeddings are not configured for this deployment, so note backfill is unavailable right now."
+      );
+    }
+
+    const message = err instanceof Error ? err.message : "Failed to generate embedding";
+    return notesEmbedError(500, "embed_failed", message);
   }
 }
-

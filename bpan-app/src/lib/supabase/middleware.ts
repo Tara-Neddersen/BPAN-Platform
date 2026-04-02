@@ -1,6 +1,31 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+const PROTECTED_PREFIXES = [
+  "/tasks",
+  "/experiments",
+  "/colony",
+  "/operations",
+  "/labs",
+  "/notes",
+  "/meetings",
+  "/ideas",
+  "/memory",
+  "/library",
+  "/scout",
+  "/notifications",
+  "/dashboard",
+  "/search",
+  "/share",
+  "/results",
+  "/writing",
+  "/papers",
+];
+
+function matchesPrefix(pathname: string, prefix: string) {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
@@ -49,18 +74,19 @@ export async function updateSession(request: NextRequest) {
   }
 
   // Protected routes: redirect to login if not authenticated
-  const protectedPaths = ["/dashboard", "/search"];
-  const isProtected = protectedPaths.some((path) =>
-    request.nextUrl.pathname.startsWith(path)
+  const isProtected = PROTECTED_PREFIXES.some((path) =>
+    matchesPrefix(request.nextUrl.pathname, path)
   );
 
   if (isProtected && !user) {
     const url = request.nextUrl.clone();
     url.pathname = "/auth/login";
+    const nextPath = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+    url.searchParams.set("next", nextPath);
     return NextResponse.redirect(url);
   }
 
-  // If authenticated user visits auth pages, redirect to operations hub
+  // If authenticated user visits auth pages, redirect to the main task workspace
   const authPaths = ["/auth/login", "/auth/signup"];
   const isAuthPage = authPaths.some((path) =>
     request.nextUrl.pathname.startsWith(path)
@@ -68,7 +94,8 @@ export async function updateSession(request: NextRequest) {
 
   if (isAuthPage && user) {
     const url = request.nextUrl.clone();
-    url.pathname = "/operations";
+    url.pathname = "/tasks";
+    url.search = "";
     return NextResponse.redirect(url);
   }
 

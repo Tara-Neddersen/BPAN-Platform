@@ -40,7 +40,7 @@ type NavGroup = {
 type NavItem = NavLink | NavGroup;
 
 const PRIMARY_NAV_ITEMS: NavLink[] = [
-  { type: "link", href: "/tasks", label: "Dashboard" },
+  { type: "link", href: "/tasks", label: "Tasks" },
   { type: "link", href: "/experiments", label: "Experiments" },
   { type: "link", href: "/colony/tracker", label: "Tracker" },
   { type: "link", href: "/colony/results", label: "Results" },
@@ -65,7 +65,7 @@ const SECONDARY_NAV_ITEMS: NavItem[] = [
     label: "Literature",
     basePaths: ["/dashboard", "/library", "/scout"],
     items: [
-      { href: "/dashboard", label: "Search" },
+      { href: "/dashboard", label: "Literature Hub" },
       { href: "/library", label: "Library" },
       { href: "/scout", label: "Scout" },
     ],

@@ -1,4 +1,4 @@
-import { renderColonyPageView } from "../page";
+import { renderColonyPageView } from "../colony-page-view";
 
 export default async function ColonyAnalysisPage() {
   return renderColonyPageView({

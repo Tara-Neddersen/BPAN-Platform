@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { startTransition, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Plus, Trash2, Loader2, Check, Calendar,
   AlertTriangle, CheckCircle2, Clock, Flag,
@@ -17,7 +18,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import type { Task } from "@/types";
@@ -38,6 +39,7 @@ const SOURCE_ICONS: Record<string, React.ReactNode> = {
   manual: <ListChecks className="h-3 w-3" />,
   animal_care: <Calendar className="h-3 w-3" />,
   reminder: <Clock className="h-3 w-3" />,
+  pi_portal: <MessageSquare className="h-3 w-3" />,
 };
 
 const COLONY_EXP_LABELS: Record<string, string> = {
@@ -119,9 +121,35 @@ interface TasksClientProps {
 }
 
 type ViewFilter = "all" | "today" | "upcoming" | "overdue" | "completed";
-type SourceFilter = "all" | "meeting_action" | "manual" | "experiment" | "cage_change";
+type SourceFilter = "all" | "meeting_action" | "manual" | "experiment" | "cage_change" | "pi_portal";
 type TasksPanel = "queue" | "schedule" | "calendar";
 const TASKS_PANEL_STORAGE_KEY = "tasks.panel.v1";
+const TASKS_PANEL_STORAGE_EVENT = "tasks-panel-preference";
+
+function readStoredTasksPanel(): TasksPanel {
+  if (typeof window === "undefined") return "queue";
+  const storedPanel = window.localStorage.getItem(TASKS_PANEL_STORAGE_KEY);
+  return storedPanel === "queue" || storedPanel === "schedule" || storedPanel === "calendar"
+    ? storedPanel
+    : "queue";
+}
+
+function subscribeToTasksPanel(callback: () => void) {
+  if (typeof window === "undefined") return () => {};
+
+  const handleStorage = (event: StorageEvent) => {
+    if (!event.key || event.key === TASKS_PANEL_STORAGE_KEY) callback();
+  };
+  const handlePreferenceChange = () => callback();
+
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(TASKS_PANEL_STORAGE_EVENT, handlePreferenceChange);
+
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(TASKS_PANEL_STORAGE_EVENT, handlePreferenceChange);
+  };
+}
 
 interface UpcomingExperimentLite {
   id: string;
@@ -350,8 +378,9 @@ export function TasksClient({
   recentMeetings,
   actions,
 }: TasksClientProps) {
+  const router = useRouter();
   const tasks = initTasks;
-  const [panel, setPanel] = useState<TasksPanel>("calendar");
+  const panel = useSyncExternalStore(subscribeToTasksPanel, readStoredTasksPanel, () => "queue");
   const [calendarDay, setCalendarDay] = useState<string>(toDateStr());
   const [view, setView] = useState<ViewFilter>("all");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
@@ -359,18 +388,11 @@ export function TasksClient({
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  function setPanel(nextPanel: TasksPanel) {
     if (typeof window === "undefined") return;
-    const storedPanel = window.localStorage.getItem(TASKS_PANEL_STORAGE_KEY);
-    if (storedPanel === "queue" || storedPanel === "schedule" || storedPanel === "calendar") {
-      setPanel(storedPanel);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(TASKS_PANEL_STORAGE_KEY, panel);
-  }, [panel]);
+    window.localStorage.setItem(TASKS_PANEL_STORAGE_KEY, nextPanel);
+    window.dispatchEvent(new Event(TASKS_PANEL_STORAGE_EVENT));
+  }
 
   // ─── Stats ──────────────────────────────────
   const today = toDateStr();
@@ -404,9 +426,10 @@ export function TasksClient({
     setBusy(true);
     const res = await promise;
     if (res?.error) toast.error(res.error);
-    else toast.success("Done!");
-    // Simple reload for now
-    window.location.reload();
+    else {
+      toast.success("Done!");
+      startTransition(() => router.refresh());
+    }
     setBusy(false);
   }
 
@@ -424,7 +447,11 @@ export function TasksClient({
     const fd = new FormData(e.currentTarget);
     const res = await action(fd);
     if (res?.error) toast.error(res.error);
-    else { toast.success("Done!"); onSuccess(); window.location.reload(); }
+    else {
+      toast.success("Done!");
+      onSuccess();
+      startTransition(() => router.refresh());
+    }
     setBusy(false);
   }
 
@@ -780,6 +807,7 @@ export function TasksClient({
               <SelectItem value="manual">Manual</SelectItem>
               <SelectItem value="experiment">Experiments</SelectItem>
               <SelectItem value="cage_change">Cage changes</SelectItem>
+              <SelectItem value="pi_portal">PI portal</SelectItem>
             </SelectContent>
           </Select>
           <Button onClick={() => setShowAddTask(true)} size="sm">
@@ -881,7 +909,12 @@ export function TasksClient({
       {/* ─── Add Task Dialog ───────────────────────────── */}
       <Dialog open={showAddTask} onOpenChange={setShowAddTask}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Add Task</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Add Task</DialogTitle>
+            <DialogDescription>
+              Create a manual task for your queue or share it with the PI portal.
+            </DialogDescription>
+          </DialogHeader>
           <form onSubmit={(e) => handleFormAction(actions.createTask, e, () => setShowAddTask(false))} className="space-y-3">
             <div>
               <Label className="text-xs">Task *</Label>
@@ -924,7 +957,12 @@ export function TasksClient({
       {/* ─── Edit Task Dialog ──────────────────────────── */}
       <Dialog open={!!editingTask} onOpenChange={(v) => { if (!v) setEditingTask(null); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Edit Task</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Edit Task</DialogTitle>
+            <DialogDescription>
+              Update task details, notes, status, and PI visibility in one place.
+            </DialogDescription>
+          </DialogHeader>
           {editingTask && (
             <form onSubmit={(e) => handleFormAction((fd) => actions.updateTask(editingTask.id, fd), e, () => setEditingTask(null))} className="space-y-3">
               <input type="hidden" name="show_on_pi_enabled" value="true" />

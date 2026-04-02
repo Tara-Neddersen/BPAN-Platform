@@ -132,7 +132,7 @@ export async function createLab(formData: FormData) {
     throw new Error("Lab name is required.");
   }
 
-  const { error: createLabError } = await supabase
+  const { data: createdLab, error: createLabError } = await supabase
     .from("labs")
     .insert({
       name,
@@ -142,12 +142,32 @@ export async function createLab(formData: FormData) {
       created_by: user.id,
       shared_template_edit_policy: sharedTemplateEditPolicy,
       shared_protocol_edit_policy: sharedProtocolEditPolicy,
-    });
+    })
+    .select("id")
+    .single();
 
   if (createLabError) {
     throw new Error(
       withLabSchemaGuidance(createLabError?.message || "Failed to create the lab workspace."),
     );
+  }
+
+  if (createdLab?.id) {
+    const { error: createGeneralThreadError } = await supabase
+      .from("message_threads")
+      .insert({
+        lab_id: createdLab.id,
+        owner_user_id: null,
+        recipient_scope: "lab",
+        subject: "General",
+        linked_object_type: "lab",
+        linked_object_id: createdLab.id,
+        created_by: user.id,
+      });
+
+    if (createGeneralThreadError) {
+      console.warn("Unable to create default lab chat thread:", createGeneralThreadError.message);
+    }
   }
 
   revalidatePath("/labs");

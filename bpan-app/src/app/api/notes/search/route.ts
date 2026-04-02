@@ -1,6 +1,16 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateEmbedding } from "@/lib/ai";
+import {
+  classifySemanticSearchFailure,
+  hasEmbeddingProviderConfigured,
+  isEmbeddingsUnavailableError,
+  type NotesSemanticErrorCode,
+} from "@/lib/notes-semantic";
+
+function notesSearchError(status: number, errorCode: NotesSemanticErrorCode, error: string) {
+  return NextResponse.json({ errorCode, error }, { status });
+}
 
 /**
  * POST /api/notes/search
@@ -14,15 +24,20 @@ export async function POST(request: Request) {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return notesSearchError(401, "unauthorized", "Unauthorized");
     }
 
     const { query, limit = 20 } = await request.json();
 
     if (!query || typeof query !== "string") {
-      return NextResponse.json(
-        { error: "Search query is required" },
-        { status: 400 }
+      return notesSearchError(400, "invalid_request", "Search query is required");
+    }
+
+    if (!hasEmbeddingProviderConfigured()) {
+      return notesSearchError(
+        503,
+        "embeddings_unavailable",
+        "Semantic search is unavailable because embeddings are not configured for this deployment."
       );
     }
 
@@ -39,15 +54,13 @@ export async function POST(request: Request) {
 
     if (error) {
       console.error("Semantic search error:", error);
-      return NextResponse.json(
-        { error: "Semantic search failed. Have you run migration 005?" },
-        { status: 500 }
-      );
+      const failure = classifySemanticSearchFailure(error.message);
+      return notesSearchError(failure.status, failure.errorCode, failure.error);
     }
 
     // Fetch paper info for each note
     const paperIds = [...new Set((notes || []).map((n: { paper_id: string }) => n.paper_id))];
-    let papersMap: Record<string, { title: string; pmid: string; journal: string | null }> = {};
+    const papersMap: Record<string, { title: string; pmid: string; journal: string | null }> = {};
 
     if (paperIds.length > 0) {
       const { data: papers } = await supabase
@@ -75,9 +88,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ notes: enrichedNotes });
   } catch (err) {
     console.error("Semantic search error:", err);
-    const message =
-      err instanceof Error ? err.message : "Failed to perform semantic search";
-    return NextResponse.json({ error: message }, { status: 500 });
+    if (isEmbeddingsUnavailableError(err)) {
+      return notesSearchError(
+        503,
+        "embeddings_unavailable",
+        "Semantic search is unavailable because embeddings are not configured for this deployment."
+      );
+    }
+
+    const message = err instanceof Error ? err.message : "Failed to perform semantic search";
+    return notesSearchError(500, "semantic_search_unavailable", message);
   }
 }
-
