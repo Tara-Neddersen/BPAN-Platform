@@ -153,11 +153,17 @@ export function parseBehaviorTrackingOutput(rawText: string): ParsedMeasure[] {
 
 // ─── Dialog Props ────────────────────────────────────────────────────────────
 
-const EXPERIMENT_LABELS: Record<string, string> = {
+interface ExperimentOption {
+  value: string;
+  label: string;
+}
+
+const FALLBACK_EXPERIMENT_LABELS: Record<string, string> = {
   y_maze: "Y-Maze",
   ldb: "Light-Dark Box",
   marble: "Marble Burying",
   nesting: "Overnight Nesting",
+  social_interaction: "Social Interaction",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Habituation",
   rotarod_test1: "Rotarod Test 1",
@@ -191,6 +197,7 @@ interface BehaviorImportDialogProps {
     saved?: number;
     errors?: string[];
   }>;
+  resolveExperimentOptions?: (timepointAgeDays: number) => ExperimentOption[];
   onImportComplete?: (
     experimentType: string,
     importedMeasures: { key: string; name: string; unit?: string }[]
@@ -209,6 +216,7 @@ export function BehaviorImportDialog({
   defaultTimepointAge,
   defaultExperimentType,
   batchUpsertColonyResults,
+  resolveExperimentOptions,
   onImportComplete,
 }: BehaviorImportDialogProps) {
   const [rawText, setRawText] = useState("");
@@ -226,6 +234,31 @@ export function BehaviorImportDialog({
   const [selectedAnimals, setSelectedAnimals] = useState<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const experimentOptions = useMemo(() => {
+    const dedupe = (options: ExperimentOption[]) => {
+      const seen = new Set<string>();
+      return options.filter((option) => {
+        if (!option.value || seen.has(option.value)) return false;
+        seen.add(option.value);
+        return true;
+      });
+    };
+
+    const resolved = dedupe(resolveExperimentOptions?.(Number(timepointAge)) || []);
+    if (resolved.length > 0) return resolved;
+
+    const configuredTimepoint = timepoints.find((timepoint) => timepoint.age_days === Number(timepointAge));
+    const configured = dedupe(
+      (configuredTimepoint?.experiments || []).map((experiment) => ({
+        value: experiment,
+        label: FALLBACK_EXPERIMENT_LABELS[experiment] || experiment,
+      }))
+    );
+    if (configured.length > 0) return configured;
+
+    return Object.entries(FALLBACK_EXPERIMENT_LABELS).map(([value, label]) => ({ value, label }));
+  }, [resolveExperimentOptions, timepointAge, timepoints]);
+
   // Reset when dialog closes/opens
   useEffect(() => {
     if (open) {
@@ -238,6 +271,13 @@ export function BehaviorImportDialog({
       setExperimentType(defaultExperimentType);
     }
   }, [open, defaultTimepointAge, defaultExperimentType]);
+
+  useEffect(() => {
+    if (experimentOptions.length === 0) return;
+    if (!experimentOptions.some((option) => option.value === experimentType)) {
+      setExperimentType(experimentOptions[0].value);
+    }
+  }, [experimentOptions, experimentType]);
 
   // ── Parse the raw text ──
   const doParse = useCallback((text: string) => {
@@ -601,9 +641,9 @@ export function BehaviorImportDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.entries(EXPERIMENT_LABELS).map(([key, label]) => (
-                        <SelectItem key={key} value={key}>
-                          {label}
+                      {experimentOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
                         </SelectItem>
                       ))}
                     </SelectContent>

@@ -388,6 +388,7 @@ export type ExperimentType =
   | "ldb"
   | "marble"
   | "nesting"
+  | "social_interaction"
   | "rotarod"
   | "rotarod_hab"
   | "rotarod_test1"

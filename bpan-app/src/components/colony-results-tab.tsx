@@ -153,6 +153,11 @@ const DEFAULT_MEASURES: Record<string, MeasureField[]> = {
     { key: "nest_score", label: "Nest Score (1–5)", type: "number" },
     { key: "shredded_pct", label: "Material Shredded", unit: "%", type: "number" },
   ],
+  social_interaction: [
+    { key: "interaction_time_sec", label: "Interaction Time", unit: "sec", type: "number" },
+    { key: "chamber_entries", label: "Chamber Entries", type: "number" },
+    { key: "novel_preference_ratio", label: "Novel Preference Ratio", type: "number" },
+  ],
   catwalk: [
     { key: "stride_length_cm", label: "Stride Length", unit: "cm", type: "number" },
     { key: "print_area_cm2", label: "Print Area", unit: "cm²", type: "number" },
@@ -216,6 +221,7 @@ const RESULT_EXPERIMENT_TYPES = [
   "ldb",
   "marble",
   "nesting",
+  "social_interaction",
   "catwalk",
   "rotarod_hab",
   "rotarod_test1",
@@ -231,6 +237,7 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   ldb: "Light-Dark Box",
   marble: "Marble Burying",
   nesting: "Overnight Nesting",
+  social_interaction: "Social Interaction",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Habituation",
   rotarod_test1: "Rotarod Test 1",
@@ -927,35 +934,36 @@ export function ColonyResultsTab({
     return Array.from(map.values());
   }, [activeAnimals, cohorts]);
 
-  // Available experiment types for the active timepoint (from timepoint config)
-  const availableExperiments = useMemo(() => {
-    const tp = sortedTimepoints.find((t) => t.age_days === Number(activeTimepoint));
-    if (tp && tp.experiments.length > 0) {
-      // Filter to only experiments that produce results
-      const configured = tp.experiments.filter((e) => RESULT_EXPERIMENT_TYPES.includes(e));
-      // Always include EEG recording if the timepoint has it
-      if (tp.includes_eeg_implant && !configured.includes("eeg_recording")) {
+  const getLegacyAvailableExperiments = useCallback(
+    (timepointAgeDays: number) => {
+      const timepoint = sortedTimepoints.find((entry) => entry.age_days === timepointAgeDays);
+      if (!timepoint || timepoint.experiments.length === 0) return RESULT_EXPERIMENT_TYPES;
+
+      const configured = timepoint.experiments.filter((experiment) => RESULT_EXPERIMENT_TYPES.includes(experiment));
+      if (timepoint.includes_eeg_implant && !configured.includes("eeg_recording")) {
         configured.push("eeg_recording");
       }
       return configured.length > 0 ? configured : RESULT_EXPERIMENT_TYPES;
-    }
-    return RESULT_EXPERIMENT_TYPES;
-  }, [activeTimepoint, sortedTimepoints]);
+    },
+    [sortedTimepoints]
+  );
+
+  // Available experiment types for the active timepoint (from timepoint config)
+  const availableExperiments = useMemo(() => {
+    return getLegacyAvailableExperiments(Number(activeTimepoint));
+  }, [activeTimepoint, getLegacyAvailableExperiments]);
 
   // Switch to first available experiment when timepoint changes
   const handleTimepointChange = useCallback(
     (val: string) => {
       setActiveTimepoint(val);
       // Reset experiment if not available in new timepoint
-      const tp = sortedTimepoints.find((t) => t.age_days === Number(val));
-      if (tp) {
-        const configured = tp.experiments.filter((e) => RESULT_EXPERIMENT_TYPES.includes(e));
-        if (configured.length > 0 && !configured.includes(activeExperiment)) {
-          setActiveExperiment(configured[0]);
-        }
+      const configured = getLegacyAvailableExperiments(Number(val));
+      if (configured.length > 0 && !configured.includes(activeExperiment)) {
+        setActiveExperiment(configured[0]);
       }
     },
-    [sortedTimepoints, activeExperiment]
+    [activeExperiment, getLegacyAvailableExperiments]
   );
 
   if (activeAnimals.length === 0) {
@@ -1400,6 +1408,12 @@ export function ColonyResultsTab({
           defaultTimepointAge={Number(activeTimepoint)}
           defaultExperimentType={activeExperiment}
           batchUpsertColonyResults={batchUpsertColonyResults}
+          resolveExperimentOptions={(timepointAgeDays) =>
+            getLegacyAvailableExperiments(timepointAgeDays).map((experiment) => ({
+              value: experiment,
+              label: EXPERIMENT_LABELS[experiment] || experiment,
+            }))
+          }
           onImportComplete={handleImportComplete}
         />
       )}
