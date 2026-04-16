@@ -323,8 +323,7 @@ export function parseBehaviorTrackingOutput(rawText: string): ParseBehaviorTrack
 const EXPERIMENT_LABELS: Record<string, string> = {
   y_maze: "Y-Maze",
   ldb: "Light-Dark Box",
-  marble: "Marble Burying",
-  nesting: "Overnight Nesting",
+  social_interaction: "Social Interaction",
   catwalk: "CatWalk",
   rotarod_hab: "Rotarod Habituation",
   rotarod_test1: "Rotarod Test 1",
@@ -376,6 +375,9 @@ interface BehaviorImportDialogProps {
     timepointAgeDays: number,
     experimentType: string
   ) => unknown;
+  resolveExperimentOptions?: (
+    timepointAgeDays: number
+  ) => { key: string; label: string }[] | null;
   onImportComplete?: (
     experimentType: string,
     timepointAgeDays: number,
@@ -397,6 +399,7 @@ export function BehaviorImportDialog({
   batchUpsertColonyResults,
   resolveImportTarget,
   resolveImportSchemaSnapshot,
+  resolveExperimentOptions,
   onImportComplete,
 }: BehaviorImportDialogProps) {
   const [rawText, setRawText] = useState("");
@@ -426,6 +429,17 @@ export function BehaviorImportDialog({
       setExperimentType(defaultExperimentType);
     }
   }, [open, defaultTimepointAge, defaultExperimentType]);
+
+  // ── Experiment Type dropdown options ──
+  // Prefer options scoped to the selected run/timepoint (so each PI/lab sees
+  // only the tests they scheduled). Fall back to the hardcoded legacy list.
+  const experimentOptions = useMemo<{ key: string; label: string }[]>(() => {
+    if (resolveExperimentOptions) {
+      const fromRun = resolveExperimentOptions(Number(timepointAge));
+      if (fromRun && fromRun.length > 0) return fromRun;
+    }
+    return Object.entries(EXPERIMENT_LABELS).map(([key, label]) => ({ key, label }));
+  }, [resolveExperimentOptions, timepointAge]);
 
   // ── Parse the raw text ──
   const doParse = useCallback((text: string) => {
@@ -852,7 +866,7 @@ export function BehaviorImportDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.entries(EXPERIMENT_LABELS).map(([key, label]) => (
+                      {experimentOptions.map(({ key, label }) => (
                         <SelectItem key={key} value={key}>
                           {label}
                         </SelectItem>

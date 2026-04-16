@@ -2376,6 +2376,25 @@ export function ColonyResultsTab({
               : null;
             return experimentRow?.schema_snapshot || null;
           }}
+          resolveExperimentOptions={(timepointAgeDays) => {
+            if (!selectedRun) return null;
+            const timepointRow =
+              selectedRunTimepointRows.find((timepoint) => String(timepoint.target_age_days) === String(timepointAgeDays)) ||
+              selectedRunTimepointRows.find((timepoint) => timepoint.key === String(timepointAgeDays)) ||
+              null;
+            if (!timepointRow) return null;
+            const experiments = selectedRunTimepointExperimentRows.filter(
+              (experiment) => experiment.run_timepoint_id === timepointRow.id
+            );
+            if (experiments.length === 0) return null;
+            return experiments.map((experiment) => ({
+              key: experiment.experiment_key,
+              label:
+                experiment.label ||
+                EXPERIMENT_LABELS[experiment.experiment_key] ||
+                experiment.experiment_key,
+            }));
+          }}
           onImportComplete={handleImportComplete}
         />
       )}
