@@ -2117,6 +2117,22 @@ export function ColonyAnalysisPanel({
   const [compareRevisionId, setCompareRevisionId] = useState<string>("__none__");
   const [statsDraft, setStatsDraft] = useState<ColonyAnalysisStatsDraft>(defaultStatsDraft());
   const [visualizationDraft, setVisualizationDraft] = useState<ColonyAnalysisVisualizationDraft>(defaultVisualizationDraft());
+
+  // Keep the stats groupingFactor in lockstep with the plot's groupBy.
+  // The two live in separate drafts for historical reasons, but if they
+  // disagree, significance brackets silently disappear: the stats engine
+  // computes comparisons keyed by statsDraft.groupingFactor (e.g.
+  // comparisons between "WT Male" and "Hemi Male"), while the plot's
+  // tick labels are driven by visualizationDraft.groupBy (e.g.
+  // "WT Male 30d"). Syncing when the plot grouping changes avoids the
+  // silent-miss footgun. Manual overrides from the Stats tab still stick
+  // — this effect only fires when the plot-side value actually changes.
+  useEffect(() => {
+    setStatsDraft((current) => {
+      if (current.groupingFactor === visualizationDraft.groupBy) return current;
+      return { ...current, groupingFactor: visualizationDraft.groupBy };
+    });
+  }, [visualizationDraft.groupBy]);
   const [figureStudioDraft, setFigureStudioDraft] = useState<FigureStudioDraft>(
     defaultFigureStudioDraft(defaultVisualizationDraft().chartType),
   );
