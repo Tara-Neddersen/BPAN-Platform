@@ -107,6 +107,22 @@ import {
 // Dynamically import Plotly
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
+// Deterministic pseudo-random offset in [-amplitude, +amplitude] keyed off a
+// stable seed string. Used to jitter individual data points on bar/dot
+// charts so overlapping values don't stack on top of each other, while
+// keeping the exact same layout across renders (no flicker when the user
+// changes an unrelated setting — same animal always lands in the same spot).
+function deterministicJitter(seed: string, amplitude: number): number {
+  if (amplitude <= 0) return 0;
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
+  }
+  // Map integer hash to [-1, 1]
+  const normalized = (((h % 10000) + 10000) % 10000) / 10000 * 2 - 1;
+  return normalized * amplitude;
+}
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const EXPERIMENT_LABELS: Record<string, string> = {
@@ -2083,6 +2099,11 @@ export function ColonyAnalysisPanel({
   const [selectedTimepoint, setSelectedTimepoint] = useState<string>("__all__");
   const [selectedCohort, setSelectedCohort] = useState<string>("__all__");
   const [excludedAnimalIds, setExcludedAnimalIds] = useState<Set<string>>(new Set());
+  // Groups the user has de-selected for the current analysis. Feeds into
+  // includedFlatData so every downstream computation (stats tests,
+  // significance brackets, bar chart groups, n labels) respects the
+  // subset. Empty set means "include all groups", which is the default.
+  const [excludedGroups, setExcludedGroups] = useState<Set<string>>(new Set());
   const [exclusionReasons, setExclusionReasons] = useState<Record<string, string>>({});
   const [exclusionSources, setExclusionSources] = useState<Record<string, AnalysisAuditSource>>({});
   const [outlierFlags, setOutlierFlags] = useState<Record<string, boolean>>({});
@@ -2446,8 +2467,16 @@ export function ColonyAnalysisPanel({
   }, [analysisAnimals, animalSearch]);
 
   const includedFlatData = useMemo(
-    () => scopedFlatData.filter((row) => !excludedAnimalIds.has(row.animal_id)),
-    [excludedAnimalIds, scopedFlatData],
+    () =>
+      scopedFlatData.filter((row) => {
+        if (excludedAnimalIds.has(row.animal_id)) return false;
+        // Subset-group filter: if the user de-selected the row's group,
+        // drop it from the pipeline so stats + brackets + chart all
+        // reflect the chosen subset.
+        if (excludedGroups.size > 0 && excludedGroups.has(row.group)) return false;
+        return true;
+      }),
+    [excludedAnimalIds, excludedGroups, scopedFlatData],
   );
 
   const { flatData, measureKeys, measureLabels } = useMemo(() => {
@@ -2481,6 +2510,15 @@ export function ColonyAnalysisPanel({
     const groups = new Set(flatData.map((r) => r.group));
     return GROUP_ORDER.filter((g) => groups.has(g));
   }, [flatData]);
+  // All groups that exist in the scoped data BEFORE the subset picker's
+  // exclusions. Drives the "Groups in this analysis" toggle UI so that
+  // deselecting a group doesn't make it disappear from the picker itself.
+  const allGroupsInScope = useMemo(() => {
+    const groups = new Set(scopedFlatData.map((r) => r.group));
+    const ordered = GROUP_ORDER.filter((g) => groups.has(g));
+    const extras = Array.from(groups).filter((g) => !GROUP_ORDER.includes(g)).sort();
+    return [...ordered, ...extras];
+  }, [scopedFlatData]);
 
   const includedAnimalCount = analysisAnimals.filter((animal) => animal.included).length;
   const excludedAnimalCount = analysisAnimals.length - includedAnimalCount;
@@ -3675,6 +3713,63 @@ export function ColonyAnalysisPanel({
               </div>
             </CardContent>
           </Card>
+
+          {allGroupsInScope.length > 1 && (
+            <Card className="border-slate-200">
+              <CardContent className="py-3 px-4 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium text-slate-700">Groups in this analysis</p>
+                    <p className="text-[11px] text-slate-500">
+                      Click a group to toggle it. De-selected groups are dropped from the plot, summary, and every statistical test (ANOVA, t-test, brackets). Default: all groups included.
+                    </p>
+                  </div>
+                  {excludedGroups.size > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setExcludedGroups(new Set())}
+                    >
+                      Include all
+                    </Button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {allGroupsInScope.map((group) => {
+                    const included = !excludedGroups.has(group);
+                    const color = GROUP_COLORS[group] || "#64748b";
+                    return (
+                      <button
+                        key={group}
+                        type="button"
+                        onClick={() =>
+                          setExcludedGroups((current) => {
+                            const next = new Set(current);
+                            if (next.has(group)) next.delete(group);
+                            else next.add(group);
+                            return next;
+                          })
+                        }
+                        className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition ${
+                          included
+                            ? "border-slate-300 bg-white text-slate-900 hover:border-slate-400"
+                            : "border-slate-200 bg-slate-100 text-slate-400 line-through hover:bg-slate-200"
+                        }`}
+                        aria-pressed={included}
+                      >
+                        <span
+                          className="inline-block h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: included ? color : "#cbd5e1" }}
+                        />
+                        {group}
+                      </button>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <TabsList className="h-auto w-full justify-start gap-1 rounded-xl border border-slate-200 bg-slate-50/70 p-1">
             <TabsTrigger value="summary" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
@@ -6909,6 +7004,10 @@ function VisualizationPanel({
         const means: number[] = [];
         const errors: number[] = [];
         const colors: string[] = [];
+        // Per-group sample size — surfaced as "(n=N)" under each x tick
+        // label so the reader immediately sees the number of animals
+        // contributing to each bar without hunting through the table.
+        const counts: number[] = [];
 
         for (const g of groupLabels) {
           const values = flatData
@@ -6918,10 +7017,16 @@ function VisualizationPanel({
           means.push(mean(values));
           errors.push(useSEM ? sem(values) : stdDev(values));
           colors.push(resolveGroupColor(g, groupLabels.indexOf(g)));
+          counts.push(values.length);
         }
 
+        // Use numeric x positions for BOTH bar and scatter so the scatter
+        // overlay can be horizontally jittered (Plotly category axes don't
+        // allow fractional offsets within a category). X axis tick labels
+        // still show the group names via tickvals/ticktext.
+        const barIndices = groupLabels.map((_, i) => i);
         const traces: Plotly.Data[] = [{
-          x: groupLabels,
+          x: barIndices,
           y: means,
           type: "bar",
           marker: {
@@ -6939,17 +7044,40 @@ function VisualizationPanel({
           name: measureLabel,
         }];
 
-        // Overlay individual data points
+        // Overlay individual data points with deterministic horizontal
+        // jitter so dots in the same group don't stack on top of each
+        // other. Seed is `${animal_id}::${group}` so the layout stays
+        // stable across renders — same data always lands in the same
+        // visual spots. The jitter amplitude is driven by the
+        // `dotJitter` trace-style setting (0..1), mapped onto ~30% of a
+        // bar width on either side of center (so dots stay within the bar).
         if (showPoints) {
+          const jitterAmplitude = Math.max(0, Math.min(1, figureStudio.traceStyle.dotJitter ?? 0.35)) * 0.3;
           for (let i = 0; i < groupLabels.length; i++) {
             const g = groupLabels[i];
-            const values = flatData
+            const groupRows = flatData
               .filter((r) => getGrouping(r) === g)
-              .map((r) => Number(r[measureKey]))
-              .filter((v) => !isNaN(v));
+              .map((r) => ({
+                y: Number(r[measureKey]),
+                seed: `${String(r.animal_id)}::${g}`,
+                // Hover text format: "BPAN 3-4 · 30 days · LDB · run1"
+                // Assembled so the user can instantly identify the dot
+                // they're hovering without scrolling through the table.
+                hoverText: [
+                  String(r.identifier || r.animal_id),
+                  r.timepoint !== undefined && r.timepoint !== null
+                    ? `${r.timepoint} days`
+                    : null,
+                  r.experiment ? String(r.experiment) : null,
+                  selectedRun?.name ? String(selectedRun.name) : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
+              }))
+              .filter((p) => !isNaN(p.y));
             traces.push({
-              x: values.map(() => g),
-              y: values,
+              x: groupRows.map((p) => i + deterministicJitter(p.seed, jitterAmplitude)),
+              y: groupRows.map((p) => p.y),
               type: "scatter",
               mode: "markers",
               marker: {
@@ -6961,6 +7089,8 @@ function VisualizationPanel({
               },
               showlegend: false,
               name: g,
+              text: groupRows.map((p) => p.hoverText),
+              hovertemplate: `<b>%{text}</b><br>${measureLabel}: %{y}<extra></extra>`,
             });
           }
         }
@@ -6969,7 +7099,13 @@ function VisualizationPanel({
           data: traces,
           layout: {
             title: { text: chartTitle, font: { size: 16 } },
-            xaxis: { title: { text: "" } },
+            xaxis: {
+              title: { text: "" },
+              tickmode: "array" as const,
+              tickvals: barIndices,
+              ticktext: groupLabels.map((g, i) => `${g}<br><span style="font-size:10px;color:#64748b">(n=${counts[i]})</span>`),
+              range: [-0.5, groupLabels.length - 0.5] as [number, number],
+            },
             yaxis: { title: { text: measureLabel }, rangemode: "tozero" as const },
             paper_bgcolor: "transparent",
             plot_bgcolor: "transparent",
