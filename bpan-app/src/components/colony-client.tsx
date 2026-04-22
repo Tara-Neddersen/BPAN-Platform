@@ -68,10 +68,13 @@ const FEMALE_SLOT_COUNT: Record<string, number> = {
   temp_split: 1,
 };
 
+// Used to display the label for a stored experiment type. Keeps legacy keys
+// (marble, nesting) so existing records still render with a friendly label.
 const EXPERIMENT_LABELS: Record<string, string> = {
   handling: "Handling (5 days)",
   y_maze: "Y-Maze",
   ldb: "Light-Dark Box",
+  social_interaction: "Social Interaction",
   marble: "Marble Burying",
   nesting: "Overnight Nesting",
   data_collection: "Transport to Core",
@@ -87,6 +90,29 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   eeg_implant: "EEG Implant Surgery",
   eeg_recording: "EEG Recording",
 };
+
+// Keys presented to users when *choosing* an experiment type (e.g. photo
+// tagging, batch scheduling). Excludes legacy entries the lab no longer uses
+// so they can't be accidentally re-applied to new records. Display of
+// existing records still uses EXPERIMENT_LABELS above so old tags look right.
+const SELECTABLE_EXPERIMENT_KEYS: string[] = [
+  "handling",
+  "y_maze",
+  "ldb",
+  "social_interaction",
+  "data_collection",
+  "core_acclimation",
+  "catwalk",
+  "rotarod_hab",
+  "rotarod",
+  "rotarod_test1",
+  "rotarod_test2",
+  "rotarod_recovery",
+  "stamina",
+  "blood_draw",
+  "eeg_implant",
+  "eeg_recording",
+];
 
 // All experiment types available for batch scheduling
 const ALL_EXPERIMENT_TYPES = [
@@ -2141,8 +2167,8 @@ export function ColonyClient({
                 <Select name="experiment_type">
                   <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
                   <SelectContent>
-                    {Object.entries(EXPERIMENT_LABELS).map(([k, v]) => (
-                      <SelectItem key={k} value={k}>{v}</SelectItem>
+                    {SELECTABLE_EXPERIMENT_KEYS.map((k) => (
+                      <SelectItem key={k} value={k}>{EXPERIMENT_LABELS[k] || k}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -3753,8 +3779,8 @@ function AnimalDetail({
                       <Select name="experiment_type" required>
                         <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Pick test..." /></SelectTrigger>
                         <SelectContent>
-                          {Object.entries(EXPERIMENT_LABELS).map(([k, v]) => (
-                            <SelectItem key={k} value={k}>{v}</SelectItem>
+                          {SELECTABLE_EXPERIMENT_KEYS.map((k) => (
+                            <SelectItem key={k} value={k}>{EXPERIMENT_LABELS[k] || k}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -3816,8 +3842,8 @@ function AnimalDetail({
                   <Select name="experiment_type" required>
                     <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Pick test..." /></SelectTrigger>
                     <SelectContent>
-                      {Object.entries(EXPERIMENT_LABELS).map(([k, v]) => (
-                        <SelectItem key={k} value={k}>{v}</SelectItem>
+                      {SELECTABLE_EXPERIMENT_KEYS.map((k) => (
+                        <SelectItem key={k} value={k}>{EXPERIMENT_LABELS[k] || k}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>

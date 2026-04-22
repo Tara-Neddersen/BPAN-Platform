@@ -2231,6 +2231,72 @@ export function ColonyAnalysisPanel({
       ? "__all__"
       : selectedTimepoint;
 
+  // ── Schema-declared measures for the current run/experiment/timepoint ──
+  // When a run is selected, we want the measure dropdown to surface ONLY the
+  // columns declared in the run's schema for the matching
+  // (timepoint × experiment) combinations — not every stale/extra key that
+  // might live inside a result's measures blob. This is the "we report what
+  // we say we report" guarantee for run-scoped analyses.
+  const allowedMeasureKeys = useMemo<Set<string> | null>(() => {
+    if (!selectedRun) return null; // Legacy path — no schema constraint.
+    const selectedTimepointId =
+      effectiveSelectedTimepoint !== "__all__"
+        ? selectedRunTimepoints.find(
+            (timepoint) => timepoint.target_age_days === Number(effectiveSelectedTimepoint),
+          )?.id || null
+        : null;
+
+    const matching = selectedRunExperiments.filter((experiment) => {
+      if (
+        effectiveSelectedExperiment !== "__all__" &&
+        experiment.experiment_key !== effectiveSelectedExperiment
+      ) {
+        return false;
+      }
+      if (selectedTimepointId && experiment.run_timepoint_id !== selectedTimepointId) {
+        return false;
+      }
+      return true;
+    });
+
+    if (matching.length === 0) return null; // No schema info — don't over-hide.
+
+    const keys = new Set<string>();
+    for (const experiment of matching) {
+      const snapshot = (experiment.schema_snapshot || []) as Array<{ key?: string }>;
+      for (const column of snapshot) {
+        if (column.key) keys.add(column.key);
+      }
+    }
+    return keys.size > 0 ? keys : null;
+  }, [
+    selectedRun,
+    selectedRunExperiments,
+    selectedRunTimepoints,
+    effectiveSelectedExperiment,
+    effectiveSelectedTimepoint,
+  ]);
+
+  // Label override map built from the run's schema snapshots so the measure
+  // dropdown / axis labels show the labels the PI chose for this run instead
+  // of auto-generated Title Case guesses.
+  const schemaLabelByKey = useMemo<Record<string, string>>(() => {
+    const map: Record<string, string> = {};
+    if (!selectedRun) return map;
+    for (const experiment of selectedRunExperiments) {
+      const snapshot = (experiment.schema_snapshot || []) as Array<{
+        key?: string;
+        label?: string;
+      }>;
+      for (const column of snapshot) {
+        if (column.key && column.label && !map[column.key]) {
+          map[column.key] = column.label;
+        }
+      }
+    }
+    return map;
+  }, [selectedRun, selectedRunExperiments]);
+
   // ── Build flat dataset ──
   const { scopedFlatData, scopedMeasureKeys, scopedMeasureLabels } = useMemo(() => {
     let results = filteredResults;
@@ -2275,16 +2341,23 @@ export function ColonyAnalysisPanel({
       for (const [rawKey, value] of Object.entries(measures)) {
         const key = normalizeOptionValue(rawKey);
         if (!key || key.startsWith("__")) continue; // Skip internal fields (__cage_image, __raw_data_url)
+        // When a run is selected and its schema declares a column set, hide
+        // any measure keys that aren't in the schema. This prevents stale
+        // keys inside result.measures (e.g. mislabelled legacy imports) from
+        // becoming plottable columns and silently producing wrong reports.
+        if (allowedMeasureKeys && !allowedMeasureKeys.has(key)) continue;
         if (value !== null && value !== undefined) {
           row[key] = typeof value === "string" && !isNaN(Number(value)) ? Number(value) : value;
           keySet.add(key);
           if (!labels[key]) {
-            labels[key] = key
-              .replace(/_/g, " ")
-              .replace(/\b\w/g, (c) => c.toUpperCase())
-              .replace(/\bPct\b/i, "%")
-              .replace(/\bSec\b/i, "(s)")
-              .replace(/\bCm\b/i, "(cm)");
+            labels[key] =
+              schemaLabelByKey[key] ||
+              key
+                .replace(/_/g, " ")
+                .replace(/\b\w/g, (c) => c.toUpperCase())
+                .replace(/\bPct\b/i, "%")
+                .replace(/\bSec\b/i, "(s)")
+                .replace(/\bCm\b/i, "(cm)");
           }
         }
       }
@@ -2297,7 +2370,19 @@ export function ColonyAnalysisPanel({
       scopedMeasureKeys: Array.from(keySet).sort(),
       scopedMeasureLabels: labels,
     };
-  }, [animals, cohorts, effectiveSelectedExperiment, effectiveSelectedTimepoint, filteredResults, selectedCohort, selectedRun, selectedRunAssignments, selectedRunExperiments]);
+  }, [
+    animals,
+    cohorts,
+    effectiveSelectedExperiment,
+    effectiveSelectedTimepoint,
+    filteredResults,
+    selectedCohort,
+    selectedRun,
+    selectedRunAssignments,
+    selectedRunExperiments,
+    allowedMeasureKeys,
+    schemaLabelByKey,
+  ]);
 
   const analysisAnimals = useMemo<AnalysisAnimalRow[]>(() => {
     const animalMap = new Map<string, AnalysisAnimalRow>();
