@@ -656,12 +656,16 @@ export async function updateAnimal(id: string, formData: FormData) {
     }
   }
 
-  // CASCADE: If status changed to inactive/deceased/sacrificed/transferred, skip all scheduled experiments
+  // CASCADE: If an active animal transitions to a terminal / non-experimental
+  // status, auto-skip any remaining scheduled/pending experiments so they
+  // stop appearing in the tracker. "breeding" is treated the same way: the
+  // animal has been permanently repurposed and is no longer an experimental
+  // subject, even though their past results stay in analyses.
   if (
     oldAnimal &&
     oldAnimal.status === "active" &&
     newStatus !== "active" &&
-    ["sacrificed", "transferred", "deceased"].includes(newStatus)
+    ["sacrificed", "transferred", "deceased", "breeding"].includes(newStatus)
   ) {
     const allExps = await fetchAllRows(supabase, "animal_experiments", user.id, { animal_id: id });
     const scheduledExps = allExps.filter(

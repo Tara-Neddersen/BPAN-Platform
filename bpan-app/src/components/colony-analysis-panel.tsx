@@ -98,6 +98,11 @@ import {
   getEffectiveSigAnnotations,
   getLegendLayout,
 } from "@/lib/colony-analysis/visualization";
+import {
+  applyDerivedMeasures,
+  DERIVED_MEASURE_KEYS_BY_EXPERIMENT,
+  DERIVED_MEASURE_LABELS,
+} from "@/lib/derived-measures";
 
 // Dynamically import Plotly
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -2267,6 +2272,11 @@ export function ColonyAnalysisPanel({
       for (const column of snapshot) {
         if (column.key) keys.add(column.key);
       }
+      // Whitelist any derived-measure keys for this experiment so computed
+      // columns (e.g. Y-maze Total Entries) survive the schema filter even
+      // when the run's schema_snapshot didn't explicitly declare them.
+      const derivedKeys = DERIVED_MEASURE_KEYS_BY_EXPERIMENT[experiment.experiment_key] || [];
+      for (const k of derivedKeys) keys.add(k);
     }
     return keys.size > 0 ? keys : null;
   }, [
@@ -2337,7 +2347,15 @@ export function ColonyAnalysisPanel({
             : result.experiment_type,
       };
 
-      const measures = (result.measures || {}) as Record<string, string | number | null>;
+      // Apply derivations (e.g. Y-maze total_entries = sum of arm entries)
+      // on read so legacy results imported before the derivation existed
+      // still surface the derived columns. Import already stores the
+      // derived value going forward; this is a defensive fallback.
+      const rawMeasures = (result.measures || {}) as Record<string, string | number | null>;
+      const measures = applyDerivedMeasures(
+        result.experiment_type,
+        rawMeasures,
+      ) as Record<string, string | number | null>;
       for (const [rawKey, value] of Object.entries(measures)) {
         const key = normalizeOptionValue(rawKey);
         if (!key || key.startsWith("__")) continue; // Skip internal fields (__cage_image, __raw_data_url)
@@ -2345,6 +2363,7 @@ export function ColonyAnalysisPanel({
         // any measure keys that aren't in the schema. This prevents stale
         // keys inside result.measures (e.g. mislabelled legacy imports) from
         // becoming plottable columns and silently producing wrong reports.
+        // Derived keys are whitelisted above, so they survive this check.
         if (allowedMeasureKeys && !allowedMeasureKeys.has(key)) continue;
         if (value !== null && value !== undefined) {
           row[key] = typeof value === "string" && !isNaN(Number(value)) ? Number(value) : value;
@@ -2352,6 +2371,7 @@ export function ColonyAnalysisPanel({
           if (!labels[key]) {
             labels[key] =
               schemaLabelByKey[key] ||
+              DERIVED_MEASURE_LABELS[key] ||
               key
                 .replace(/_/g, " ")
                 .replace(/\b\w/g, (c) => c.toUpperCase())

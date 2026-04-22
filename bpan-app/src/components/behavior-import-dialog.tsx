@@ -34,6 +34,7 @@ import {
   buildSyncableRunFields,
   findImportedColumnName,
 } from "@/lib/results-run-import-sync";
+import { applyDerivedMeasures } from "@/lib/derived-measures";
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -663,7 +664,15 @@ export function BehaviorImportDialog({
         }
       }
 
-      const entries = Array.from(entriesMap.values());
+      // Apply any derived measures (e.g., Y-maze Total Entries =
+      // sum of per-arm entry counts) before upserting. This keeps the
+      // stored result self-contained, so downstream views (results table,
+      // analysis plots, exports) all see the derived column without each
+      // one having to recompute it.
+      const entries = Array.from(entriesMap.values()).map((entry) => ({
+        ...entry,
+        measures: applyDerivedMeasures(experimentType, entry.measures),
+      }));
       if (entries.length === 0) {
         toast.error("No matching animals found to import");
         setImporting(false);

@@ -28,6 +28,7 @@ import type {
 import { MiniEarTag } from "@/components/ear-tag-selector";
 import { BehaviorImportDialog } from "@/components/behavior-import-dialog";
 import { exportColonyResultsMigrationWorkbook, exportColonyResultsWorkbook } from "@/lib/results-export";
+import { applyDerivedMeasures } from "@/lib/derived-measures";
 
 // ─── Default experiment measures per type ─────────────────────────────
 
@@ -773,8 +774,13 @@ export function ColonyResultsTab({
   const getNormalizedMeasures = useCallback(
     (exp: string, measures: MeasureMap | null | undefined) => {
       const rawMeasures = measures || {};
+      // Apply derivations (e.g. Y-maze total_entries = sum of per-arm
+      // entries) before normalization, so the results table and any
+      // downstream consumer sees the derived column even when the original
+      // imported payload didn't include it.
+      const derivedMeasures = applyDerivedMeasures(exp, rawMeasures as Record<string, unknown>) as MeasureMap;
       const schemaFields = getSchemaFieldsForExperiment(exp);
-      return normalizeMeasuresForFields(rawMeasures, schemaFields);
+      return normalizeMeasuresForFields(derivedMeasures, schemaFields);
     },
     [getSchemaFieldsForExperiment]
   );

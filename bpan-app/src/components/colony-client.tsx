@@ -1313,7 +1313,11 @@ export function ColonyClient({
                           <Badge variant="secondary" className="text-xs">{genotypeLabel(animal.sex, animal.genotype)}</Badge>
                           {animal.eeg_implanted && <Badge className="bg-purple-100 text-purple-700 text-xs" variant="secondary">EEG</Badge>}
                           {animal.status !== "active" && (
-                            <Badge variant="destructive" className="text-xs">{animal.status}</Badge>
+                            animal.status === "breeding" ? (
+                              <Badge className="bg-blue-100 text-blue-700 text-xs" variant="secondary">Breeding</Badge>
+                            ) : (
+                              <Badge variant="destructive" className="text-xs">{animal.status}</Badge>
+                            )
                           )}
                         </div>
                         <div className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
@@ -2305,8 +2309,10 @@ export function ColonyClient({
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="breeding">Breeding (Repurposed)</SelectItem>
                     <SelectItem value="deceased">Deceased</SelectItem>
-                    <SelectItem value="retired">Retired</SelectItem>
+                    <SelectItem value="sacrificed">Sacrificed</SelectItem>
+                    <SelectItem value="transferred">Transferred</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

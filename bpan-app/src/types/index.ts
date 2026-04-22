@@ -398,7 +398,7 @@ export interface Cohort {
 
 export type AnimalSex = "male" | "female";
 export type AnimalGenotype = "hemi" | "wt" | "het";
-export type AnimalStatus = "active" | "sacrificed" | "transferred" | "deceased";
+export type AnimalStatus = "active" | "sacrificed" | "transferred" | "deceased" | "breeding";
 
 export interface Animal {
   id: string;
