@@ -7411,6 +7411,17 @@ function VisualizationPanel({
 
     let currentY = overallMax + step * 1.8;
 
+    // Bar charts now use numeric x positions (0, 1, 2, ...) so tick
+    // labels can accept line breaks for the (n=X) sub-label and scatter
+    // overlays can be horizontally jittered within a category. Brackets
+    // therefore also need numeric x coordinates — using string group
+    // names here resolves to NaN on a numeric axis and the bracket
+    // silently disappears. For box/violin and other chart types that
+    // still use categorical axes, Plotly accepts numeric x and maps it
+    // onto the category index, so this change is a no-op for them.
+    const isNumericXAxis =
+      effectiveChartType === "bar_sem" || effectiveChartType === "bar_sd";
+
     for (const ann of sorted) {
       const idx1 = groupLabels.indexOf(ann.group1);
       const idx2 = groupLabels.indexOf(ann.group2);
@@ -7421,10 +7432,20 @@ function VisualizationPanel({
       const bracketY = currentY;
       const tickDown = step * 0.3;
 
+      const leftX = isNumericXAxis ? x0 : groupLabels[x0];
+      const rightX = isNumericXAxis ? x1 : groupLabels[x1];
+      // Label midpoint is the true arithmetic midpoint on numeric axes
+      // (so a bracket spanning groups 0 and 3 gets its star at 1.5, not
+      // rounded to 2). On categorical axes we keep the existing integer
+      // rounding because Plotly can't place a label between categories.
+      const labelX = isNumericXAxis
+        ? (x0 + x1) / 2
+        : groupLabels[Math.round((x0 + x1) / 2)] || groupLabels[x0];
+
       // Left vertical tick
       shapes.push({
         type: "line",
-        x0: groupLabels[x0], x1: groupLabels[x0],
+        x0: leftX, x1: leftX,
         y0: bracketY - tickDown, y1: bracketY,
         xref: "x", yref: "y",
         line: { color: "black", width: 1.5 },
@@ -7432,7 +7453,7 @@ function VisualizationPanel({
       // Horizontal bar
       shapes.push({
         type: "line",
-        x0: groupLabels[x0], x1: groupLabels[x1],
+        x0: leftX, x1: rightX,
         y0: bracketY, y1: bracketY,
         xref: "x", yref: "y",
         line: { color: "black", width: 1.5 },
@@ -7440,16 +7461,14 @@ function VisualizationPanel({
       // Right vertical tick
       shapes.push({
         type: "line",
-        x0: groupLabels[x1], x1: groupLabels[x1],
+        x0: rightX, x1: rightX,
         y0: bracketY - tickDown, y1: bracketY,
         xref: "x", yref: "y",
         line: { color: "black", width: 1.5 },
       });
 
-      // Label
-      const midIdx = (x0 + x1) / 2;
       annotations.push({
-        x: groupLabels[Math.round(midIdx)] || groupLabels[x0],
+        x: labelX,
         y: bracketY + step * 0.15,
         xref: "x",
         yref: "y",
