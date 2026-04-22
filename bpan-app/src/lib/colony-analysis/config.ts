@@ -630,6 +630,7 @@ function defaultTraceStyleDraft(chartFamily: VisualizationChartType): TraceStyle
     dotSymbol: "circle",
     outlineWidth: 1,
     barOpacity: 0.85,
+    barGap: 0.3,
     lineWidth: 2,
     errorBarStyle: chartFamily === "bar_sd" ? "sd" : "sem",
     errorBarCapWidth: 8,
@@ -661,6 +662,7 @@ function normalizeTraceStyleDraft(input: unknown, chartFamily: VisualizationChar
     dotSymbol: stringOrDefault(source.dotSymbol, defaults.dotSymbol),
     outlineWidth: numericOrDefault(source.outlineWidth, defaults.outlineWidth),
     barOpacity: numericOrDefault(source.barOpacity, defaults.barOpacity),
+    barGap: Math.max(0, Math.min(0.95, numericOrDefault(source.barGap, defaults.barGap))),
     lineWidth: numericOrDefault(source.lineWidth, defaults.lineWidth),
     errorBarStyle,
     errorBarCapWidth: numericOrDefault(source.errorBarCapWidth, defaults.errorBarCapWidth),
@@ -881,7 +883,11 @@ export function normalizeVisualizationDraft(
       ? (merged.chartType as VisualizationChartType)
       : "bar_sem",
     groupBy:
-      merged.groupBy === "sex" || merged.groupBy === "genotype" || merged.groupBy === "cohort"
+      merged.groupBy === "sex" ||
+      merged.groupBy === "genotype" ||
+      merged.groupBy === "cohort" ||
+      merged.groupBy === "timepoint" ||
+      merged.groupBy === "group_timepoint"
         ? merged.groupBy
         : "group",
     sigAnnotations: Array.isArray(merged.sigAnnotations)

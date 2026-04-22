@@ -6490,7 +6490,7 @@ function VisualizationPanel({
   const [chartType, setChartType] = useState(normalizedInitialConfig.chartType);
   const [measureKey, setMeasureKey] = useState(normalizedInitialConfig.measureKey || safeNumericKeys[0] || "");
   const [measureKey2, setMeasureKey2] = useState(normalizedInitialConfig.measureKey2 || safeNumericKeys[1] || "");
-  const [groupBy, setGroupBy] = useState<"group" | "sex" | "genotype" | "cohort">(normalizedInitialConfig.groupBy);
+  const [groupBy, setGroupBy] = useState<"group" | "sex" | "genotype" | "cohort" | "timepoint" | "group_timepoint">(normalizedInitialConfig.groupBy);
   const [title, setTitle] = useState(normalizedInitialConfig.title);
   const [showPoints, setShowPoints] = useState(normalizedInitialConfig.showPoints);
   const [figureStudio, setFigureStudio] = useState<FigureStudioDraft>(normalizedInitialFigureStudioConfig);
@@ -6558,18 +6558,52 @@ function VisualizationPanel({
         return row.genotype;
       case "cohort":
         return row.cohort;
+      case "timepoint":
+        return row.timepoint !== undefined && row.timepoint !== null
+          ? `${row.timepoint}d`
+          : "—";
+      case "group_timepoint":
+        // Composite label like "WT Male 30d" so each (genotype × sex ×
+        // timepoint) combination becomes its own bar / bracket / stats
+        // cell. Default ordering puts timepoints within the same group
+        // adjacent to each other (see groupLabels below).
+        return row.timepoint !== undefined && row.timepoint !== null
+          ? `${row.group} ${row.timepoint}d`
+          : row.group;
       case "group":
       default:
         return row.group;
     }
   }, [groupBy]);
-  const groupLabels = useMemo(
-    () =>
-      groupBy === "group"
-        ? groups
-        : Array.from(new Set(flatData.map(getGrouping))).sort(),
-    [flatData, getGrouping, groupBy, groups],
-  );
+  const groupLabels = useMemo(() => {
+    if (groupBy === "group") return groups;
+    if (groupBy === "group_timepoint") {
+      // Default order: for each group in GROUP_ORDER, iterate timepoints
+      // in ascending order. Matches the user's natural layout — e.g.
+      // "WT Male 30d, WT Male 120d, Hemi Male 30d, Hemi Male 120d, …" —
+      // keeping timepoints within a genotype/sex adjacent instead of
+      // scrambling them alphabetically.
+      const byLabel = new Map<string, { group: string; timepoint: number }>();
+      for (const row of flatData) {
+        const label = getGrouping(row);
+        if (!byLabel.has(label) && row.timepoint !== undefined && row.timepoint !== null) {
+          byLabel.set(label, { group: row.group, timepoint: Number(row.timepoint) });
+        }
+      }
+      const entries = Array.from(byLabel.entries());
+      entries.sort(([, a], [, b]) => {
+        const aOrder = GROUP_ORDER.indexOf(a.group);
+        const bOrder = GROUP_ORDER.indexOf(b.group);
+        const aIdx = aOrder === -1 ? Number.POSITIVE_INFINITY : aOrder;
+        const bIdx = bOrder === -1 ? Number.POSITIVE_INFINITY : bOrder;
+        if (aIdx !== bIdx) return aIdx - bIdx;
+        if (a.group !== b.group) return a.group.localeCompare(b.group);
+        return a.timepoint - b.timepoint;
+      });
+      return entries.map(([label]) => label);
+    }
+    return Array.from(new Set(flatData.map(getGrouping))).sort();
+  }, [flatData, getGrouping, groupBy, groups]);
   const resultDrivenSigAnnotations = useMemo(
     () =>
       deriveSignificanceAnnotationsFromResult(result, {
@@ -6795,10 +6829,26 @@ function VisualizationPanel({
   }, [autoRunSigStars, applyAutoSigAnnotations]);
 
   const resolveGroupColor = useCallback(
-    (group: string, index: number) =>
-      figureStudio.traceStyle.groupColorOverrides[group] ||
-      GROUP_COLORS[group] ||
-      CHART_COLORS[index % CHART_COLORS.length],
+    (group: string, index: number) => {
+      // Priority:
+      //   1. Explicit per-group override from the figure studio
+      //   2. Exact GROUP_COLORS match (e.g. "Hemi Male")
+      //   3. For composite labels like "Hemi Male 30d", fall back to the
+      //      base group's color ("Hemi Male") so timepoints within the
+      //      same genotype/sex share a hue and the reader sees adjacent
+      //      bars as belonging together.
+      //   4. Rotating CHART_COLORS as last resort.
+      const exactOverride = figureStudio.traceStyle.groupColorOverrides[group];
+      if (exactOverride) return exactOverride;
+      if (GROUP_COLORS[group]) return GROUP_COLORS[group];
+      const stripped = group.replace(/\s+\d+d$/i, "");
+      if (stripped !== group) {
+        const strippedOverride = figureStudio.traceStyle.groupColorOverrides[stripped];
+        if (strippedOverride) return strippedOverride;
+        if (GROUP_COLORS[stripped]) return GROUP_COLORS[stripped];
+      }
+      return CHART_COLORS[index % CHART_COLORS.length];
+    },
     [figureStudio.traceStyle.groupColorOverrides],
   );
   const patchFigureStudio = useCallback((patch: Partial<FigureStudioDraft>) => {
@@ -7111,7 +7161,7 @@ function VisualizationPanel({
             plot_bgcolor: "transparent",
             font: { size: 12 },
             showlegend: false,
-            bargap: 0.3,
+            bargap: figureStudio.traceStyle.barGap,
           },
         };
       }
@@ -7554,8 +7604,10 @@ function VisualizationPanel({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="group">Genotype × Sex</SelectItem>
+                  <SelectItem value="group_timepoint">Genotype × Sex × Timepoint</SelectItem>
                   <SelectItem value="genotype">Genotype only</SelectItem>
                   <SelectItem value="sex">Sex only</SelectItem>
+                  <SelectItem value="timepoint">Timepoint only</SelectItem>
                   <SelectItem value="cohort">Cohort</SelectItem>
                 </SelectContent>
               </Select>
@@ -7801,6 +7853,31 @@ function VisualizationPanel({
                 />
               </div>
               <div className="lg:col-span-2">
+                {/* Gap between adjacent bars (0 = bars touch, 0.5 = half-
+                    bar gaps). Lets the user tighten or loosen spacing
+                    like Prism's "bar separation" slider. */}
+                <Label className="mb-1 block text-[10px] text-muted-foreground">Bar spacing</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={0.95}
+                  step="0.05"
+                  value={figureStudio.traceStyle.barGap}
+                  onChange={(event) => {
+                    const raw = Number(event.target.value);
+                    const next = Number.isFinite(raw)
+                      ? Math.max(0, Math.min(0.95, raw))
+                      : figureStudio.traceStyle.barGap;
+                    patchFigureStudio({
+                      traceStyle: {
+                        ...figureStudio.traceStyle,
+                        barGap: next,
+                      },
+                    });
+                  }}
+                />
+              </div>
+              <div className="lg:col-span-2">
                 <Label className="mb-1 block text-[10px] text-muted-foreground">Tick font size</Label>
                 <Input
                   type="number"
@@ -7829,6 +7906,90 @@ function VisualizationPanel({
                 />
               </div>
             </div>
+
+            {/* ─── Per-group colors ──────────────────────────────────────
+                One swatch per group currently in the plot. Clicking a
+                swatch opens the browser's native color picker; picking a
+                color writes to traceStyle.groupColorOverrides, which the
+                resolveGroupColor helper consults before falling back to
+                GROUP_COLORS or the chart-color palette. A reset button
+                clears the override so the group returns to its default.
+                Uses groupLabels (post-filter), so only the groups you are
+                actually plotting get their own swatch — no clutter. */}
+            {groupLabels.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Group colors</Label>
+                  {Object.keys(figureStudio.traceStyle.groupColorOverrides).length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-[11px]"
+                      onClick={() =>
+                        patchFigureStudio({
+                          traceStyle: {
+                            ...figureStudio.traceStyle,
+                            groupColorOverrides: {},
+                          },
+                        })
+                      }
+                    >
+                      Reset all
+                    </Button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  {groupLabels.map((group, index) => {
+                    const color = resolveGroupColor(group, index);
+                    const overridden = Boolean(figureStudio.traceStyle.groupColorOverrides[group]);
+                    return (
+                      <label
+                        key={group}
+                        className="flex items-center gap-2 rounded-md border border-slate-200 px-2 py-1 text-xs cursor-pointer hover:border-slate-400"
+                        title={`Click to change color for ${group}`}
+                      >
+                        <input
+                          type="color"
+                          value={color}
+                          onChange={(event) =>
+                            patchFigureStudio({
+                              traceStyle: {
+                                ...figureStudio.traceStyle,
+                                groupColorOverrides: {
+                                  ...figureStudio.traceStyle.groupColorOverrides,
+                                  [group]: event.target.value,
+                                },
+                              },
+                            })
+                          }
+                          className="h-5 w-5 cursor-pointer rounded border-0 p-0"
+                        />
+                        <span>{group}</span>
+                        {overridden && (
+                          <button
+                            type="button"
+                            className="text-[10px] text-slate-500 hover:text-slate-900"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              const nextOverrides = { ...figureStudio.traceStyle.groupColorOverrides };
+                              delete nextOverrides[group];
+                              patchFigureStudio({
+                                traceStyle: {
+                                  ...figureStudio.traceStyle,
+                                  groupColorOverrides: nextOverrides,
+                                },
+                              });
+                            }}
+                          >
+                            reset
+                          </button>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-wrap items-center gap-4 text-xs">
               <label className="flex items-center gap-1.5 cursor-pointer">

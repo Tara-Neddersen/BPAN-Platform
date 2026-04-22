@@ -22,7 +22,13 @@ export interface GroupStats {
   values: number[];
 }
 
-export type AnalysisFactor = "group" | "sex" | "genotype" | "cohort" | "timepoint";
+// Factors the analysis panel can group data by. `group_timepoint` is a
+// composite (genotype × sex × timepoint) used when the user wants to see
+// each group/timepoint combination as its own bar — e.g. "WT Male 30d"
+// next to "WT Male 120d", then "Hemi Male 30d" next to "Hemi Male 120d",
+// and so on. Treated as a regular factor everywhere, so stats and
+// significance brackets work the same as any other grouping.
+export type AnalysisFactor = "group" | "sex" | "genotype" | "cohort" | "timepoint" | "group_timepoint";
 export type OutlierMethod = "iqr" | "zscore";
 export type OutlierMode = "mark" | "exclude" | "restore";
 export type AnalysisAuditSource = "manual" | "rule" | "outlier" | "restored";
@@ -228,6 +234,10 @@ export interface TraceStyleDraft {
   dotSymbol: string;
   outlineWidth: number;
   barOpacity: number;
+  // Fractional gap between adjacent bars (0 = bars touch, 1 = bars
+  // disappear). Maps to Plotly's `bargap` layout property. Defaults to
+  // 0.3 to match the pre-existing hardcoded spacing.
+  barGap: number;
   lineWidth: number;
   errorBarStyle: "sem" | "sd" | "ci" | "none";
   errorBarCapWidth: number;
@@ -289,7 +299,7 @@ export interface ColonyAnalysisVisualizationDraft {
   chartType: VisualizationChartType;
   measureKey: string;
   measureKey2: string;
-  groupBy: "group" | "sex" | "genotype" | "cohort";
+  groupBy: "group" | "sex" | "genotype" | "cohort" | "timepoint" | "group_timepoint";
   title: string;
   showPoints: boolean;
   sigAnnotations: Array<{ group1: string; group2: string; label: string }>;
