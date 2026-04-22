@@ -6513,16 +6513,23 @@ function VisualizationPanel({
   }, [measureKey, measureKey2, safeNumericKeys]);
 
   useEffect(() => {
+    // When chart family / measure / title changes, re-normalize the figure
+    // studio draft but DON'T force-set axisY.title here. The input field
+    // renders the computed fallback (`figureStudio.axisY.title ||
+    // measureLabels[measureKey] || measureKey`) for display, and
+    // getAxisLayout uses the same fallback at plot-render time. Previously
+    // we set axisY.title to `current.axisY.title || measureLabels[...]`,
+    // which made the stored title sticky: once seeded with measure A's
+    // label, it persisted across measure switches and the Y axis kept
+    // showing measure A even after the user chose measure B. Keeping
+    // axisY.title empty unless the user explicitly types a custom value
+    // lets the fallback track the current measure automatically.
     setFigureStudio((current) =>
       normalizeFigureStudioDraft(
         {
           ...current,
           chartFamily: effectiveChartType,
           title: current.title || title,
-          axisY: {
-            ...current.axisY,
-            title: current.axisY.title || measureLabels[measureKey] || measureKey,
-          },
         },
         effectiveChartType,
         current.axisX.title,
@@ -6552,18 +6559,17 @@ function VisualizationPanel({
       onConfigChange?.(nextConfig);
     }
 
+    // Emit the config for saving. Do NOT force-seed axisY.title here — keep
+    // it as whatever the user has explicitly typed (or empty). Display of
+    // the Y axis is handled by a fallback (measure label) at render time,
+    // so an empty stored title renders correctly AND keeps tracking the
+    // current measure when the user changes their selection.
     const nextFigureStudioConfig = normalizeFigureStudioDraft(
       {
         ...initialFigureStudioConfigRef.current,
         ...figureStudio,
         chartFamily: effectiveChartType,
         title: figureStudio.title || title,
-        axisY: {
-          ...figureStudio.axisY,
-          title:
-            figureStudio.axisY.title ||
-            (measureLabels[measureKey] || measureKey || figureStudio.axisY.title),
-        },
       },
       effectiveChartType,
       figureStudio.axisX.title,

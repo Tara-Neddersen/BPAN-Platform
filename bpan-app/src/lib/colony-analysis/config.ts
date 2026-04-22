@@ -591,10 +591,23 @@ function defaultAxisDraft(title = ""): AxisDraft {
 }
 
 function normalizeAxisDraft(input: unknown, fallbackTitle = ""): AxisDraft {
-  const defaults = defaultAxisDraft(fallbackTitle);
+  // NOTE: `fallbackTitle` is intentionally NOT used to seed `title` here.
+  // Auto-populating title from the fallback made the stored title "sticky":
+  // once written on the first normalize, later calls saw a non-empty
+  // source.title and preserved the stale value even when the selected
+  // measure (and therefore the fallback) had changed. That caused the plot
+  // title to update to the newly selected measure while the Y axis title
+  // kept showing the previous measure's label. The display path already
+  // computes the fallback at render time (`axis.title || fallbackTitle` in
+  // getAxisLayout, plus the yAxisTitle computation in the analysis panel),
+  // so leaving `title` empty here is correct and safer.
+  // The parameter is retained for API stability and to document intent at
+  // every call site.
+  void fallbackTitle;
+  const defaults = defaultAxisDraft("");
   const source = isRecord(input) ? input : {};
   return {
-    title: stringOrDefault(source.title, defaults.title),
+    title: typeof source.title === "string" ? source.title : "",
     min: numericOrNull(source.min),
     max: numericOrNull(source.max),
     autoScale: booleanOrDefault(source.autoScale, defaults.autoScale),
