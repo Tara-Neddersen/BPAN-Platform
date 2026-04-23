@@ -2104,6 +2104,17 @@ export function ColonyAnalysisPanel({
   // significance brackets, bar chart groups, n labels) respects the
   // subset. Empty set means "include all groups", which is the default.
   const [excludedGroups, setExcludedGroups] = useState<Set<string>>(new Set());
+  // User-defined bar order, populated when the user drags chips in the
+  // "Groups in this analysis" picker. Stores labels in the order they
+  // should appear on the plot. Groups not in this list fall back to the
+  // default ordering (GROUP_ORDER for the base grouping, natural order
+  // for composites) and are appended at the end, so new data doesn't
+  // disappear just because the user hasn't dragged it into position.
+  const [customGroupOrder, setCustomGroupOrder] = useState<string[]>([]);
+  // Transient drag state — which chip is being dragged right now. Kept
+  // out of a ref because we want the drop indicator (not implemented
+  // yet, but easy to layer in) to react to it.
+  const [draggingGroup, setDraggingGroup] = useState<string | null>(null);
   const [exclusionReasons, setExclusionReasons] = useState<Record<string, string>>({});
   const [exclusionSources, setExclusionSources] = useState<Record<string, AnalysisAuditSource>>({});
   const [outlierFlags, setOutlierFlags] = useState<Record<string, boolean>>({});
@@ -2529,12 +2540,33 @@ export function ColonyAnalysisPanel({
   // All groups that exist in the scoped data BEFORE the subset picker's
   // exclusions. Drives the "Groups in this analysis" toggle UI so that
   // deselecting a group doesn't make it disappear from the picker itself.
+  // Honors any custom drag-reordering the user has done — groups not in
+  // customGroupOrder fall back to the default layout (GROUP_ORDER, then
+  // alphabetical for anything unusual) and are appended at the end, so
+  // dragging two chips doesn't accidentally hide all the others.
   const allGroupsInScope = useMemo(() => {
     const groups = new Set(scopedFlatData.map((r) => r.group));
-    const ordered = GROUP_ORDER.filter((g) => groups.has(g));
-    const extras = Array.from(groups).filter((g) => !GROUP_ORDER.includes(g)).sort();
-    return [...ordered, ...extras];
-  }, [scopedFlatData]);
+    const defaultOrder = [
+      ...GROUP_ORDER.filter((g) => groups.has(g)),
+      ...Array.from(groups).filter((g) => !GROUP_ORDER.includes(g)).sort(),
+    ];
+    if (customGroupOrder.length === 0) return defaultOrder;
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const g of customGroupOrder) {
+      if (groups.has(g) && !seen.has(g)) {
+        result.push(g);
+        seen.add(g);
+      }
+    }
+    for (const g of defaultOrder) {
+      if (!seen.has(g)) {
+        result.push(g);
+        seen.add(g);
+      }
+    }
+    return result;
+  }, [scopedFlatData, customGroupOrder]);
 
   const includedAnimalCount = analysisAnimals.filter((animal) => animal.included).length;
   const excludedAnimalCount = analysisAnimals.length - includedAnimalCount;
@@ -3737,49 +3769,110 @@ export function ColonyAnalysisPanel({
                   <div>
                     <p className="text-xs font-medium text-slate-700">Groups in this analysis</p>
                     <p className="text-[11px] text-slate-500">
-                      Click a group to toggle it. De-selected groups are dropped from the plot, summary, and every statistical test (ANOVA, t-test, brackets). Default: all groups included.
+                      Click to toggle · drag to reorder bars. De-selected groups are dropped from the plot, summary, and every statistical test (ANOVA, t-test, brackets). Reorder affects both Genotype × Sex and the composite Genotype × Sex × Timepoint view.
                     </p>
                   </div>
-                  {excludedGroups.size > 0 && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => setExcludedGroups(new Set())}
-                    >
-                      Include all
-                    </Button>
-                  )}
+                  <div className="flex items-center gap-1">
+                    {customGroupOrder.length > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setCustomGroupOrder([])}
+                      >
+                        Reset order
+                      </Button>
+                    )}
+                    {excludedGroups.size > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setExcludedGroups(new Set())}
+                      >
+                        Include all
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div
+                  className="flex flex-wrap gap-2"
+                  onDragOver={(event) => {
+                    // Allow dropping anywhere in the chip container so
+                    // the drop target tolerance is generous.
+                    if (draggingGroup) event.preventDefault();
+                  }}
+                >
                   {allGroupsInScope.map((group) => {
                     const included = !excludedGroups.has(group);
                     const color = GROUP_COLORS[group] || "#64748b";
+                    const isDragging = draggingGroup === group;
                     return (
-                      <button
+                      <div
                         key={group}
-                        type="button"
-                        onClick={() =>
-                          setExcludedGroups((current) => {
-                            const next = new Set(current);
-                            if (next.has(group)) next.delete(group);
-                            else next.add(group);
-                            return next;
-                          })
-                        }
-                        className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition ${
+                        // Native HTML5 drag-and-drop. Chosen over a
+                        // heavier library (dnd-kit, react-dnd) because
+                        // the payload is tiny (one string per chip) and
+                        // we don't need touch support on this surface
+                        // — PIs edit plots on desktop.
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/plain", group);
+                          setDraggingGroup(group);
+                        }}
+                        onDragEnd={() => setDraggingGroup(null)}
+                        onDragOver={(event) => {
+                          if (draggingGroup && draggingGroup !== group) {
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = "move";
+                          }
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          const source = draggingGroup || event.dataTransfer.getData("text/plain");
+                          if (!source || source === group) return;
+                          // Rebuild the order list: take the current
+                          // visible order, remove the source, then
+                          // insert it right before the drop target.
+                          // Anyone not explicitly touched stays in
+                          // their default slot.
+                          const current = allGroupsInScope.slice();
+                          const from = current.indexOf(source);
+                          const to = current.indexOf(group);
+                          if (from === -1 || to === -1) return;
+                          current.splice(from, 1);
+                          const insertAt = current.indexOf(group);
+                          current.splice(insertAt, 0, source);
+                          setCustomGroupOrder(current);
+                          setDraggingGroup(null);
+                        }}
+                        className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition cursor-grab active:cursor-grabbing select-none ${
                           included
                             ? "border-slate-300 bg-white text-slate-900 hover:border-slate-400"
                             : "border-slate-200 bg-slate-100 text-slate-400 line-through hover:bg-slate-200"
-                        }`}
-                        aria-pressed={included}
+                        } ${isDragging ? "opacity-40" : ""}`}
                       >
-                        <span
-                          className="inline-block h-2.5 w-2.5 rounded-full"
-                          style={{ backgroundColor: included ? color : "#cbd5e1" }}
-                        />
-                        {group}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExcludedGroups((current) => {
+                              const next = new Set(current);
+                              if (next.has(group)) next.delete(group);
+                              else next.add(group);
+                              return next;
+                            })
+                          }
+                          aria-pressed={included}
+                          className="flex items-center gap-1.5"
+                        >
+                          <span
+                            className="inline-block h-2.5 w-2.5 rounded-full"
+                            style={{ backgroundColor: included ? color : "#cbd5e1" }}
+                          />
+                          {group}
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -3852,6 +3945,7 @@ export function ColonyAnalysisPanel({
               numericKeys={numericMeasureKeys}
               measureLabels={measureLabels}
               groups={availableGroups}
+              customGroupOrder={customGroupOrder}
               initialConfig={visualizationDraft}
               initialFigureStudioConfig={figureStudioDraft}
               result={savedResult}
@@ -6469,6 +6563,7 @@ function VisualizationPanel({
   numericKeys,
   measureLabels,
   groups,
+  customGroupOrder,
   initialConfig,
   initialFigureStudioConfig,
   result,
@@ -6480,6 +6575,12 @@ function VisualizationPanel({
   numericKeys: string[];
   measureLabels: Record<string, string>;
   groups: string[];
+  // Optional user-defined group order (from drag-reorder in the top-
+  // level group picker). Affects both plain "group" plotting and the
+  // composite "group_timepoint" fallback ordering: composites are
+  // bucketed by primary group using this order, then sorted by
+  // timepoint ascending within each bucket.
+  customGroupOrder?: string[];
   initialConfig?: ColonyAnalysisVisualizationDraft;
   initialFigureStudioConfig?: FigureStudioDraft;
   result: Record<string, unknown> | null;
@@ -6592,13 +6693,33 @@ function VisualizationPanel({
     }
   }, [groupBy]);
   const groupLabels = useMemo(() => {
-    if (groupBy === "group") return groups;
+    // Helper: "index of this base group in the user's custom order, or
+    // fall back to GROUP_ORDER, or push unknowns to the end". Used by
+    // both the plain and composite grouping paths below so the drag-to-
+    // reorder chips at the top drive bar order consistently.
+    const orderIndexOf = (baseGroup: string): number => {
+      if (customGroupOrder && customGroupOrder.length > 0) {
+        const idx = customGroupOrder.indexOf(baseGroup);
+        if (idx !== -1) return idx;
+      }
+      const fallback = GROUP_ORDER.indexOf(baseGroup);
+      return fallback === -1 ? Number.POSITIVE_INFINITY : fallback + 1000;
+    };
+
+    if (groupBy === "group") {
+      // If the user hasn't dragged anything, preserve the previous
+      // default behavior (parent passes the already-ordered `groups`
+      // prop). Otherwise sort by the custom order, appending any groups
+      // the user hasn't touched at the end.
+      if (!customGroupOrder || customGroupOrder.length === 0) return groups;
+      return [...groups].sort((a, b) => orderIndexOf(a) - orderIndexOf(b));
+    }
     if (groupBy === "group_timepoint") {
-      // Default order: for each group in GROUP_ORDER, iterate timepoints
-      // in ascending order. Matches the user's natural layout — e.g.
-      // "WT Male 30d, WT Male 120d, Hemi Male 30d, Hemi Male 120d, …" —
-      // keeping timepoints within a genotype/sex adjacent instead of
-      // scrambling them alphabetically.
+      // Default order: for each base group (respecting custom drag
+      // order), iterate timepoints in ascending order. Matches the
+      // user's natural layout — e.g. "WT Male 30d, WT Male 120d,
+      // Hemi Male 30d, Hemi Male 120d, …" — keeping timepoints within a
+      // genotype/sex adjacent instead of scrambling them alphabetically.
       const byLabel = new Map<string, { group: string; timepoint: number }>();
       for (const row of flatData) {
         const label = getGrouping(row);
@@ -6608,10 +6729,8 @@ function VisualizationPanel({
       }
       const entries = Array.from(byLabel.entries());
       entries.sort(([, a], [, b]) => {
-        const aOrder = GROUP_ORDER.indexOf(a.group);
-        const bOrder = GROUP_ORDER.indexOf(b.group);
-        const aIdx = aOrder === -1 ? Number.POSITIVE_INFINITY : aOrder;
-        const bIdx = bOrder === -1 ? Number.POSITIVE_INFINITY : bOrder;
+        const aIdx = orderIndexOf(a.group);
+        const bIdx = orderIndexOf(b.group);
         if (aIdx !== bIdx) return aIdx - bIdx;
         if (a.group !== b.group) return a.group.localeCompare(b.group);
         return a.timepoint - b.timepoint;
@@ -6619,7 +6738,7 @@ function VisualizationPanel({
       return entries.map(([label]) => label);
     }
     return Array.from(new Set(flatData.map(getGrouping))).sort();
-  }, [flatData, getGrouping, groupBy, groups]);
+  }, [flatData, getGrouping, groupBy, groups, customGroupOrder]);
   const resultDrivenSigAnnotations = useMemo(
     () =>
       deriveSignificanceAnnotationsFromResult(result, {
