@@ -137,6 +137,26 @@ function slugifyKey(value: string) {
     .slice(0, 60);
 }
 
+// Turn a snake_case key into a friendly Title Case label so users who
+// only type the key field (common workflow — "head_turn_angle",
+// "time_in_light_sec") still get a nice axis label / column header
+// without typing it twice. The transforms mirror what the analysis
+// panel does at display time so the auto-filled label matches what
+// the reader will see on the plot.
+function keyToLabel(key: string): string {
+  if (!key) return "";
+  return key
+    .replace(/_+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\bPct\b/g, "%")
+    .replace(/\bSec\b/g, "(s)")
+    .replace(/\bMs\b/g, "(ms)")
+    .replace(/\bMin\b/g, "(min)")
+    .replace(/\bCm\b/g, "(cm)")
+    .replace(/\bMm\b/g, "(mm)");
+}
+
 function mapDatasetColumnType(column: DatasetColumn, values: unknown[]): ColumnType {
   if (column.type === "numeric") return "number";
   if (column.type === "date") return "date";
@@ -353,6 +373,7 @@ export function ExperimentTemplateBuilder({
       columns: draft.columns.map((column, columnIndex) => {
         if (columnIndex !== index) return column;
 
+        // Label typed -> key follows (already existed).
         if (typeof patch.label === "string" && !("key" in patch)) {
           const previousAutoKey = slugifyKey(column.label);
           const shouldAutoUpdateKey = !column.key || column.key === previousAutoKey;
@@ -360,6 +381,22 @@ export function ExperimentTemplateBuilder({
             ...column,
             ...patch,
             key: shouldAutoUpdateKey ? slugifyKey(patch.label) || column.key : column.key,
+          };
+        }
+
+        // Key typed -> label follows if the user hasn't customized the
+        // label. Saves the user from typing the same information twice
+        // when they only care about the machine-readable key (common
+        // workflow). We consider a label "not customized" if it's empty
+        // or if it still matches the previous auto-fill from the old
+        // key — exactly the mirror of the label -> key logic above.
+        if (typeof patch.key === "string" && !("label" in patch)) {
+          const previousAutoLabel = keyToLabel(column.key);
+          const shouldAutoUpdateLabel = !column.label || column.label === previousAutoLabel;
+          return {
+            ...column,
+            ...patch,
+            label: shouldAutoUpdateLabel ? keyToLabel(patch.key) || column.label : column.label,
           };
         }
 

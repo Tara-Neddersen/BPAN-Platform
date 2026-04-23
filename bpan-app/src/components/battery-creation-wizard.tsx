@@ -243,6 +243,24 @@ function slugifyKey(value: string) {
     .slice(0, 60);
 }
 
+// Key -> friendly label, mirror of slugifyKey. Used to auto-fill the
+// label field when the user only types the machine-readable key, so
+// they don't have to type the same information twice. Matches the
+// normalization the analysis panel does at display time.
+function keyToLabel(key: string): string {
+  if (!key) return "";
+  return key
+    .replace(/_+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\bPct\b/g, "%")
+    .replace(/\bSec\b/g, "(s)")
+    .replace(/\bMs\b/g, "(ms)")
+    .replace(/\bMin\b/g, "(min)")
+    .replace(/\bCm\b/g, "(cm)")
+    .replace(/\bMm\b/g, "(mm)");
+}
+
 function createEmptyExperiment(name = ""): ExperimentDraft {
   return {
     id: makeId("exp"),
@@ -875,11 +893,23 @@ export function BatteryCreationWizard({
         const next = [...experiment.manualColumns];
         const previous = next[columnIndex];
         const merged = { ...previous, ...patch };
+        // Label typed -> key follows (existing behavior).
         if (typeof patch.label === "string" && !("key" in patch)) {
           const previousAutoKey = slugifyKey(previous.label);
           const shouldAutoKey = previous.key === previousAutoKey || !previous.key;
           if (shouldAutoKey) {
             merged.key = slugifyKey(patch.label) || previous.key;
+          }
+        }
+        // Key typed -> label follows if not customized yet. Saves the
+        // user from typing the same info twice when they only care
+        // about the machine-readable key. A "not customized" label is
+        // empty or still matches the auto-fill of the old key.
+        if (typeof patch.key === "string" && !("label" in patch)) {
+          const previousAutoLabel = keyToLabel(previous.key);
+          const shouldAutoLabel = !previous.label || previous.label === previousAutoLabel;
+          if (shouldAutoLabel) {
+            merged.label = keyToLabel(patch.key) || previous.label;
           }
         }
         next[columnIndex] = merged;
