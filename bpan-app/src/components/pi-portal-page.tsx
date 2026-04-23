@@ -85,6 +85,12 @@ interface PortalData {
   colony_results: ColonyResult[];
   cohorts: Cohort[];
   timepoints: ColonyTimepoint[];
+  experiment_runs?: Array<{
+    id: string;
+    name: string;
+    status?: string | null;
+    created_at?: string | null;
+  }>;
   calendar_events: WorkspaceCalendarEvent[];
   meeting_actions: Array<{
     meeting_id: string;
@@ -236,34 +242,62 @@ function ColonyResultsView({
   fullAnimals,
   colonyResults,
   cohorts,
+  experimentRuns = [],
 }: {
   fullAnimals: Animal[];
   colonyResults: ColonyResult[];
   cohorts: Cohort[];
+  experimentRuns?: { id: string; name: string; status?: string | null }[];
 }) {
   const [selectedTimepoint, setSelectedTimepoint] = useState<string>("__all__");
   const [selectedExperiment, setSelectedExperiment] = useState<string>("__all__");
+  // Run scope for the PI portal. "__all__" keeps the previous cross-run
+  // behavior; picking a run filters colonyResults (and therefore every
+  // downstream selector) to rows belonging to that run. Rows with no
+  // experiment_run_id — legacy data — are only shown in the "__all__"
+  // view, so a PI who picks a specific run never accidentally mixes
+  // legacy results with the run they're reviewing.
+  const [selectedRunId, setSelectedRunId] = useState<string>("__all__");
+
+  // Only show runs that actually have results attached, so the dropdown
+  // doesn't list empty runs.
+  const runsWithResults = useMemo(() => {
+    const runIdsInResults = new Set(
+      colonyResults
+        .map((r) => (r as unknown as { experiment_run_id?: string | null }).experiment_run_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+    );
+    return experimentRuns.filter((run) => runIdsInResults.has(run.id));
+  }, [colonyResults, experimentRuns]);
+
+  // Run-scoped results feed every other selector on this view.
+  const runScopedResults = useMemo(() => {
+    if (selectedRunId === "__all__") return colonyResults;
+    return colonyResults.filter(
+      (r) => (r as unknown as { experiment_run_id?: string | null }).experiment_run_id === selectedRunId,
+    );
+  }, [colonyResults, selectedRunId]);
 
   // Available experiments from results
   const availableExperiments = useMemo(() => {
-    const exps = new Set(colonyResults.map((r) => r.experiment_type));
+    const exps = new Set(runScopedResults.map((r) => r.experiment_type));
     return Array.from(exps).sort();
-  }, [colonyResults]);
+  }, [runScopedResults]);
 
   // Available timepoints from results
   const availableTimepoints = useMemo(() => {
-    const tps = new Set(colonyResults.map((r) => r.timepoint_age_days));
+    const tps = new Set(runScopedResults.map((r) => r.timepoint_age_days));
     return Array.from(tps).sort((a, b) => a - b);
-  }, [colonyResults]);
+  }, [runScopedResults]);
 
   // Filtered results
   const filteredResults = useMemo(() => {
-    return colonyResults.filter((r) => {
+    return runScopedResults.filter((r) => {
       if (selectedTimepoint !== "__all__" && r.timepoint_age_days !== Number(selectedTimepoint)) return false;
       if (selectedExperiment !== "__all__" && r.experiment_type !== selectedExperiment) return false;
       return true;
     });
-  }, [colonyResults, selectedTimepoint, selectedExperiment]);
+  }, [runScopedResults, selectedTimepoint, selectedExperiment]);
 
   // Group results by animal
   const animalResults = useMemo(() => {
@@ -316,6 +350,24 @@ function ColonyResultsView({
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
+        {runsWithResults.length > 0 && (
+          <div className="min-w-[180px]">
+            <Select value={selectedRunId} onValueChange={setSelectedRunId}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="Run" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All Runs</SelectItem>
+                {runsWithResults.map((run) => (
+                  <SelectItem key={run.id} value={run.id}>
+                    {run.name}
+                    {run.status ? ` (${run.status})` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <div className="min-w-[140px]">
           <Select value={selectedTimepoint} onValueChange={setSelectedTimepoint}>
             <SelectTrigger className="h-8 text-xs">
@@ -1994,6 +2046,7 @@ export default function PIPortalPage({ token }: { token: string }) {
                   fullAnimals={data.full_animals}
                   colonyResults={data.colony_results}
                   cohorts={data.cohorts}
+                  experimentRuns={data.experiment_runs || []}
                 />
               </TabsContent>
 

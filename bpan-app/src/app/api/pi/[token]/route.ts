@@ -80,6 +80,7 @@ export async function GET(
     let colonyResults: unknown[] = [];
     let cohorts: unknown[] = [];
     let timepoints: unknown[] = [];
+    let experimentRuns: unknown[] = [];
     let calendarEvents: unknown[] = [];
     let meetingActions: unknown[] = [];
     let sharedTasks: unknown[] = [];
@@ -168,16 +169,20 @@ export async function GET(
       });
     }
 
-    // Fetch colony results, cohorts, and timepoints for results/analysis views
+    // Fetch colony results, cohorts, timepoints, and experiment runs so
+    // the PI portal can scope the results / analysis views by run. Runs
+    // are low-volume (one per cohort batch) so we just pull them all.
     if (canSee.includes("colony_results")) {
-      const [resultsRes, cohortsRes, timepointsRes] = await Promise.all([
+      const [resultsRes, cohortsRes, timepointsRes, runsRes] = await Promise.all([
         supabase.from("colony_results").select("*").eq("user_id", userId).order("timepoint_age_days"),
         supabase.from("cohorts").select("*").eq("user_id", userId).order("name"),
         supabase.from("colony_timepoints").select("*").eq("user_id", userId).order("sort_order"),
+        supabase.from("experiment_runs").select("id,name,status,created_at").eq("user_id", userId).order("created_at"),
       ]);
       colonyResults = resultsRes.data || [];
       cohorts = cohortsRes.data || [];
       timepoints = timepointsRes.data || [];
+      experimentRuns = runsRes.data || [];
     }
 
     if (canSee.includes("calendar") || canSee.includes("timeline") || canSee.includes("experiments")) {
@@ -280,6 +285,7 @@ export async function GET(
       colony_results: colonyResults,
       cohorts,
       timepoints,
+      experiment_runs: experimentRuns,
       calendar_events: calendarEvents,
       meeting_actions: meetingActions,
       shared_tasks: sharedTasks,
