@@ -3946,6 +3946,7 @@ export function ColonyAnalysisPanel({
               measureLabels={measureLabels}
               groups={availableGroups}
               customGroupOrder={customGroupOrder}
+              runName={selectedRun?.name || null}
               initialConfig={visualizationDraft}
               initialFigureStudioConfig={figureStudioDraft}
               result={savedResult}
@@ -6564,6 +6565,7 @@ function VisualizationPanel({
   measureLabels,
   groups,
   customGroupOrder,
+  runName,
   initialConfig,
   initialFigureStudioConfig,
   result,
@@ -6581,6 +6583,10 @@ function VisualizationPanel({
   // bucketed by primary group using this order, then sorted by
   // timepoint ascending within each bucket.
   customGroupOrder?: string[];
+  // Name of the currently selected run (if any) — used in the per-dot
+  // hover tooltip on bar charts to satisfy the user's requested format
+  // "BPAN 3-4 . 30 days . LDB . run1". Null when viewing non-run data.
+  runName?: string | null;
   initialConfig?: ColonyAnalysisVisualizationDraft;
   initialFigureStudioConfig?: FigureStudioDraft;
   result: Record<string, unknown> | null;
@@ -7254,7 +7260,7 @@ function VisualizationPanel({
                     ? `${r.timepoint} days`
                     : null,
                   r.experiment ? String(r.experiment) : null,
-                  selectedRun?.name ? String(selectedRun.name) : null,
+                  runName || null,
                 ]
                   .filter(Boolean)
                   .join(" · "),
