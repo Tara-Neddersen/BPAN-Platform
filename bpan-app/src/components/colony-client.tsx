@@ -193,6 +193,13 @@ function timepointProtocolPreview(tp: ColonyTimepoint) {
 interface ColonyClientProps {
   defaultTab?: string;
   initialFilterCohort?: string;
+  /**
+   * Shared selected run id carried in the `run` URL param. When present, the
+   * Tracker, Results, and Analysis tabs seed their run selection from it so the
+   * choice survives a tab switch. When absent (null), each tab keeps its own
+   * existing default. "__all__" is a valid value (means "All runs").
+   */
+  initialRunId?: string | null;
   showTabList?: boolean;
   initialOpenAnimalDialog?: boolean;
   initialOpenPiAccessDialog?: boolean;
@@ -354,6 +361,7 @@ function convertDriveUrl(url: string): string {
 export function ColonyClient({
   defaultTab = "animals",
   initialFilterCohort = "all",
+  initialRunId = null,
   showTabList = true,
   initialOpenAnimalDialog = false,
   initialOpenPiAccessDialog = false,
@@ -413,12 +421,28 @@ export function ColonyClient({
     setActiveTab(validTabs.current.has(defaultTab) ? defaultTab : "animals");
   }, [defaultTab]);
 
+  // Shared selected run carried across the Tracker/Results/Analysis tabs via the
+  // `run` URL param. Each tab keeps its own local run state as the source of
+  // truth for its own rendering; this value is just the cross-tab carrier that
+  // seeds a tab when it (re)mounts and is updated when a tab's run changes.
+  const [sharedRunId, setSharedRunId] = useState<string | null>(initialRunId ?? null);
+  useEffect(() => {
+    setSharedRunId(initialRunId ?? null);
+  }, [initialRunId]);
+
   function handleTabChange(nextTab: string) {
     setActiveTab(nextTab);
-    router.replace(buildColonyUrl(nextTab, filterCohort), { scroll: false });
+    router.replace(buildColonyUrl(nextTab, filterCohort, undefined, sharedRunId), { scroll: false });
   }
 
-  function buildColonyUrl(tab: string, cohort: string, create?: "animal") {
+  // Persist a tab's run selection into the shared `run` URL param so it survives
+  // a tab switch. "__all__" round-trips as run=__all__; a null clears the param.
+  function handleRunChange(runId: string | null) {
+    setSharedRunId(runId);
+    router.replace(buildColonyUrl(activeTab, filterCohort, undefined, runId), { scroll: false });
+  }
+
+  function buildColonyUrl(tab: string, cohort: string, create?: "animal", run?: string | null) {
     const params = new URLSearchParams();
     if (tab !== "animals") {
       params.set("tab", tab);
@@ -429,12 +453,15 @@ export function ColonyClient({
     if (create) {
       params.set("create", create);
     }
+    if (run) {
+      params.set("run", run);
+    }
     const query = params.toString();
     return query ? `/colony?${query}` : "/colony";
   }
 
   function clearCreateParam() {
-    router.replace(buildColonyUrl(activeTab, filterCohort), { scroll: false });
+    router.replace(buildColonyUrl(activeTab, filterCohort, undefined, sharedRunId), { scroll: false });
   }
 
   // Cursor-based pagination helper for large tables (client-side)
@@ -1762,6 +1789,8 @@ export function ColonyClient({
             runAssignments={runAssignments}
             runTimepoints={runTimepoints}
             runTimepointExperiments={runTimepointExperiments}
+            initialRunId={sharedRunId}
+            onRunChange={handleRunChange}
             onBatchUpdateStatus={actions.batchUpdateExperimentStatus}
             onBatchUpdated={refetchAll}
           />
@@ -1780,6 +1809,8 @@ export function ColonyClient({
             runTimepointExperiments={runTimepointExperiments}
             runExperimentScheduleSteps={runExperimentScheduleSteps}
             runScheduleBlocks={runScheduleBlocks}
+            initialRunId={sharedRunId}
+            onRunChange={handleRunChange}
             batchUpsertColonyResults={async (tp, exp, entries, options) => {
               const result = await batchUpsertColonyResults(tp, exp, entries, options);
               if (result.success) await refetchAll();
@@ -1819,6 +1850,8 @@ export function ColonyClient({
             runAssignments={runAssignments}
             runTimepoints={runTimepoints}
             runTimepointExperiments={runTimepointExperiments}
+            initialRunId={sharedRunId}
+            onRunChange={handleRunChange}
             savedAnalysisDatasets={colonyAnalysisDatasets}
             savedAnalysisRevisions={colonyAnalysisRevisions}
             saveAnalysisRevision={async (payload) => {

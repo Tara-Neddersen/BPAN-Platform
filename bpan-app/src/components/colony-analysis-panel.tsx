@@ -1396,6 +1396,10 @@ interface ColonyAnalysisPanelProps {
   runAssignments: RunAssignment[];
   runTimepoints: RunTimepoint[];
   runTimepointExperiments: RunTimepointExperiment[];
+  /** Shared run id from the `run` URL param. Seeds the initial selection when present; falls back to "__all__" otherwise or when it doesn't match a real run. */
+  initialRunId?: string | null;
+  /** Persist the selected run to the shared `run` URL param so it survives tab switches. */
+  onRunChange?: (runId: string | null) => void;
   savedAnalysisDatasets: Dataset[];
   savedAnalysisRevisions: Analysis[];
   saveAnalysisRevision: (payload: {
@@ -2098,6 +2102,8 @@ export function ColonyAnalysisPanel({
   runAssignments,
   runTimepoints,
   runTimepointExperiments,
+  initialRunId = null,
+  onRunChange,
   savedAnalysisDatasets,
   savedAnalysisRevisions,
   saveAnalysisRevision,
@@ -2105,7 +2111,10 @@ export function ColonyAnalysisPanel({
   updateAnalysisRevisionMetadata,
 }: ColonyAnalysisPanelProps) {
   // ── Filter state ──
-  const [activeRunId, setActiveRunId] = useState<string>("__all__");
+  // Seed from the shared `run` URL param when provided; otherwise keep the
+  // existing default ("__all__"). Invalid ids are reconciled to "__all__" by
+  // `resolvedRunId` below, so no crash if the id doesn't match a real run.
+  const [activeRunId, setActiveRunId] = useState<string>(initialRunId || "__all__");
   const [selectedExperiment, setSelectedExperiment] = useState<string>(
     () => colonyResults[0]?.experiment_type || "__all__"
   );
@@ -2167,6 +2176,13 @@ export function ColonyAnalysisPanel({
   const visibleRuns = useMemo(() => experimentRuns.filter((run) => run.status !== "cancelled"), [experimentRuns]);
   const resolvedRunId =
     activeRunId === "__all__" || visibleRuns.some((run) => run.id === activeRunId) ? activeRunId : "__all__";
+  // Update local run state (immediate source of truth for this tab) and persist
+  // the choice to the shared `run` URL param so it survives a tab switch. Only
+  // the run *selector* writes back — loading a saved analysis scope does not.
+  const handleRunSelect = useCallback((runId: string) => {
+    setActiveRunId(runId);
+    onRunChange?.(runId);
+  }, [onRunChange]);
   const selectedRun = useMemo(
     () => visibleRuns.find((run) => run.id === resolvedRunId) || null,
     [resolvedRunId, visibleRuns],
@@ -3383,7 +3399,7 @@ export function ColonyAnalysisPanel({
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <Label className="text-xs mb-1 block">Run Scope</Label>
-              <Select value={resolvedRunId} onValueChange={setActiveRunId}>
+              <Select value={resolvedRunId} onValueChange={handleRunSelect}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>

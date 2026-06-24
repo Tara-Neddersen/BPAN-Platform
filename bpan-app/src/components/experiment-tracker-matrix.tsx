@@ -96,6 +96,10 @@ interface ExperimentTrackerMatrixProps {
   runAssignments: RunAssignment[];
   runTimepoints: RunTimepoint[];
   runTimepointExperiments: RunTimepointExperiment[];
+  /** Shared run id from the `run` URL param. Seeds the initial selection when present; falls back to "__all__" otherwise or when it doesn't match a real run. */
+  initialRunId?: string | null;
+  /** Persist the selected run to the shared `run` URL param so it survives tab switches. */
+  onRunChange?: (runId: string | null) => void;
   onBatchUpdateStatus?: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string, notes?: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
   onBatchUpdated?: () => Promise<void> | void;
 }
@@ -139,11 +143,16 @@ export function ExperimentTrackerMatrix({
   runAssignments,
   runTimepoints,
   runTimepointExperiments,
+  initialRunId = null,
+  onRunChange,
   onBatchUpdateStatus,
   onBatchUpdated,
 }: ExperimentTrackerMatrixProps) {
   const router = useRouter();
-  const [activeRunId, setActiveRunId] = useState("__all__");
+  // Seed from the shared `run` URL param when provided; otherwise keep the
+  // existing default ("__all__"). Invalid ids are reconciled to "__all__" by
+  // `resolvedRunId` below, so no crash if the id doesn't match a real run.
+  const [activeRunId, setActiveRunId] = useState(initialRunId || "__all__");
   const [filterCohort, setFilterCohort] = useState("all");
   const [sortKey, setSortKey] = useState<"cohort" | "identifier" | "genotype" | "sex" | "completion">("cohort");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -155,6 +164,13 @@ export function ExperimentTrackerMatrix({
   const [batchSkipReason, setBatchSkipReason] = useState<string>("");
   const [isPending, startTransition] = useTransition();
   const [batchResult, setBatchResult] = useState<string | null>(null);
+
+  // Update local run state (immediate source of truth for this tab) and persist
+  // the choice to the shared `run` URL param so it survives a tab switch.
+  const handleRunSelect = useCallback((runId: string) => {
+    setActiveRunId(runId);
+    onRunChange?.(runId);
+  }, [onRunChange]);
 
   const resetBatch = useCallback(() => {
     setBatchCohorts(new Set());
@@ -464,7 +480,7 @@ export function ExperimentTrackerMatrix({
                 {summary.completed}/{summary.total} done
               </div>
             </div>
-            <Select value={resolvedRunId} onValueChange={setActiveRunId}>
+            <Select value={resolvedRunId} onValueChange={handleRunSelect}>
               <SelectTrigger className="w-[180px]">
                 <SelectValue placeholder="All Runs / Legacy" />
               </SelectTrigger>

@@ -137,6 +137,7 @@ async function fetchOptionalRows(supabase: unknown, table: string, orderBy?: Arr
 interface ColonyPageViewOptions {
   defaultTab?: string;
   initialFilterCohort?: string;
+  initialRunId?: string | null;
   title?: string;
   description?: string;
   showTabList?: boolean;
@@ -148,6 +149,7 @@ interface ColonyPageViewOptions {
 export async function renderColonyPageView({
   defaultTab = "animals",
   initialFilterCohort = "all",
+  initialRunId = null,
   title = "Mouse Colony",
   description = "Manage breeder cages, cohorts, animals, experiment schedules, meetings, and PI access.",
   showTabList = true,
@@ -289,6 +291,7 @@ export async function renderColonyPageView({
         <ColonyClient
           defaultTab={defaultTab}
           initialFilterCohort={initialFilterCohort}
+          initialRunId={initialRunId}
           showTabList={showTabList}
           initialOpenAnimalDialog={initialOpenAnimalDialog}
           initialOpenPiAccessDialog={initialOpenPiAccessDialog}

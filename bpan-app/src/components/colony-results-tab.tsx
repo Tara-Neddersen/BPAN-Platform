@@ -412,6 +412,10 @@ interface ColonyResultsTabProps {
   runTimepointExperiments?: RunTimepointExperiment[];
   runExperimentScheduleSteps?: RunExperimentScheduleStep[];
   runScheduleBlocks?: RunScheduleBlock[];
+  /** Shared run id from the `run` URL param. Seeds the initial selection when it matches a real run (or "__legacy__"); otherwise falls back to the existing default (first run, else "__legacy__"). Note: "__all__" is NOT a valid value here and falls back. */
+  initialRunId?: string | null;
+  /** Persist the selected run to the shared `run` URL param so it survives tab switches. */
+  onRunChange?: (runId: string | null) => void;
   batchUpsertColonyResults: (
     timepointAgeDays: number,
     experimentType: string,
@@ -464,6 +468,8 @@ export function ColonyResultsTab({
   runTimepointExperiments: runTimepointExperimentRows = [],
   runExperimentScheduleSteps = [],
   runScheduleBlocks = [],
+  initialRunId = null,
+  onRunChange,
   batchUpsertColonyResults,
   reconcileTrackerFromExistingColonyResults,
   deleteColonyResultMeasureColumn,
@@ -490,7 +496,18 @@ export function ColonyResultsTab({
   const [pendingSaveEntries, setPendingSaveEntries] = useState<SaveEntry[] | null>(null);
   const [pendingClearedRowsCount, setPendingClearedRowsCount] = useState(0);
   const [emptyStatusChoice, setEmptyStatusChoice] = useState<"skipped" | "pending" | "scheduled" | "leave">("skipped");
-  const [activeRunId, setActiveRunId] = useState<string>(experimentRuns[0]?.id || "__legacy__");
+  // Seed from the shared `run` URL param when it names a valid run-tab value
+  // ("__legacy__" or a real, non-cancelled run id). "__all__" is not a tab here,
+  // so it (and any unknown id) falls back to the existing default behavior.
+  const [activeRunId, setActiveRunId] = useState<string>(() => {
+    const defaultRunId = experimentRuns[0]?.id || "__legacy__";
+    if (!initialRunId) return defaultRunId;
+    if (initialRunId === "__legacy__") return "__legacy__";
+    const matches = experimentRuns.some(
+      (run) => run.id === initialRunId && run.status !== "cancelled",
+    );
+    return matches ? initialRunId : defaultRunId;
+  });
   const [activeTimepoint, setActiveTimepoint] = useState<string>(
     timepoints.length > 0 ? String(timepoints[0].age_days) : "30"
   );
@@ -640,6 +657,12 @@ export function ColonyResultsTab({
     () => experimentRuns.filter((run) => run.status !== "cancelled"),
     [experimentRuns]
   );
+  // Update local run state (immediate source of truth for this tab) and persist
+  // the choice to the shared `run` URL param so it survives a tab switch.
+  const handleRunSelect = useCallback((runId: string) => {
+    setActiveRunId(runId);
+    onRunChange?.(runId);
+  }, [onRunChange]);
   const selectedRun = useMemo(
     () => visibleRuns.find((run) => run.id === activeRunId) || null,
     [activeRunId, visibleRuns]
@@ -1958,7 +1981,7 @@ export function ColonyResultsTab({
       </Dialog>
 
       {visibleRuns.length > 0 && (
-        <Tabs value={activeRunId} onValueChange={setActiveRunId}>
+        <Tabs value={activeRunId} onValueChange={handleRunSelect}>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <TabsList className="h-auto gap-1 rounded-xl bg-muted/60 p-1">
               <TabsTrigger value="__legacy__" className="px-4 py-2 text-sm font-semibold">
