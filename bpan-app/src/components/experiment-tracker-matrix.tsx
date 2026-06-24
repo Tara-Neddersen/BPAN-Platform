@@ -145,6 +145,8 @@ export function ExperimentTrackerMatrix({
   const router = useRouter();
   const [activeRunId, setActiveRunId] = useState("__all__");
   const [filterCohort, setFilterCohort] = useState("all");
+  const [sortKey, setSortKey] = useState<"cohort" | "identifier" | "genotype" | "sex" | "completion">("cohort");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchCohorts, setBatchCohorts] = useState<Set<string>>(new Set());
   const [batchTps, setBatchTps] = useState<Set<number>>(new Set());
@@ -234,7 +236,8 @@ export function ExperimentTrackerMatrix({
     return types;
   }, [experiments, selectedRun, selectedRunExperiments, sortedTimepoints]);
 
-  // Filter animals
+  // Filter animals (sorting is applied later, once per-row completion counts
+  // are available — see sortedAnimals below).
   const filteredAnimals = useMemo(() => {
     let list = animals.filter((a) => a.status === "active");
     if (filterCohort !== "all") {
@@ -243,14 +246,8 @@ export function ExperimentTrackerMatrix({
     if (selectedRun) {
       list = list.filter((animal) => animalMatchesRunAssignments(animal, selectedRunAssignments));
     }
-    // Sort by cohort then identifier
-    return list.sort((a, b) => {
-      const cohortA = cohorts.find((c) => c.id === a.cohort_id)?.name || "";
-      const cohortB = cohorts.find((c) => c.id === b.cohort_id)?.name || "";
-      if (cohortA !== cohortB) return cohortA.localeCompare(cohortB, undefined, { numeric: true });
-      return a.identifier.localeCompare(b.identifier, undefined, { numeric: true });
-    });
-  }, [animals, filterCohort, cohorts, selectedRun, selectedRunAssignments]);
+    return list;
+  }, [animals, filterCohort, selectedRun, selectedRunAssignments]);
 
   // Build a lookup: animalId -> timepointAge -> experimentType -> status
   const statusMap = useMemo(() => {
@@ -385,6 +382,70 @@ export function ExperimentTrackerMatrix({
     return groups;
   }, [selectedRun, selectedRunExperiments, selectedRunTimepoints, sortedTimepoints, getTypesForTp]);
 
+  // Per-animal completed count over the visible columns. Reuses the exact same
+  // status resolution as the rendered cells (completedResultMap → statusMap),
+  // so sorting by completion matches the icons shown in each row.
+  const completedByAnimal = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const animal of filteredAnimals) {
+      const animalStatuses = statusMap.get(animal.id);
+      const resultCompletions = completedResultMap.get(animal.id);
+      let count = 0;
+      for (const col of columns) {
+        const st = resultCompletions?.has(`${col.tpAge}::${col.expType}`)
+          ? "completed"
+          : animalStatuses?.get(col.tpAge)?.get(col.expType);
+        if (st === "completed") count++;
+      }
+      map.set(animal.id, count);
+    }
+    return map;
+  }, [filteredAnimals, columns, completedResultMap, statusMap]);
+
+  // Apply user-controlled sort. Default (cohort → identifier, ascending) leaves
+  // ordering identical to the previous behavior.
+  const cohortNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of cohorts) m.set(c.id, c.name);
+    return m;
+  }, [cohorts]);
+
+  const sortedAnimals = useMemo(() => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    const byCohortThenId = (a: Animal, b: Animal) => {
+      const cohortA = cohortNameById.get(a.cohort_id) || "";
+      const cohortB = cohortNameById.get(b.cohort_id) || "";
+      if (cohortA !== cohortB) return cohortA.localeCompare(cohortB, undefined, { numeric: true });
+      return a.identifier.localeCompare(b.identifier, undefined, { numeric: true });
+    };
+
+    const compare = (a: Animal, b: Animal): number => {
+      let primary = 0;
+      switch (sortKey) {
+        case "cohort":
+          // Default ordering: cohort then identifier as the natural tiebreak.
+          return byCohortThenId(a, b) * dir;
+        case "identifier":
+          primary = a.identifier.localeCompare(b.identifier, undefined, { numeric: true });
+          break;
+        case "genotype":
+          primary = (a.genotype || "").localeCompare(b.genotype || "", undefined, { numeric: true });
+          break;
+        case "sex":
+          primary = (a.sex || "").localeCompare(b.sex || "", undefined, { numeric: true });
+          break;
+        case "completion":
+          primary = (completedByAnimal.get(a.id) || 0) - (completedByAnimal.get(b.id) || 0);
+          break;
+      }
+      if (primary !== 0) return primary * dir;
+      // Stable, sensible tiebreak so equal keys stay grouped predictably.
+      return byCohortThenId(a, b);
+    };
+
+    return [...filteredAnimals].sort(compare);
+  }, [filteredAnimals, sortKey, sortDir, cohortNameById, completedByAnimal]);
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -430,6 +491,32 @@ export function ExperimentTrackerMatrix({
                 ))}
               </SelectContent>
             </Select>
+            {/* Sort */}
+            <Select
+              value={sortKey}
+              onValueChange={(v) => setSortKey(v as typeof sortKey)}
+            >
+              <SelectTrigger className="w-[150px]">
+                <SelectValue placeholder="Sort rows" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="cohort">Sort: Cohort</SelectItem>
+                <SelectItem value="identifier">Sort: Animal ID</SelectItem>
+                <SelectItem value="genotype">Sort: Genotype</SelectItem>
+                <SelectItem value="sex">Sort: Sex</SelectItem>
+                <SelectItem value="completion">Sort: Completion</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              className="px-2"
+              title={sortDir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
+              aria-label={sortDir === "asc" ? "Sort ascending" : "Sort descending"}
+              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+            >
+              {sortDir === "asc" ? "↑" : "↓"}
+            </Button>
           </div>
         </div>
 
@@ -688,20 +775,14 @@ export function ExperimentTrackerMatrix({
               </thead>
 
               <tbody>
-                {filteredAnimals.map((animal, rowIdx) => {
+                {sortedAnimals.map((animal, rowIdx) => {
                   const cohort = cohorts.find((c) => c.id === animal.cohort_id);
                   const animalStatuses = statusMap.get(animal.id);
                   const resultCompletions = completedResultMap.get(animal.id) || new Set<string>();
 
-                  // Count completed for this animal
-                  let animalCompleted = 0;
+                  // Reuse the precomputed per-animal completed count.
+                  const animalCompleted = completedByAnimal.get(animal.id) || 0;
                   const animalTotal = columns.length;
-                  for (const col of columns) {
-                    const st = resultCompletions.has(`${col.tpAge}::${col.expType}`)
-                      ? "completed"
-                      : animalStatuses?.get(col.tpAge)?.get(col.expType);
-                    if (st === "completed") animalCompleted++;
-                  }
 
                   return (
                     <tr
