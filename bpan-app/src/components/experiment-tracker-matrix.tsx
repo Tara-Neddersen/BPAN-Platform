@@ -712,9 +712,7 @@ export function ExperimentTrackerMatrix({
                     >
                       {/* Animal name cell */}
                       <td
-                        className={`sticky left-0 z-20 w-[160px] min-w-[160px] px-3 py-1.5 border-r whitespace-nowrap ${
-                          rowIdx % 2 === 0 ? "bg-background" : "bg-muted/5"
-                        }`}
+                        className="sticky left-0 z-20 w-[160px] min-w-[160px] px-3 py-1.5 border-r whitespace-nowrap bg-background"
                       >
                         <div className="flex items-center gap-2">
                           <div>
@@ -738,9 +736,7 @@ export function ExperimentTrackerMatrix({
 
                       {/* Genotype cell (second sticky column) */}
                       <td
-                        className={`sticky left-[160px] z-20 w-[64px] min-w-[64px] px-2 py-1.5 border-r text-center ${
-                          rowIdx % 2 === 0 ? "bg-background" : "bg-muted/5"
-                        } shadow-[6px_0_10px_-10px_rgba(15,23,42,0.45)]`}
+                        className="sticky left-[160px] z-20 w-[64px] min-w-[64px] px-2 py-1.5 border-r text-center bg-background shadow-[6px_0_10px_-10px_rgba(15,23,42,0.45)]"
                       >
                         <Badge
                           variant="secondary"

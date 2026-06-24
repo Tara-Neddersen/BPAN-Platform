@@ -2531,9 +2531,9 @@ function CohortGroup({
               : "bg-background";
 
           const stickyCellBackgroundClass = isDirty
-            ? "bg-amber-50 dark:bg-amber-950/35"
+            ? "bg-amber-50 dark:bg-amber-950"
             : hasData
-              ? "bg-emerald-50 dark:bg-emerald-950/20"
+              ? "bg-emerald-50 dark:bg-emerald-950"
               : "bg-background";
 
           return (

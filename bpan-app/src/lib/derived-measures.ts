@@ -175,6 +175,11 @@ export function applyAverageColumns<M extends Record<string, unknown>>(
   let next: M | null = null;
   for (const column of schemaColumns) {
     if (!isAverageColumn(column)) continue;
+    // Only compute/overwrite when the column actually declares source fields.
+    // A sourceless "average" column (or any future reuse of the average_score
+    // key / "derived" group for a real, user-entered field) must NOT be
+    // null-wiped here — guards against silent data loss.
+    if (getAverageSourceKeys(column).length === 0) continue;
     const computed = computeAverageColumnValue(column, next ?? measures);
     const nextValue = computed === null ? null : computed;
     const current = (next ?? measures)[column.key];
