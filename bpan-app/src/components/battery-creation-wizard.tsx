@@ -9,7 +9,6 @@ import {
   createExperiment,
   createProtocol,
   replaceExperimentTimepoints,
-  syncBatteryWindowsToColonyTimepoints,
   updateExperiment,
 } from "@/app/(protected)/experiments/actions";
 import { saveScheduleTemplate } from "@/app/(protected)/experiments/schedule-actions";
@@ -1331,26 +1330,13 @@ export function BatteryCreationWizard({
         );
         await replaceExperimentTimepoints(timepointForm);
 
-        await syncBatteryWindowsToColonyTimepoints({
-          batteryName: batteryName.trim(),
-          windows: timepointWindows
-            .map((window, index) => ({
-              label: window.name.trim(),
-              minAgeDays: Number(window.minAgeDays),
-              maxAgeDays: Number(window.maxAgeDays),
-              sortOrder: index,
-              experiments: Array.from(
-                new Map(
-                  layoutItems
-                    .filter((item) => item.timepointWindowId === window.id)
-                    .map((item) => experimentDrafts.find((draft) => draft.id === item.experimentId))
-                    .filter((draft): draft is ExperimentDraft => Boolean(draft?.name.trim()))
-                    .map((draft) => [draft.id, { name: draft.name.trim(), category: draft.category.trim() }]),
-                ).values(),
-              ),
-            }))
-            .filter((window) => window.label && Number.isFinite(window.minAgeDays)),
-        });
+        // NOTE: Batteries are intentionally kept fully separate from the Legacy
+        // colony system. We deliberately do NOT sync battery timepoint windows
+        // into colony_timepoints here — doing so previously polluted the Legacy
+        // Results view (and the colony scheduler) with battery-derived
+        // timepoints. A battery's data only surfaces once the user creates a
+        // run from it, and that run is isolated (its own run_timepoints /
+        // results), never touching Legacy or other runs.
 
         router.refresh();
         toast.success(editingBattery ? "Battery updated." : "Battery created.");
