@@ -22,6 +22,9 @@ import {
   SlidersHorizontal,
   Sigma,
   Palette,
+  Users,
+  Play,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -42,8 +45,15 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
@@ -2173,6 +2183,15 @@ export function ColonyAnalysisPanel({
   const [loadedRevisionKey, setLoadedRevisionKey] = useState<string>("draft");
   const [activeTab, setActiveTab] = useState("summary");
 
+  // Open/close state for the hero-driven configuration dialogs. These only
+  // control visibility — every control inside the dialogs is wired to the
+  // exact same handlers/state as before; nothing about the underlying
+  // computation, persistence, or data flow changed.
+  const [filtersDialogOpen, setFiltersDialogOpen] = useState(false);
+  const [animalsDialogOpen, setAnimalsDialogOpen] = useState(false);
+  const [savedDialogOpen, setSavedDialogOpen] = useState(false);
+  const [groupsDialogOpen, setGroupsDialogOpen] = useState(false);
+
   const visibleRuns = useMemo(() => experimentRuns.filter((run) => run.status !== "cancelled"), [experimentRuns]);
   const resolvedRunId =
     activeRunId === "__all__" || visibleRuns.some((run) => run.id === activeRunId) ? activeRunId : "__all__";
@@ -3216,187 +3235,137 @@ export function ColonyAnalysisPanel({
 
   return (
     <div className="space-y-5">
-      <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
-        <CardContent className="pt-4">
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div className="flex items-start gap-2">
-              <FolderOpen className="mt-0.5 h-4 w-4 text-slate-700" />
-              <div>
-                <p className="text-sm font-semibold leading-none text-slate-900">Saved Analyses</p>
-                <p className="mt-1 text-xs text-slate-600">
-                  Save this analysis as a reusable, versioned workflow with its own exclusions and outputs.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => exportAnalysisRows(flatData, "colony-analysis-included")}>
-                <Download className="h-3.5 w-3.5" /> Included CSV
-              </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => exportAnalysisRows(excludedFlatData, "colony-analysis-excluded")}>
-                <Download className="h-3.5 w-3.5" /> Excluded CSV
-              </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportSummary}>
-                <Download className="h-3.5 w-3.5" /> Summary
-              </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportReport}>
-                <Download className="h-3.5 w-3.5" /> Report
-              </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportFigurePacket}>
-                <Download className="h-3.5 w-3.5" /> Figure Packet
-              </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleExportResultTables} disabled={!savedResult}>
-                <Download className="h-3.5 w-3.5" /> Tables
-              </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => handleSaveAnalysis("new")}>
-                <Save className="h-3.5 w-3.5" /> Save as New
-              </Button>
-              <Button
-                size="sm"
-                className="gap-1.5"
-                disabled={selectedSavedAnalysisId === "__new__" || selectedRevisionFinalized}
-                onClick={() => handleSaveAnalysis("revision")}
-              >
-                <Save className="h-3.5 w-3.5" /> Save Revision
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={!savedResult}
-                onClick={handleDuplicateAnalysis}
-              >
-                <Copy className="h-3.5 w-3.5" /> Duplicate
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={selectedSavedAnalysisId === "__new__" || !selectedSavedRevision}
-                onClick={handleToggleFinalizeRevision}
-              >
-                <Check className="h-3.5 w-3.5" /> {selectedRevisionFinalized ? "Unlock" : "Finalize"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={selectedSavedAnalysisId === "__new__"}
-                onClick={handleDeleteAnalysis}
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Delete
-              </Button>
-            </div>
-          </div>
+      {/* ─── Compact hero ─── Configuration lives in the dialogs/menus below;
+          the main column is just this hero + the 5 tabs. */}
+      <div className="sticky top-0 z-30 -mx-1 rounded-xl border border-slate-200/80 bg-white/95 px-3 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/80">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Scope / filters summary chip + live count → Filters dialog */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setFiltersDialogOpen(true)}
+          >
+            <Filter className="h-3.5 w-3.5 text-cyan-700" />
+            <span className="font-medium">Scope</span>
+            <Badge variant="secondary" className="ml-0.5 border border-slate-200 bg-slate-50 text-[11px] text-slate-700">
+              {flatData.length} rows
+            </Badge>
+            <span className="hidden text-[11px] text-slate-500 sm:inline">
+              {selectedRun?.name || "All runs"} · {availableGroups.length} groups
+            </span>
+          </Button>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <Label className="text-xs mb-1 block">Analysis</Label>
-              <Select value={selectedSavedAnalysisId} onValueChange={setSelectedSavedAnalysisId}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__new__">New unsaved analysis</SelectItem>
-                  {savedAnalysisRoots.map((root) => (
-                    <SelectItem key={root.id} value={root.id}>{root.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Revision</Label>
-              <Select value={selectedRevisionId} onValueChange={setSelectedRevisionId} disabled={selectedSavedAnalysisId === "__new__"}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__latest__">Latest revision</SelectItem>
-                  {currentSavedRevisions.map((revision) => (
-                    <SelectItem key={revision.id} value={revision.id}>
-                      Rev {revision.revisionNumber} · {new Date(revision.createdAt).toLocaleString()}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Compare Against</Label>
-              <Select value={compareRevisionId} onValueChange={setCompareRevisionId} disabled={selectedSavedAnalysisId === "__new__"}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">No comparison</SelectItem>
-                  {currentSavedRevisions
-                    .filter((revision) => revision.id !== selectedSavedRevision?.id)
-                    .map((revision) => (
-                      <SelectItem key={revision.id} value={revision.id}>
-                        Rev {revision.revisionNumber}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Analysis Name</Label>
-              <Input value={analysisName} onChange={(event) => setAnalysisName(event.target.value)} placeholder="e.g. Run 1 30D Y-Maze" />
-            </div>
-            <div className="sm:col-span-2 lg:col-span-1">
-              <Label className="text-xs mb-1 block">Description</Label>
-              <Input value={analysisDescription} onChange={(event) => setAnalysisDescription(event.target.value)} placeholder="Optional methods / scope note" />
-            </div>
-          </div>
-          {(selectedSavedRevision || revisionDiff) && (
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              {selectedSavedRevision && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs text-slate-700">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">Revision State</span>
-                    {selectedRevisionFinalized ? (
-                      <Badge className="bg-emerald-600 text-white">Finalized</Badge>
-                    ) : (
-                      <Badge variant="outline">Editable</Badge>
-                    )}
-                  </div>
-                  <div className="mt-1">Revision {selectedSavedRevision.revisionNumber} saved {new Date(selectedSavedRevision.createdAt).toLocaleString()}.</div>
-                </div>
-              )}
-              {revisionDiff && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs text-slate-700">
-                  <div className="font-medium">{revisionDiff.fromRevision} → {revisionDiff.toRevision}</div>
-                  <div className="mt-1 space-y-1">
-                    {revisionDiff.changes.map((change) => (
-                      <div key={change}>• {change}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+          {/* Analysis-set summary → Manage Animals dialog */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            disabled={analysisAnimals.length === 0}
+            onClick={() => setAnimalsDialogOpen(true)}
+          >
+            <Users className="h-3.5 w-3.5 text-slate-700" />
+            <span className="font-medium">Animals</span>
+            <Badge variant="secondary" className="ml-0.5 border border-slate-200 bg-slate-50 text-[11px] text-slate-700">
+              {includedAnimalCount} in
+            </Badge>
+            {excludedAnimalCount > 0 && (
+              <Badge variant="outline" className="text-[11px] text-amber-700">{excludedAnimalCount} out</Badge>
+            )}
+          </Button>
+
+          {/* Groups → Groups dialog (draggable / toggleable chips) */}
+          {allGroupsInScope.length > 1 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setGroupsDialogOpen(true)}
+            >
+              <Layers className="h-3.5 w-3.5 text-slate-700" />
+              <span className="font-medium">Groups</span>
+              <Badge variant="secondary" className="ml-0.5 border border-slate-200 bg-slate-50 text-[11px] text-slate-700">
+                {allGroupsInScope.length - excludedGroups.size}/{allGroupsInScope.length}
+              </Badge>
+            </Button>
           )}
-        </CardContent>
-      </Card>
 
-      {/* ─── Filters ─── */}
-      <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
-        <CardContent className="pt-4">
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div className="flex items-start gap-2">
-              <Filter className="mt-0.5 h-4 w-4 text-cyan-700" />
-              <div>
-                <p className="text-sm font-semibold leading-none text-slate-900">Analysis Data</p>
-                <p className="mt-1 text-xs text-slate-600">
-                  Choose experiment scope before running stats or building plots.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Badge variant="outline" className="text-[11px]">{flatData.length} rows</Badge>
-              <Badge variant="outline" className="text-[11px]">{numericMeasureKeys.length} measures</Badge>
-              <Badge variant="outline" className="text-[11px]">{availableGroups.length} groups</Badge>
-              <Badge variant="outline" className="text-[11px]">{includedAnimalCount}/{analysisAnimals.length || 0} animals included</Badge>
-            </div>
+          {/* Saved analyses → Saved Analyses dialog (load/save/duplicate/finalize/delete + revisions) */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setSavedDialogOpen(true)}
+          >
+            <FolderOpen className="h-3.5 w-3.5 text-slate-700" />
+            <span className="font-medium">Saved</span>
+            {selectedSavedAnalysisId !== "__new__" && selectedRevisionFinalized && (
+              <Badge className="ml-0.5 bg-emerald-600 text-[11px] text-white">Final</Badge>
+            )}
+          </Button>
+
+          {/* Export → consolidated dropdown of every existing export action */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <Download className="h-3.5 w-3.5" />
+                <span className="font-medium">Export</span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuLabel>Export</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => exportAnalysisRows(flatData, "colony-analysis-included")}>
+                <Download className="mr-2 h-3.5 w-3.5" /> Included CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => exportAnalysisRows(excludedFlatData, "colony-analysis-excluded")}>
+                <Download className="mr-2 h-3.5 w-3.5" /> Excluded CSV
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={handleExportSummary}>
+                <Download className="mr-2 h-3.5 w-3.5" /> Summary
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleExportReport}>
+                <Download className="mr-2 h-3.5 w-3.5" /> Report
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleExportFigurePacket}>
+                <Download className="mr-2 h-3.5 w-3.5" /> Figure Packet
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleExportResultTables} disabled={!savedResult}>
+                <Download className="mr-2 h-3.5 w-3.5" /> Result Tables
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <div className="ml-auto" />
+
+          {/* Primary Run analysis button — opens the Statistics tab (same nav the
+              suggested-test buttons already use). No computation logic changed. */}
+          <Button
+            size="sm"
+            className="gap-1.5"
+            disabled={flatData.length === 0}
+            onClick={() => setActiveTab("analyze")}
+          >
+            <Play className="h-3.5 w-3.5" /> Run analysis
+          </Button>
+        </div>
+      </div>
+
+      {/* ─── Filters dialog ─── */}
+      <Dialog open={filtersDialogOpen} onOpenChange={setFiltersDialogOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Analysis Data</DialogTitle>
+            <DialogDescription>Choose experiment scope before running stats or building plots.</DialogDescription>
+          </DialogHeader>
+          <div className="mb-1 flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className="text-[11px]">{flatData.length} rows</Badge>
+            <Badge variant="outline" className="text-[11px]">{numericMeasureKeys.length} measures</Badge>
+            <Badge variant="outline" className="text-[11px]">{availableGroups.length} groups</Badge>
+            <Badge variant="outline" className="text-[11px]">{includedAnimalCount}/{analysisAnimals.length || 0} animals included</Badge>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label className="text-xs mb-1 block">Run Scope</Label>
               <Select value={resolvedRunId} onValueChange={handleRunSelect}>
@@ -3466,29 +3435,25 @@ export function ColonyAnalysisPanel({
               </Select>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </DialogContent>
+      </Dialog>
 
-      {analysisAnimals.length > 0 && (
-        <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
-          <CardHeader className="border-b bg-slate-50/70 py-3 px-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-sm font-semibold">Analysis Set</CardTitle>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Choose which animals are included before running stats, graphs, or exports.
-                </p>
-              </div>
+      {/* ─── Manage Animals dialog ─── */}
+      <Dialog open={animalsDialogOpen} onOpenChange={setAnimalsDialogOpen}>
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Analysis Set</DialogTitle>
+            <DialogDescription>Choose which animals are included before running stats, graphs, or exports.</DialogDescription>
+          </DialogHeader>
+          {analysisAnimals.length > 0 && (
+            <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-1.5">
                 <Badge variant="outline" className="text-[11px]">{includedAnimalCount} included</Badge>
                 {excludedAnimalCount > 0 && (
                   <Badge variant="outline" className="text-[11px] text-amber-700">{excludedAnimalCount} excluded</Badge>
                 )}
               </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3 pt-4">
-            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
               <Input
                 value={animalSearch}
                 onChange={(event) => setAnimalSearch(event.target.value)}
@@ -3713,95 +3678,161 @@ export function ColonyAnalysisPanel({
                 </tbody>
               </table>
             </div>
-          </CardContent>
-        </Card>
-      )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
-      {flatData.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center">
-          <Info className="h-8 w-8 mx-auto text-muted-foreground/30 mb-3" />
-          <p className="text-sm text-muted-foreground">
-            {scopedFlatData.length > 0
-              ? "All matching animals are currently excluded from this analysis set."
-              : "No data matches the current filters."}
-          </p>
-        </div>
-      ) : (
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
-            <CardContent className="space-y-4 pt-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Guided Workflow</p>
-                  <p className="mt-1 text-xs text-slate-600">
-                    Build an analysis set first, then let the panel suggest the most sensible behavioral tests for the data that remains.
-                  </p>
-                </div>
-                <Badge variant="secondary" className="border border-slate-200 bg-slate-50 text-slate-700">
-                  {includedAnimalCount} included / {excludedAnimalCount} excluded
-                </Badge>
-              </div>
+      {/* ─── Saved Analyses dialog ─── */}
+      <Dialog open={savedDialogOpen} onOpenChange={setSavedDialogOpen}>
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Saved Analyses</DialogTitle>
+            <DialogDescription>
+              Save this analysis as a reusable, versioned workflow with its own exclusions and outputs.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => handleSaveAnalysis("new")}>
+              <Save className="h-3.5 w-3.5" /> Save as New
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1.5"
+              disabled={selectedSavedAnalysisId === "__new__" || selectedRevisionFinalized}
+              onClick={() => handleSaveAnalysis("revision")}
+            >
+              <Save className="h-3.5 w-3.5" /> Save Revision
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={!savedResult}
+              onClick={handleDuplicateAnalysis}
+            >
+              <Copy className="h-3.5 w-3.5" /> Duplicate
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={selectedSavedAnalysisId === "__new__" || !selectedSavedRevision}
+              onClick={handleToggleFinalizeRevision}
+            >
+              <Check className="h-3.5 w-3.5" /> {selectedRevisionFinalized ? "Unlock" : "Finalize"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={selectedSavedAnalysisId === "__new__"}
+              onClick={handleDeleteAnalysis}
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete
+            </Button>
+          </div>
 
-              <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
-                {workflowSteps.map((step, index) => (
-                  <div
-                    key={step.title}
-                    className={`rounded-xl border px-3 py-2 text-xs ${
-                      step.done ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-slate-200 bg-slate-50 text-slate-600"
-                    }`}
-                  >
-                    <div className="font-medium">Step {index + 1}</div>
-                    <div className="mt-1">{step.title}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs font-medium text-slate-700">Suggested tests for this analysis set</p>
-                  <p className="text-[11px] text-slate-500">
-                    Suggestions update from the current scope, included animals, and available measures.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {suggestedTests.map((suggestion) => (
-                    <Button
-                      key={suggestion.testType}
-                      variant={statsDraft.testType === suggestion.testType ? "default" : "outline"}
-                      size="sm"
-                      className="h-auto max-w-full whitespace-normal text-left"
-                      onClick={() => {
-                        setStatsDraft((current) => ({ ...current, testType: suggestion.testType }));
-                        setActiveTab("analyze");
-                      }}
-                    >
-                      <span className="flex flex-col items-start py-0.5">
-                        <span>{suggestion.label}</span>
-                        <span className="text-[10px] opacity-80">{suggestion.reason}</span>
-                      </span>
-                    </Button>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label className="text-xs mb-1 block">Analysis</Label>
+              <Select value={selectedSavedAnalysisId} onValueChange={setSelectedSavedAnalysisId}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__new__">New unsaved analysis</SelectItem>
+                  {savedAnalysisRoots.map((root) => (
+                    <SelectItem key={root.id} value={root.id}>{root.name}</SelectItem>
                   ))}
-                  {suggestedTests.length === 0 && (
-                    <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-xs text-slate-500">
-                      Add more included animals or numeric measures to unlock guided test suggestions.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {allGroupsInScope.length > 1 && (
-            <Card className="border-slate-200">
-              <CardContent className="py-3 px-4 space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-medium text-slate-700">Groups in this analysis</p>
-                    <p className="text-[11px] text-slate-500">
-                      Click to toggle · drag to reorder bars. De-selected groups are dropped from the plot, summary, and every statistical test (ANOVA, t-test, brackets). Reorder affects both Genotype × Sex and the composite Genotype × Sex × Timepoint view.
-                    </p>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Revision</Label>
+              <Select value={selectedRevisionId} onValueChange={setSelectedRevisionId} disabled={selectedSavedAnalysisId === "__new__"}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__latest__">Latest revision</SelectItem>
+                  {currentSavedRevisions.map((revision) => (
+                    <SelectItem key={revision.id} value={revision.id}>
+                      Rev {revision.revisionNumber} · {new Date(revision.createdAt).toLocaleString()}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Compare Against</Label>
+              <Select value={compareRevisionId} onValueChange={setCompareRevisionId} disabled={selectedSavedAnalysisId === "__new__"}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No comparison</SelectItem>
+                  {currentSavedRevisions
+                    .filter((revision) => revision.id !== selectedSavedRevision?.id)
+                    .map((revision) => (
+                      <SelectItem key={revision.id} value={revision.id}>
+                        Rev {revision.revisionNumber}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Analysis Name</Label>
+              <Input value={analysisName} onChange={(event) => setAnalysisName(event.target.value)} placeholder="e.g. Run 1 30D Y-Maze" />
+            </div>
+            <div className="sm:col-span-2 lg:col-span-1">
+              <Label className="text-xs mb-1 block">Description</Label>
+              <Input value={analysisDescription} onChange={(event) => setAnalysisDescription(event.target.value)} placeholder="Optional methods / scope note" />
+            </div>
+          </div>
+          {(selectedSavedRevision || revisionDiff) && (
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {selectedSavedRevision && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs text-slate-700">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">Revision State</span>
+                    {selectedRevisionFinalized ? (
+                      <Badge className="bg-emerald-600 text-white">Finalized</Badge>
+                    ) : (
+                      <Badge variant="outline">Editable</Badge>
+                    )}
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="mt-1">Revision {selectedSavedRevision.revisionNumber} saved {new Date(selectedSavedRevision.createdAt).toLocaleString()}.</div>
+                </div>
+              )}
+              {revisionDiff && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs text-slate-700">
+                  <div className="font-medium">{revisionDiff.fromRevision} → {revisionDiff.toRevision}</div>
+                  <div className="mt-1 space-y-1">
+                    {revisionDiff.changes.map((change) => (
+                      <div key={change}>• {change}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Groups dialog ─── (draggable / toggleable group chips) */}
+      <Dialog open={groupsDialogOpen} onOpenChange={setGroupsDialogOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Groups in this analysis</DialogTitle>
+            <DialogDescription>
+              Click to toggle · drag to reorder bars. De-selected groups are dropped from the plot, summary, and every statistical test (ANOVA, t-test, brackets). Reorder affects both Genotype × Sex and the composite Genotype × Sex × Timepoint view.
+            </DialogDescription>
+          </DialogHeader>
+          {allGroupsInScope.length > 1 && (
+            <div className="space-y-2">
+                <div className="flex items-center justify-end gap-1">
                     {customGroupOrder.length > 0 && (
                       <Button
                         variant="ghost"
@@ -3822,7 +3853,6 @@ export function ColonyAnalysisPanel({
                         Include all
                       </Button>
                     )}
-                  </div>
                 </div>
                 <div
                   className="flex flex-wrap gap-2"
@@ -3905,9 +3935,84 @@ export function ColonyAnalysisPanel({
                     );
                   })}
                 </div>
-              </CardContent>
-            </Card>
+            </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {flatData.length === 0 ? (
+        <div className="rounded-lg border border-dashed p-12 text-center">
+          <Info className="h-8 w-8 mx-auto text-muted-foreground/30 mb-3" />
+          <p className="text-sm text-muted-foreground">
+            {scopedFlatData.length > 0
+              ? "All matching animals are currently excluded from this analysis set."
+              : "No data matches the current filters."}
+          </p>
+        </div>
+      ) : (
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+          <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
+            <CardContent className="space-y-4 pt-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Guided Workflow</p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Build an analysis set first, then let the panel suggest the most sensible behavioral tests for the data that remains.
+                  </p>
+                </div>
+                <Badge variant="secondary" className="border border-slate-200 bg-slate-50 text-slate-700">
+                  {includedAnimalCount} included / {excludedAnimalCount} excluded
+                </Badge>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+                {workflowSteps.map((step, index) => (
+                  <div
+                    key={step.title}
+                    className={`rounded-xl border px-3 py-2 text-xs ${
+                      step.done ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-slate-200 bg-slate-50 text-slate-600"
+                    }`}
+                  >
+                    <div className="font-medium">Step {index + 1}</div>
+                    <div className="mt-1">{step.title}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-medium text-slate-700">Suggested tests for this analysis set</p>
+                  <p className="text-[11px] text-slate-500">
+                    Suggestions update from the current scope, included animals, and available measures.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {suggestedTests.map((suggestion) => (
+                    <Button
+                      key={suggestion.testType}
+                      variant={statsDraft.testType === suggestion.testType ? "default" : "outline"}
+                      size="sm"
+                      className="h-auto max-w-full whitespace-normal text-left"
+                      onClick={() => {
+                        setStatsDraft((current) => ({ ...current, testType: suggestion.testType }));
+                        setActiveTab("analyze");
+                      }}
+                    >
+                      <span className="flex flex-col items-start py-0.5">
+                        <span>{suggestion.label}</span>
+                        <span className="text-[10px] opacity-80">{suggestion.reason}</span>
+                      </span>
+                    </Button>
+                  ))}
+                  {suggestedTests.length === 0 && (
+                    <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-xs text-slate-500">
+                      Add more included animals or numeric measures to unlock guided test suggestions.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <TabsList className="h-auto w-full justify-start gap-1 rounded-xl border border-slate-200 bg-slate-50/70 p-1">
             <TabsTrigger value="summary" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
