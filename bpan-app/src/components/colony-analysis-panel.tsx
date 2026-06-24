@@ -8,8 +8,6 @@ import {
   FlaskConical,
   Download,
   Table as TableIcon,
-  Filter,
-  TrendingUp,
   Info,
   Save,
   FolderOpen,
@@ -22,9 +20,7 @@ import {
   SlidersHorizontal,
   Sigma,
   Palette,
-  Users,
-  Play,
-  Layers,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -129,6 +125,19 @@ import {
 
 // Dynamically import Plotly
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
+
+// ─── Guided analysis wizard steps ───
+// Mirrors the battery-creation wizard's step model. Each step re-presents an
+// existing control cluster / panel as its body; no computation changed.
+type AnalysisWizardStep = "data" | "measure" | "animals" | "groups" | "statistics" | "review";
+const ANALYSIS_WIZARD_STEPS: Array<{ key: AnalysisWizardStep; label: string; description: string }> = [
+  { key: "data", label: "Data", description: "Pick the run, experiment, timepoint, and cohort scope for this analysis." },
+  { key: "measure", label: "Measure & chart", description: "Choose the outcome measure and chart type, then preview the figure." },
+  { key: "animals", label: "Animals", description: "Decide which animals are included and run the outlier screen." },
+  { key: "groups", label: "Groups", description: "Toggle and reorder the groups that appear in the plot and stats." },
+  { key: "statistics", label: "Statistics", description: "Choose and run the statistical test, then review the results." },
+  { key: "review", label: "Review & save", description: "Review the final figure and stats, then export, name, and save." },
+];
 
 // Deterministic pseudo-random offset in [-amplitude, +amplitude] keyed off a
 // stable seed string. Used to jitter individual data points on bar/dot
@@ -2181,16 +2190,17 @@ export function ColonyAnalysisPanel({
   );
   const [savedResult, setSavedResult] = useState<Record<string, unknown> | null>(null);
   const [loadedRevisionKey, setLoadedRevisionKey] = useState<string>("draft");
-  const [activeTab, setActiveTab] = useState("summary");
 
-  // Open/close state for the hero-driven configuration dialogs. These only
-  // control visibility — every control inside the dialogs is wired to the
-  // exact same handlers/state as before; nothing about the underlying
-  // computation, persistence, or data flow changed.
-  const [filtersDialogOpen, setFiltersDialogOpen] = useState(false);
-  const [animalsDialogOpen, setAnimalsDialogOpen] = useState(false);
-  const [savedDialogOpen, setSavedDialogOpen] = useState(false);
-  const [groupsDialogOpen, setGroupsDialogOpen] = useState(false);
+  // ── Guided-wizard navigation ──
+  // The Analysis tab is presented as a saved-analyses landing plus a
+  // step-by-step wizard (matching the battery-creation wizard). These two
+  // pieces of state ONLY control which view/step is on screen — every control
+  // inside each step is wired to the exact same handlers/state as before, so
+  // none of the chart/stats/data/persistence computation changed.
+  const [analysisView, setAnalysisView] = useState<"landing" | "wizard">("landing");
+  const [wizardStepIndex, setWizardStepIndex] = useState(0);
+  // "View data" affordance inside the Data/Review steps. Reuses DataTablePanel.
+  const [dataTableDialogOpen, setDataTableDialogOpen] = useState(false);
 
   const visibleRuns = useMemo(() => experimentRuns.filter((run) => run.status !== "cancelled"), [experimentRuns]);
   const resolvedRunId =
@@ -2675,31 +2685,6 @@ export function ColonyAnalysisPanel({
       visualizationDraft,
     ],
   );
-  const suggestedTests = useMemo(
-    () =>
-      suggestAnalysisTests({
-        flatData,
-        numericKeys: numericMeasureKeys,
-        hasMultipleTimepoints: Array.from(new Set(flatData.map((row) => row.timepoint))).length > 1,
-      }),
-    [flatData, numericMeasureKeys],
-  );
-  const workflowSteps = [
-    {
-      title: "Choose scope",
-      done:
-        resolvedRunId !== "__all__" ||
-        effectiveSelectedExperiment !== "__all__" ||
-        effectiveSelectedTimepoint !== "__all__" ||
-        selectedCohort !== "__all__",
-    },
-    { title: "Review animals", done: analysisAnimals.length > 0 },
-    { title: "Handle exclusions", done: excludedAnimalCount > 0 || flatData.length > 0 },
-    { title: "Pick a test", done: Boolean(statsDraft.measureKey) && suggestedTests.length > 0 },
-    { title: "Run statistics", done: Boolean(savedResult) },
-    { title: "Save revision", done: selectedSavedAnalysisId !== "__new__" },
-  ];
-
   /* eslint-disable react-hooks/set-state-in-effect -- saved-analysis selection must realign when the available revisions change. */
   useEffect(() => {
     if (savedAnalysisRoots.length === 0) return;
@@ -3221,6 +3206,109 @@ export function ColonyAnalysisPanel({
     toast.success("Structured result tables exported.");
   }, [analysisName, currentReportPayload, savedResult]);
 
+  // ── Landing / wizard navigation helpers ──
+  // These only move between the saved-analyses landing and the guided steps.
+  // The data-loading effect (keyed off selectedSavedRevision) still owns
+  // populating every draft; "Open" simply selects an analysis and jumps to
+  // the final Review step, exactly mirroring the old saved-analysis flow.
+  const currentWizardStep = ANALYSIS_WIZARD_STEPS[wizardStepIndex];
+
+  const startNewAnalysis = useCallback(() => {
+    // Reset back to an unsaved analysis and start at the first step. Clearing
+    // the selected id lets the "__new__" effect reset revision selectors.
+    setSelectedSavedAnalysisId("__new__");
+    setSelectedRevisionId("__latest__");
+    setCompareRevisionId("__none__");
+    setWizardStepIndex(0);
+    setAnalysisView("wizard");
+  }, []);
+
+  const openSavedAnalysis = useCallback((rootId: string) => {
+    // Selecting the root triggers the existing load effect, which hydrates the
+    // scope/exclusions/stats/visualization drafts + savedResult. Jump straight
+    // to Review so the loaded figure/stats are front and center.
+    setSelectedSavedAnalysisId(rootId);
+    setSelectedRevisionId("__latest__");
+    setWizardStepIndex(ANALYSIS_WIZARD_STEPS.length - 1);
+    setAnalysisView("wizard");
+  }, []);
+
+  const backToLanding = useCallback(() => {
+    setAnalysisView("landing");
+  }, []);
+
+  // Row-level delete on the landing. Reuses the SAME deleteAnalysis persistence
+  // prop as handleDeleteAnalysis — no computation changed, just an explicit id.
+  const handleDeleteAnalysisById = useCallback(
+    async (rootId: string, rootName: string) => {
+      if (!confirm(`Delete "${rootName}" and all of its revisions?`)) return;
+      try {
+        await deleteAnalysis(rootId);
+        toast.success("Saved analysis deleted.");
+        if (selectedSavedAnalysisId === rootId) {
+          setSelectedSavedAnalysisId("__new__");
+          setSelectedRevisionId("__latest__");
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to delete saved analysis.");
+      }
+    },
+    [deleteAnalysis, selectedSavedAnalysisId],
+  );
+
+  // Row-level duplicate on the landing. Reuses the SAME saveAnalysisRevision
+  // persistence prop, cloning the latest revision's already-persisted config +
+  // results envelope verbatim (no recomputation).
+  const handleDuplicateAnalysisById = useCallback(
+    async (rootId: string) => {
+      const root = savedAnalysisRoots.find((item) => item.id === rootId);
+      const latestRevision = (revisionsByAnalysisId.get(rootId) || [])[0] || null;
+      if (!root || !latestRevision) {
+        toast.error("Open the analysis first to duplicate it.");
+        return;
+      }
+      const payload = {
+        analysisId: null,
+        name: `${root.name || "Colony Analysis"} Copy`,
+        description: root.description || null,
+        config: {
+          ...(latestRevision.config || {}),
+          finalized: false,
+          finalizedAt: null,
+          duplicatedFromRevisionId: latestRevision.id,
+          revision_number: undefined,
+        } as unknown as Record<string, unknown>,
+        results: (latestRevision.results || {}) as unknown as Record<string, unknown>,
+        summaryText: latestRevision.summaryText || null,
+      };
+      try {
+        const result = await saveAnalysisRevision(payload);
+        if (result.success && result.analysisId) {
+          setSelectedSavedAnalysisId(result.analysisId);
+          setSelectedRevisionId(result.revisionId || "__latest__");
+          toast.success("Saved analysis duplicated.");
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to duplicate saved analysis.");
+      }
+    },
+    [revisionsByAnalysisId, savedAnalysisRoots, saveAnalysisRevision],
+  );
+
+  // Per-step gating — mirrors battery wizard's canMoveNext.
+  const canMoveNextStep = (() => {
+    switch (currentWizardStep.key) {
+      case "data":
+        // Must have a scope that produces rows before leaving Data.
+        return flatData.length > 0;
+      case "statistics":
+        // Encourage running a test, but don't hard-block reaching Review.
+        return true;
+      default:
+        return true;
+    }
+  })();
+
   if (colonyResults.length === 0) {
     return (
       <WorkspaceEmptyState
@@ -3233,219 +3321,95 @@ export function ColonyAnalysisPanel({
     );
   }
 
-  return (
-    <div className="space-y-5">
-      {/* ─── Compact hero ─── Configuration lives in the dialogs/menus below;
-          the main column is just this hero + the 5 tabs. */}
-      <div className="sticky top-0 z-30 -mx-1 rounded-xl border border-slate-200/80 bg-white/95 px-3 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/80">
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Scope / filters summary chip + live count → Filters dialog */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => setFiltersDialogOpen(true)}
-          >
-            <Filter className="h-3.5 w-3.5 text-cyan-700" />
-            <span className="font-medium">Scope</span>
-            <Badge variant="secondary" className="ml-0.5 border border-slate-200 bg-slate-50 text-[11px] text-slate-700">
-              {flatData.length} rows
-            </Badge>
-            <span className="hidden text-[11px] text-slate-500 sm:inline">
-              {selectedRun?.name || "All runs"} · {availableGroups.length} groups
-            </span>
-          </Button>
+  // ─────────────────────────────────────────────────────────────────────────
+  // Reusable control clusters. Each is the EXACT same JSX/handlers as before,
+  // just relocated so it can live inside a wizard step body (and, for the data
+  // table, inside a "view data" dialog). No computation changed.
+  // ─────────────────────────────────────────────────────────────────────────
 
-          {/* Analysis-set summary → Manage Animals dialog */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            disabled={analysisAnimals.length === 0}
-            onClick={() => setAnimalsDialogOpen(true)}
-          >
-            <Users className="h-3.5 w-3.5 text-slate-700" />
-            <span className="font-medium">Animals</span>
-            <Badge variant="secondary" className="ml-0.5 border border-slate-200 bg-slate-50 text-[11px] text-slate-700">
-              {includedAnimalCount} in
-            </Badge>
-            {excludedAnimalCount > 0 && (
-              <Badge variant="outline" className="text-[11px] text-amber-700">{excludedAnimalCount} out</Badge>
-            )}
-          </Button>
-
-          {/* Groups → Groups dialog (draggable / toggleable chips) */}
-          {allGroupsInScope.length > 1 && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => setGroupsDialogOpen(true)}
-            >
-              <Layers className="h-3.5 w-3.5 text-slate-700" />
-              <span className="font-medium">Groups</span>
-              <Badge variant="secondary" className="ml-0.5 border border-slate-200 bg-slate-50 text-[11px] text-slate-700">
-                {allGroupsInScope.length - excludedGroups.size}/{allGroupsInScope.length}
-              </Badge>
-            </Button>
-          )}
-
-          {/* Saved analyses → Saved Analyses dialog (load/save/duplicate/finalize/delete + revisions) */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => setSavedDialogOpen(true)}
-          >
-            <FolderOpen className="h-3.5 w-3.5 text-slate-700" />
-            <span className="font-medium">Saved</span>
-            {selectedSavedAnalysisId !== "__new__" && selectedRevisionFinalized && (
-              <Badge className="ml-0.5 bg-emerald-600 text-[11px] text-white">Final</Badge>
-            )}
-          </Button>
-
-          {/* Export → consolidated dropdown of every existing export action */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="gap-1.5">
-                <Download className="h-3.5 w-3.5" />
-                <span className="font-medium">Export</span>
-                <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuLabel>Export</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => exportAnalysisRows(flatData, "colony-analysis-included")}>
-                <Download className="mr-2 h-3.5 w-3.5" /> Included CSV
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => exportAnalysisRows(excludedFlatData, "colony-analysis-excluded")}>
-                <Download className="mr-2 h-3.5 w-3.5" /> Excluded CSV
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={handleExportSummary}>
-                <Download className="mr-2 h-3.5 w-3.5" /> Summary
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={handleExportReport}>
-                <Download className="mr-2 h-3.5 w-3.5" /> Report
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={handleExportFigurePacket}>
-                <Download className="mr-2 h-3.5 w-3.5" /> Figure Packet
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={handleExportResultTables} disabled={!savedResult}>
-                <Download className="mr-2 h-3.5 w-3.5" /> Result Tables
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <div className="ml-auto" />
-
-          {/* Primary Run analysis button — opens the Statistics tab (same nav the
-              suggested-test buttons already use). No computation logic changed. */}
-          <Button
-            size="sm"
-            className="gap-1.5"
-            disabled={flatData.length === 0}
-            onClick={() => setActiveTab("analyze")}
-          >
-            <Play className="h-3.5 w-3.5" /> Run analysis
-          </Button>
+  const scopeControls = (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant="outline" className="text-[11px]">{flatData.length} rows</Badge>
+        <Badge variant="outline" className="text-[11px]">{numericMeasureKeys.length} measures</Badge>
+        <Badge variant="outline" className="text-[11px]">{availableGroups.length} groups</Badge>
+        <Badge variant="outline" className="text-[11px]">{includedAnimalCount}/{analysisAnimals.length || 0} animals included</Badge>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <Label className="text-xs mb-1 block">Run Scope</Label>
+          <Select value={resolvedRunId} onValueChange={handleRunSelect}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All Runs / Legacy</SelectItem>
+              {visibleRuns.map((run) => (
+                <SelectItem key={run.id} value={run.id}>
+                  {run.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-xs mb-1 block">Experiment Type</Label>
+          <Select value={resolvedSelectedExperiment} onValueChange={setSelectedExperiment}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">All Experiments</SelectItem>
+                {availableExperiments.map((e) => (
+                <SelectItem key={e} value={e}>
+                  {selectedRun
+                    ? selectedRunExperiments.find((item) => item.experiment_key === e)?.label || EXPERIMENT_LABELS[e] || e
+                    : EXPERIMENT_LABELS[e] || e}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-xs mb-1 block">Timepoint</Label>
+          <Select value={effectiveSelectedTimepoint} onValueChange={setSelectedTimepoint}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All Timepoints</SelectItem>
+              {availableTimepoints.map((tp) => (
+                <SelectItem key={tp} value={String(tp)}>
+                  {selectedRun
+                    ? selectedRunTimepoints.find((item) => item.target_age_days === tp)?.label || `${tp} Day`
+                    : `${tp} Day`}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-xs mb-1 block">Cohort</Label>
+          <Select value={selectedCohort} onValueChange={setSelectedCohort}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All Cohorts</SelectItem>
+              {cohorts.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
+    </div>
+  );
 
-      {/* ─── Filters dialog ─── */}
-      <Dialog open={filtersDialogOpen} onOpenChange={setFiltersDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Analysis Data</DialogTitle>
-            <DialogDescription>Choose experiment scope before running stats or building plots.</DialogDescription>
-          </DialogHeader>
-          <div className="mb-1 flex flex-wrap items-center gap-1.5">
-            <Badge variant="outline" className="text-[11px]">{flatData.length} rows</Badge>
-            <Badge variant="outline" className="text-[11px]">{numericMeasureKeys.length} measures</Badge>
-            <Badge variant="outline" className="text-[11px]">{availableGroups.length} groups</Badge>
-            <Badge variant="outline" className="text-[11px]">{includedAnimalCount}/{analysisAnimals.length || 0} animals included</Badge>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <Label className="text-xs mb-1 block">Run Scope</Label>
-              <Select value={resolvedRunId} onValueChange={handleRunSelect}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">All Runs / Legacy</SelectItem>
-                  {visibleRuns.map((run) => (
-                    <SelectItem key={run.id} value={run.id}>
-                      {run.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Experiment Type</Label>
-              <Select value={resolvedSelectedExperiment} onValueChange={setSelectedExperiment}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__all__">All Experiments</SelectItem>
-                    {availableExperiments.map((e) => (
-                    <SelectItem key={e} value={e}>
-                      {selectedRun
-                        ? selectedRunExperiments.find((item) => item.experiment_key === e)?.label || EXPERIMENT_LABELS[e] || e
-                        : EXPERIMENT_LABELS[e] || e}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Timepoint</Label>
-              <Select value={effectiveSelectedTimepoint} onValueChange={setSelectedTimepoint}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">All Timepoints</SelectItem>
-                  {availableTimepoints.map((tp) => (
-                    <SelectItem key={tp} value={String(tp)}>
-                      {selectedRun
-                        ? selectedRunTimepoints.find((item) => item.target_age_days === tp)?.label || `${tp} Day`
-                        : `${tp} Day`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs mb-1 block">Cohort</Label>
-              <Select value={selectedCohort} onValueChange={setSelectedCohort}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">All Cohorts</SelectItem>
-                  {cohorts.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* ─── Manage Animals dialog ─── */}
-      <Dialog open={animalsDialogOpen} onOpenChange={setAnimalsDialogOpen}>
-        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>Analysis Set</DialogTitle>
-            <DialogDescription>Choose which animals are included before running stats, graphs, or exports.</DialogDescription>
-          </DialogHeader>
-          {analysisAnimals.length > 0 && (
+  const animalsControls =
+    analysisAnimals.length > 0 ? (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-1.5">
                 <Badge variant="outline" className="text-[11px]">{includedAnimalCount} included</Badge>
@@ -3679,19 +3643,15 @@ export function ColonyAnalysisPanel({
               </table>
             </div>
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
+    ) : (
+      <div className="rounded-lg border border-dashed border-slate-200 p-8 text-center text-sm text-muted-foreground">
+        No animals are in scope yet. Adjust the Data step to bring animals into this analysis.
+      </div>
+    );
 
-      {/* ─── Saved Analyses dialog ─── */}
-      <Dialog open={savedDialogOpen} onOpenChange={setSavedDialogOpen}>
-        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Saved Analyses</DialogTitle>
-            <DialogDescription>
-              Save this analysis as a reusable, versioned workflow with its own exclusions and outputs.
-            </DialogDescription>
-          </DialogHeader>
+  // ── Save / finalize cluster (reused in the Review step) ──
+  const saveControls = (
+    <div className="space-y-3">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => handleSaveAnalysis("new")}>
               <Save className="h-3.5 w-3.5" /> Save as New
@@ -3818,19 +3778,12 @@ export function ColonyAnalysisPanel({
               )}
             </div>
           )}
-        </DialogContent>
-      </Dialog>
+    </div>
+  );
 
-      {/* ─── Groups dialog ─── (draggable / toggleable group chips) */}
-      <Dialog open={groupsDialogOpen} onOpenChange={setGroupsDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Groups in this analysis</DialogTitle>
-            <DialogDescription>
-              Click to toggle · drag to reorder bars. De-selected groups are dropped from the plot, summary, and every statistical test (ANOVA, t-test, brackets). Reorder affects both Genotype × Sex and the composite Genotype × Sex × Timepoint view.
-            </DialogDescription>
-          </DialogHeader>
-          {allGroupsInScope.length > 1 && (
+  // ── Groups picker cluster (draggable / toggleable chips, reused in step 4) ──
+  const groupsControls =
+    allGroupsInScope.length > 1 ? (
             <div className="space-y-2">
                 <div className="flex items-center justify-end gap-1">
                     {customGroupOrder.length > 0 && (
@@ -3936,161 +3889,391 @@ export function ColonyAnalysisPanel({
                   })}
                 </div>
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
+    ) : (
+      <div className="rounded-lg border border-dashed border-slate-200 p-8 text-center text-sm text-muted-foreground">
+        This scope only has a single group, so there is nothing to toggle or reorder.
+      </div>
+    );
 
-      {flatData.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center">
-          <Info className="h-8 w-8 mx-auto text-muted-foreground/30 mb-3" />
-          <p className="text-sm text-muted-foreground">
-            {scopedFlatData.length > 0
-              ? "All matching animals are currently excluded from this analysis set."
-              : "No data matches the current filters."}
-          </p>
-        </div>
-      ) : (
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <Card className="overflow-hidden border-slate-200/80 bg-white shadow-sm">
-            <CardContent className="space-y-4 pt-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">Guided Workflow</p>
-                  <p className="mt-1 text-xs text-slate-600">
-                    Build an analysis set first, then let the panel suggest the most sensible behavioral tests for the data that remains.
-                  </p>
-                </div>
+  // ── Export menu (reused in the Review step) ──
+  const exportMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="gap-1.5">
+          <Download className="h-3.5 w-3.5" />
+          <span className="font-medium">Export</span>
+          <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuLabel>Export</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => exportAnalysisRows(flatData, "colony-analysis-included")}>
+          <Download className="mr-2 h-3.5 w-3.5" /> Included CSV
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => exportAnalysisRows(excludedFlatData, "colony-analysis-excluded")}>
+          <Download className="mr-2 h-3.5 w-3.5" /> Excluded CSV
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={handleExportSummary}>
+          <Download className="mr-2 h-3.5 w-3.5" /> Summary
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={handleExportReport}>
+          <Download className="mr-2 h-3.5 w-3.5" /> Report
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={handleExportFigurePacket}>
+          <Download className="mr-2 h-3.5 w-3.5" /> Figure Packet
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={handleExportResultTables} disabled={!savedResult}>
+          <Download className="mr-2 h-3.5 w-3.5" /> Result Tables
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  // ── "View data" affordance — reuses DataTablePanel inside a dialog so it
+  //    stays reachable from the Data and Review steps. ──
+  const viewDataDialog = (
+    <Dialog open={dataTableDialogOpen} onOpenChange={setDataTableDialogOpen}>
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>Analysis data</DialogTitle>
+          <DialogDescription>The included rows that feed every chart, statistic, and export.</DialogDescription>
+        </DialogHeader>
+        <DataTablePanel
+          flatData={flatData}
+          measureKeys={measureKeys}
+          measureLabels={measureLabels}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+
+  const noScopeNotice =
+    flatData.length === 0 ? (
+      <div className="rounded-lg border border-dashed p-8 text-center">
+        <Info className="h-8 w-8 mx-auto text-muted-foreground/30 mb-3" />
+        <p className="text-sm text-muted-foreground">
+          {scopedFlatData.length > 0
+            ? "All matching animals are currently excluded from this analysis set."
+            : "No data matches the current scope. Adjust the run, experiment, timepoint, or cohort."}
+        </p>
+      </div>
+    ) : null;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LANDING — saved-analyses home. Default view when no analysis is open.
+  // ─────────────────────────────────────────────────────────────────────────
+  if (analysisView === "landing") {
+    return (
+      <div className="space-y-5">
+        <Card className="border-slate-200/80 bg-white/90 shadow-sm">
+          <CardHeader>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <CardTitle className="text-xl">Colony Analysis</CardTitle>
+                <p className="mt-1 text-sm text-slate-600">
+                  Open a saved analysis to review or revise it, or start a new guided analysis from scratch.
+                </p>
+              </div>
+              <Button size="sm" className="gap-1.5" onClick={startNewAnalysis}>
+                <Plus className="h-4 w-4" /> New Analysis
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm font-semibold text-slate-900">Your Analyses</p>
+            {savedAnalysisRoots.length === 0 ? (
+              <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 px-6 py-10 text-center">
+                <FolderOpen className="mx-auto h-8 w-8 text-slate-300" />
+                <p className="mt-3 text-sm font-medium text-slate-700">No saved analyses yet</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Start a new analysis to scope your data, pick a test, and save a versioned, reusable workflow.
+                </p>
+                <Button size="sm" className="mt-4 gap-1.5" onClick={startNewAnalysis}>
+                  <Plus className="h-4 w-4" /> New Analysis
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {savedAnalysisRoots.map((root) => {
+                  const latest = (revisionsByAnalysisId.get(root.id) || [])[0] || null;
+                  const isFinal = Boolean(latest?.config?.finalized);
+                  return (
+                    <div
+                      key={root.id}
+                      className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-sm font-semibold text-slate-900">{root.name}</p>
+                          {isFinal && <Badge className="bg-emerald-600 text-[11px] text-white">Final</Badge>}
+                        </div>
+                        {root.description && (
+                          <p className="mt-0.5 truncate text-xs text-slate-500">{root.description}</p>
+                        )}
+                        <p className="mt-0.5 text-[11px] text-slate-400">
+                          {(revisionsByAnalysisId.get(root.id) || []).length} revision
+                          {(revisionsByAnalysisId.get(root.id) || []).length === 1 ? "" : "s"} · updated{" "}
+                          {new Date(root.updated_at).toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button size="sm" className="gap-1.5" onClick={() => openSavedAnalysis(root.id)}>
+                          <FolderOpen className="h-3.5 w-3.5" /> Open
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5"
+                          onClick={() => handleDuplicateAnalysisById(root.id)}
+                        >
+                          <Copy className="h-3.5 w-3.5" /> Duplicate
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 text-rose-600 hover:text-rose-700"
+                          onClick={() => handleDeleteAnalysisById(root.id, root.name)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Delete
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // WIZARD — guided, step-by-step flow. Same handlers/state/panels as before.
+  // ─────────────────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-5">
+      {viewDataDialog}
+      <Card className="border-slate-200/80 bg-white/90 shadow-sm">
+        <CardHeader>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <CardTitle className="text-xl">
+                {selectedSavedAnalysisId !== "__new__" ? analysisName || "Colony Analysis" : "New Colony Analysis"}
+              </CardTitle>
+              <p className="mt-1 text-sm text-slate-600">
+                Work through each step. Your scope, exclusions, chart, and test all flow into the final figure and save.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedSavedAnalysisId !== "__new__" && selectedRevisionFinalized && (
+                <Badge className="bg-emerald-600 text-white">Final</Badge>
+              )}
+              <Button type="button" variant="outline" size="sm" onClick={backToLanding}>
+                Your analyses
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {/* Step progress bar — clickable to jump to any step. */}
+          <div className="flex flex-wrap items-center gap-2">
+            {ANALYSIS_WIZARD_STEPS.map((step, index) => (
+              <button key={step.key} type="button" onClick={() => setWizardStepIndex(index)}>
+                <Badge
+                  variant={index === wizardStepIndex ? "default" : "secondary"}
+                  className="cursor-pointer px-3 py-1"
+                >
+                  {index + 1}. {step.label}
+                </Badge>
+              </button>
+            ))}
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-slate-50 px-4 py-4">
+            <p className="text-sm font-semibold text-slate-900">{currentWizardStep.label}</p>
+            <p className="mt-1 text-sm text-slate-600">{currentWizardStep.description}</p>
+          </div>
+
+          {/* ── Step 1: Data ── */}
+          {currentWizardStep.key === "data" ? (
+            <section className="space-y-4">
+              {scopeControls}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={flatData.length === 0}
+                  onClick={() => setDataTableDialogOpen(true)}
+                >
+                  <TableIcon className="h-3.5 w-3.5" /> View data
+                </Button>
+                <span className="text-xs text-slate-500">
+                  {flatData.length} rows · {includedAnimalCount} animals in scope · {availableGroups.length} groups
+                </span>
+              </div>
+              {noScopeNotice}
+            </section>
+          ) : null}
+
+          {/* ── Step 2: Measure & chart ── */}
+          {currentWizardStep.key === "measure" ? (
+            <section className="space-y-4">
+              {flatData.length === 0 ? (
+                noScopeNotice
+              ) : (
+                <VisualizationPanel
+                  key={`viz-measure-${loadedRevisionKey}`}
+                  flatData={flatData}
+                  numericKeys={numericMeasureKeys}
+                  measureLabels={measureLabels}
+                  groups={availableGroups}
+                  customGroupOrder={customGroupOrder}
+                  runName={selectedRun?.name || null}
+                  initialConfig={visualizationDraft}
+                  initialFigureStudioConfig={figureStudioDraft}
+                  result={savedResult}
+                  reportPayload={currentReportPayload}
+                  onConfigChange={setVisualizationDraft}
+                  onFigureStudioChange={setFigureStudioDraft}
+                />
+              )}
+            </section>
+          ) : null}
+
+          {/* ── Step 3: Animals ── */}
+          {currentWizardStep.key === "animals" ? (
+            <section className="space-y-4">{animalsControls}</section>
+          ) : null}
+
+          {/* ── Step 4: Groups ── */}
+          {currentWizardStep.key === "groups" ? (
+            <section className="space-y-4">{groupsControls}</section>
+          ) : null}
+
+          {/* ── Step 5: Statistics ── */}
+          {currentWizardStep.key === "statistics" ? (
+            <section className="space-y-4">
+              {flatData.length === 0 ? (
+                noScopeNotice
+              ) : (
+                <StatisticsPanel
+                  key={`stats-${loadedRevisionKey}`}
+                  flatData={flatData}
+                  numericKeys={numericMeasureKeys}
+                  measureLabels={measureLabels}
+                  includedCount={includedAnimalCount}
+                  excludedCount={excludedAnimalCount}
+                  initialConfig={statsDraft}
+                  initialResult={savedResult}
+                  onConfigChange={setStatsDraft}
+                  onResultChange={setSavedResult}
+                />
+              )}
+            </section>
+          ) : null}
+
+          {/* ── Step 6: Review & save ── */}
+          {currentWizardStep.key === "review" ? (
+            <section className="space-y-5">
+              <div className="flex flex-wrap items-center gap-2">
+                {exportMenu}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={flatData.length === 0}
+                  onClick={() => setDataTableDialogOpen(true)}
+                >
+                  <TableIcon className="h-3.5 w-3.5" /> View data
+                </Button>
                 <Badge variant="secondary" className="border border-slate-200 bg-slate-50 text-slate-700">
                   {includedAnimalCount} included / {excludedAnimalCount} excluded
                 </Badge>
               </div>
 
-              <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
-                {workflowSteps.map((step, index) => (
-                  <div
-                    key={step.title}
-                    className={`rounded-xl border px-3 py-2 text-xs ${
-                      step.done ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-slate-200 bg-slate-50 text-slate-600"
-                    }`}
-                  >
-                    <div className="font-medium">Step {index + 1}</div>
-                    <div className="mt-1">{step.title}</div>
-                  </div>
-                ))}
-              </div>
+              {flatData.length === 0 ? (
+                noScopeNotice
+              ) : (
+                <VisualizationPanel
+                  key={`viz-review-${loadedRevisionKey}`}
+                  flatData={flatData}
+                  numericKeys={numericMeasureKeys}
+                  measureLabels={measureLabels}
+                  groups={availableGroups}
+                  customGroupOrder={customGroupOrder}
+                  runName={selectedRun?.name || null}
+                  initialConfig={visualizationDraft}
+                  initialFigureStudioConfig={figureStudioDraft}
+                  result={savedResult}
+                  reportPayload={currentReportPayload}
+                  onConfigChange={setVisualizationDraft}
+                  onFigureStudioChange={setFigureStudioDraft}
+                />
+              )}
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs font-medium text-slate-700">Suggested tests for this analysis set</p>
-                  <p className="text-[11px] text-slate-500">
-                    Suggestions update from the current scope, included animals, and available measures.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {suggestedTests.map((suggestion) => (
-                    <Button
-                      key={suggestion.testType}
-                      variant={statsDraft.testType === suggestion.testType ? "default" : "outline"}
-                      size="sm"
-                      className="h-auto max-w-full whitespace-normal text-left"
-                      onClick={() => {
-                        setStatsDraft((current) => ({ ...current, testType: suggestion.testType }));
-                        setActiveTab("analyze");
-                      }}
-                    >
-                      <span className="flex flex-col items-start py-0.5">
-                        <span>{suggestion.label}</span>
-                        <span className="text-[10px] opacity-80">{suggestion.reason}</span>
-                      </span>
-                    </Button>
-                  ))}
-                  {suggestedTests.length === 0 && (
-                    <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-xs text-slate-500">
-                      Add more included animals or numeric measures to unlock guided test suggestions.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              {/* Per-measure summary recap. */}
+              {flatData.length > 0 && (
+                <SummaryPanel
+                  flatData={flatData}
+                  numericKeys={numericMeasureKeys}
+                  measureLabels={measureLabels}
+                  groups={availableGroups}
+                />
+              )}
 
-          <TabsList className="h-auto w-full justify-start gap-1 rounded-xl border border-slate-200 bg-slate-50/70 p-1">
-            <TabsTrigger value="summary" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-              <TrendingUp className="h-3.5 w-3.5" /> Summary
-            </TabsTrigger>
-            <TabsTrigger value="data" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-              <TableIcon className="h-3.5 w-3.5" /> Data
-            </TabsTrigger>
-            <TabsTrigger value="analyze" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-              <FlaskConical className="h-3.5 w-3.5" /> Statistics
-            </TabsTrigger>
-            <TabsTrigger value="report" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-              <Info className="h-3.5 w-3.5" /> Report
-            </TabsTrigger>
-            <TabsTrigger value="visualize" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-              <BarChart3 className="h-3.5 w-3.5" /> Graphs
-            </TabsTrigger>
-          </TabsList>
+              {/* Stats / report recap reuses the existing report preview. */}
+              <ReportPreviewPanel
+                reportPayload={currentReportPayload}
+                exclusions={activeExclusions}
+                analysisName={analysisName}
+              />
 
-          <TabsContent value="summary">
-            <SummaryPanel
-              flatData={flatData}
-              numericKeys={numericMeasureKeys}
-              measureLabels={measureLabels}
-              groups={availableGroups}
-            />
-          </TabsContent>
+              {/* Name / description + save / revision / finalize / delete cluster. */}
+              {saveControls}
+            </section>
+          ) : null}
 
-          <TabsContent value="data">
-            <DataTablePanel
-              flatData={flatData}
-              measureKeys={measureKeys}
-              measureLabels={measureLabels}
-            />
-          </TabsContent>
-
-          <TabsContent value="analyze">
-            <StatisticsPanel
-              key={`stats-${loadedRevisionKey}`}
-              flatData={flatData}
-              numericKeys={numericMeasureKeys}
-              measureLabels={measureLabels}
-              includedCount={includedAnimalCount}
-              excludedCount={excludedAnimalCount}
-              initialConfig={statsDraft}
-              initialResult={savedResult}
-              onConfigChange={setStatsDraft}
-              onResultChange={setSavedResult}
-            />
-          </TabsContent>
-
-          <TabsContent value="report">
-            <ReportPreviewPanel
-              reportPayload={currentReportPayload}
-              exclusions={activeExclusions}
-              analysisName={analysisName}
-            />
-          </TabsContent>
-
-          <TabsContent value="visualize">
-            <VisualizationPanel
-              key={`viz-${loadedRevisionKey}`}
-              flatData={flatData}
-              numericKeys={numericMeasureKeys}
-              measureLabels={measureLabels}
-              groups={availableGroups}
-              customGroupOrder={customGroupOrder}
-              runName={selectedRun?.name || null}
-              initialConfig={visualizationDraft}
-              initialFigureStudioConfig={figureStudioDraft}
-              result={savedResult}
-              reportPayload={currentReportPayload}
-              onConfigChange={setVisualizationDraft}
-              onFigureStudioChange={setFigureStudioDraft}
-            />
-          </TabsContent>
-        </Tabs>
-      )}
+          {/* ── Footer: Back / Next / Save & finish ── */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setWizardStepIndex((current) => Math.max(current - 1, 0))}
+                disabled={wizardStepIndex === 0}
+              >
+                <ChevronRight className="mr-2 h-4 w-4 rotate-180" />
+                Back
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              {currentWizardStep.key === "review" ? (
+                <Button
+                  type="button"
+                  className="gap-1.5"
+                  disabled={!savedResult || selectedRevisionFinalized}
+                  onClick={() => handleSaveAnalysis(selectedSavedAnalysisId === "__new__" ? "new" : "revision")}
+                >
+                  <Save className="h-4 w-4" />
+                  {selectedSavedAnalysisId === "__new__" ? "Save & finish" : "Save revision"}
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  onClick={() => setWizardStepIndex((current) => Math.min(current + 1, ANALYSIS_WIZARD_STEPS.length - 1))}
+                  disabled={!canMoveNextStep}
+                >
+                  Next
+                  <ChevronRight className="ml-2 h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
