@@ -6614,6 +6614,15 @@ function VisualizationPanel({
   const [measureKey, setMeasureKey] = useState(normalizedInitialConfig.measureKey || safeNumericKeys[0] || "");
   const [measureKey2, setMeasureKey2] = useState(normalizedInitialConfig.measureKey2 || safeNumericKeys[1] || "");
   const [groupBy, setGroupBy] = useState<"group" | "sex" | "genotype" | "cohort" | "timepoint" | "group_timepoint">(normalizedInitialConfig.groupBy);
+  // Grouping mode for the time-series (timepoint_line) chart. This is a
+  // local control independent of the bar-chart `groupBy` above:
+  //   - "genotype": one line per genotype (mean ± SEM across animals)
+  //   - "animal":   one line per individual animal (spaghetti plot)
+  //   - "cohort":   one line per cohort (mean across cohort)
+  const [timeSeriesMode, setTimeSeriesMode] = useState<"genotype" | "animal" | "cohort">("genotype");
+  // Optional extra split by sex when in per-genotype mode (one line per
+  // genotype × sex). Ignored in animal / cohort modes.
+  const [timeSeriesSplitSex, setTimeSeriesSplitSex] = useState(false);
   const [title, setTitle] = useState(normalizedInitialConfig.title);
   const [showPoints, setShowPoints] = useState(normalizedInitialConfig.showPoints);
   const [figureStudio, setFigureStudio] = useState<FigureStudioDraft>(normalizedInitialFigureStudioConfig);
@@ -7443,33 +7452,155 @@ function VisualizationPanel({
 
       case "timepoint_line": {
         if (!measureKey) return null;
-        const tps = Array.from(new Set(flatData.map((r) => r.timepoint))).sort((a, b) => a - b);
-        if (tps.length < 2) return null;
+        // X axis = timepoints in ascending numeric order (sort by the
+        // numeric target-age value, not its string label). A single
+        // timepoint still renders (markers only); only no usable rows
+        // returns null → friendly empty state.
+        const hasNumeric = flatData.some(
+          (r) => r.timepoint !== undefined && r.timepoint !== null && !isNaN(Number(r[measureKey])),
+        );
+        if (!hasNumeric) return null;
+        const tps = Array.from(
+          new Set(
+            flatData
+              .filter((r) => r.timepoint !== undefined && r.timepoint !== null)
+              .map((r) => Number(r.timepoint)),
+          ),
+        ).sort((a, b) => a - b);
+        if (tps.length === 0) return null;
 
-        const traces = groupLabels.map((g, i) => {
-          const means: number[] = [];
+        const xLabels = tps.map((tp) => `${tp}d`);
+        // Single-timepoint data has nothing to connect, so draw markers
+        // only; otherwise connect the dots.
+        const lineMode = tps.length < 2 ? ("markers" as const) : ("lines+markers" as const);
+
+        type LineTrace = {
+          key: string;
+          name: string;
+          rowMatches: (row: FlatRow) => boolean;
+          colorSeed: string;
+        };
+
+        let lineSpecs: LineTrace[] = [];
+        if (timeSeriesMode === "animal") {
+          // One line per individual animal (spaghetti plot). Use the
+          // animal's identifier for the legend, colored by genotype/sex
+          // group so related animals share a hue.
+          const byAnimal = new Map<string, { label: string; group: string }>();
+          for (const row of flatData) {
+            if (isNaN(Number(row[measureKey]))) continue;
+            if (!byAnimal.has(row.animal_id)) {
+              byAnimal.set(row.animal_id, {
+                label: row.identifier || row.animal_id,
+                group: row.group,
+              });
+            }
+          }
+          lineSpecs = Array.from(byAnimal.entries()).map(([animalId, meta]) => ({
+            key: animalId,
+            name: meta.label,
+            rowMatches: (row: FlatRow) => row.animal_id === animalId,
+            colorSeed: meta.group,
+          }));
+        } else if (timeSeriesMode === "cohort") {
+          const cohorts = Array.from(
+            new Set(flatData.filter((r) => !isNaN(Number(r[measureKey]))).map((r) => r.cohort)),
+          ).sort();
+          lineSpecs = cohorts.map((cohort) => ({
+            key: cohort,
+            name: cohort,
+            rowMatches: (row: FlatRow) => row.cohort === cohort,
+            colorSeed: cohort,
+          }));
+        } else {
+          // Per genotype (default), optionally split by sex.
+          if (timeSeriesSplitSex) {
+            const combos = Array.from(
+              new Set(
+                flatData
+                  .filter((r) => !isNaN(Number(r[measureKey])))
+                  .map((r) => `${r.genotype}__${r.sex}`),
+              ),
+            ).sort();
+            lineSpecs = combos.map((combo) => {
+              const [genotype, sex] = combo.split("__");
+              return {
+                key: combo,
+                name: `${genotype} ${sex}`,
+                rowMatches: (row: FlatRow) => row.genotype === genotype && row.sex === sex,
+                colorSeed: `${genotype} ${sex}`,
+              };
+            });
+          } else {
+            const genotypes = Array.from(
+              new Set(flatData.filter((r) => !isNaN(Number(r[measureKey]))).map((r) => r.genotype)),
+            ).sort();
+            lineSpecs = genotypes.map((genotype) => ({
+              key: genotype,
+              name: genotype,
+              rowMatches: (row: FlatRow) => row.genotype === genotype,
+              colorSeed: genotype,
+            }));
+          }
+        }
+
+        if (lineSpecs.length === 0) return null;
+
+        const isAnimalMode = timeSeriesMode === "animal";
+        const traces = lineSpecs.map((spec, i) => {
+          const color = resolveGroupColor(spec.colorSeed, i);
+          const ys: Array<number | null> = [];
           const sems: number[] = [];
+          const ns: number[] = [];
           for (const tp of tps) {
             const values = flatData
-              .filter((r) => getGrouping(r) === g && r.timepoint === tp)
+              .filter((r) => spec.rowMatches(r) && Number(r.timepoint) === tp)
               .map((r) => Number(r[measureKey]))
               .filter((v) => !isNaN(v));
-            means.push(mean(values));
-            sems.push(sem(values));
+            ns.push(values.length);
+            if (values.length === 0) {
+              // Gap at this timepoint — null keeps the line connecting
+              // across the missing point rather than dropping to zero.
+              ys.push(null);
+              sems.push(0);
+            } else {
+              ys.push(mean(values));
+              sems.push(sem(values));
+            }
           }
+          const hover = ys.map((y, idx) => {
+            if (y === null) return `${spec.name}<br>${xLabels[idx]}<br>no data`;
+            if (isAnimalMode) {
+              return `${spec.name}<br>${xLabels[idx]}<br>${measureLabel}: ${round(y, 3)}`;
+            }
+            return `${spec.name}<br>${xLabels[idx]}<br>mean: ${round(y, 3)} ± ${round(sems[idx], 3)} SEM (n=${ns[idx]})`;
+          });
           return {
-            x: tps.map((tp) => `${tp}d`),
-            y: means,
-            error_y: { type: "data" as const, array: sems, visible: true },
+            x: xLabels,
+            y: ys,
+            // Error bars (SEM) only make sense for aggregated lines.
+            error_y: isAnimalMode
+              ? { visible: false }
+              : { type: "data" as const, array: sems, visible: true },
+            connectgaps: true,
             type: "scatter" as const,
-            mode: "lines+markers" as const,
-            name: g,
+            mode: lineMode,
+            name: spec.name,
+            text: hover,
+            hoverinfo: "text" as const,
+            // Spaghetti plots can have many lines; keep them lighter and
+            // hide them from the legend to avoid clutter.
+            showlegend: !isAnimalMode,
+            opacity: isAnimalMode ? 0.6 : 1,
             marker: {
-              color: resolveGroupColor(g, i),
-              size: figureStudio.traceStyle.dotSize,
+              color,
+              size: isAnimalMode ? Math.max(figureStudio.traceStyle.dotSize - 2, 3) : figureStudio.traceStyle.dotSize,
               symbol: figureStudio.traceStyle.dotSymbol,
             },
-            line: { color: resolveGroupColor(g, i), width: figureStudio.traceStyle.lineWidth },
+            line: {
+              color,
+              width: isAnimalMode ? Math.max(figureStudio.traceStyle.lineWidth - 1, 1) : figureStudio.traceStyle.lineWidth,
+            },
           };
         });
 
@@ -7482,7 +7613,7 @@ function VisualizationPanel({
             paper_bgcolor: "transparent",
             plot_bgcolor: "transparent",
             font: { size: 12 },
-            showlegend: true,
+            showlegend: !isAnimalMode,
           },
         };
       }
@@ -7503,6 +7634,8 @@ function VisualizationPanel({
     resolveGroupColor,
     result,
     showPoints,
+    timeSeriesMode,
+    timeSeriesSplitSex,
     title,
   ]);
 
@@ -7783,6 +7916,38 @@ function VisualizationPanel({
               />
             </div>
           </div>
+
+          {effectiveChartType === "timepoint_line" && (
+            <div className="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-white/70 px-2.5 py-2">
+              <div className="min-w-0">
+                <Label className="text-xs mb-1 block">Line grouping</Label>
+                <Select
+                  value={timeSeriesMode}
+                  onValueChange={(v) => setTimeSeriesMode(v as typeof timeSeriesMode)}
+                >
+                  <SelectTrigger className="w-full min-w-[10rem]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="genotype">Per genotype (mean ± SEM)</SelectItem>
+                    <SelectItem value="animal">Per animal (spaghetti)</SelectItem>
+                    <SelectItem value="cohort">Per cohort (mean)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {timeSeriesMode === "genotype" && (
+                <label className="flex items-center gap-1.5 text-xs cursor-pointer self-end pb-2">
+                  <input
+                    type="checkbox"
+                    checked={timeSeriesSplitSex}
+                    onChange={(e) => setTimeSeriesSplitSex(e.target.checked)}
+                    className="rounded h-3.5 w-3.5"
+                  />
+                  Split by sex
+                </label>
+              )}
+            </div>
+          )}
 
           <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white/70 px-2.5 py-2">
             <label className="flex items-center gap-1.5 text-xs cursor-pointer">
@@ -8576,7 +8741,7 @@ function VisualizationPanel({
         <div className="rounded-lg border border-dashed p-8 text-center">
           <Info className="h-6 w-6 mx-auto text-muted-foreground/30 mb-2" />
           <p className="text-sm text-muted-foreground">
-            Need data from at least 2 timepoints for a line chart. Select &quot;All Timepoints&quot; in the filter above.
+            No numeric values to plot over time for the selected measure. Select &quot;All Timepoints&quot; in the filter above and choose a measure with recorded values.
           </p>
         </div>
       )}

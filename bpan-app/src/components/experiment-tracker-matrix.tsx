@@ -42,6 +42,20 @@ const EXPERIMENT_LABELS: Record<string, string> = {
   eeg_recording: "EEG Record",
 };
 
+const GENOTYPE_LABELS: Record<string, string> = {
+  hemi: "HEMI",
+  het: "HET",
+  wt: "WT",
+};
+
+// Strong, accessible genotype badge colors (light + dark) — distinct per
+// genotype so the sticky GT column reads clearly.
+const GENOTYPE_BADGE_CLASS: Record<string, string> = {
+  hemi: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200",
+  het: "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200",
+  wt: "bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200",
+};
+
 const STATUS_ICON: Record<string, { icon: React.ReactNode; color: string; title: string }> = {
   completed: {
     icon: <Check className="w-3.5 h-3.5" />,
@@ -625,10 +639,16 @@ export function ExperimentTrackerMatrix({
                 {/* Row 1: Timepoint group headers */}
                 <tr className="bg-background border-b">
                   <th
-                    className="sticky left-0 z-30 bg-background px-3 py-2 text-left font-semibold text-sm border-r"
+                    className="sticky left-0 z-30 w-[160px] min-w-[160px] bg-background px-3 py-2 text-left font-semibold text-sm border-r"
                     rowSpan={2}
                   >
                     Animal
+                  </th>
+                  <th
+                    className="sticky left-[160px] z-30 w-[64px] min-w-[64px] bg-background px-2 py-2 text-left font-semibold text-sm border-r shadow-[6px_0_10px_-10px_rgba(15,23,42,0.45)]"
+                    rowSpan={2}
+                  >
+                    GT
                   </th>
                   {tpGroups.map((g) => (
                     <th
@@ -691,7 +711,11 @@ export function ExperimentTrackerMatrix({
                       }`}
                     >
                       {/* Animal name cell */}
-                      <td className="sticky left-0 z-10 bg-background px-3 py-1.5 border-r whitespace-nowrap">
+                      <td
+                        className={`sticky left-0 z-20 w-[160px] min-w-[160px] px-3 py-1.5 border-r whitespace-nowrap ${
+                          rowIdx % 2 === 0 ? "bg-background" : "bg-muted/5"
+                        }`}
+                      >
                         <div className="flex items-center gap-2">
                           <div>
                             <div className="font-medium text-sm">
@@ -703,20 +727,27 @@ export function ExperimentTrackerMatrix({
                                   {cohort.name}
                                 </Badge>
                               )}
-                              <span>
-                                {animal.sex === "male" ? "♂" : "♀"}{" "}
-                                {animal.genotype === "hemi"
-                                  ? "HEMI"
-                                  : animal.genotype === "het"
-                                  ? "HET"
-                                  : "WT"}
-                              </span>
+                              <span>{animal.sex === "male" ? "♂" : "♀"}</span>
                               <span className="text-muted-foreground/60">
                                 {animalCompleted}/{animalTotal}
                               </span>
                             </div>
                           </div>
                         </div>
+                      </td>
+
+                      {/* Genotype cell (second sticky column) */}
+                      <td
+                        className={`sticky left-[160px] z-20 w-[64px] min-w-[64px] px-2 py-1.5 border-r text-center ${
+                          rowIdx % 2 === 0 ? "bg-background" : "bg-muted/5"
+                        } shadow-[6px_0_10px_-10px_rgba(15,23,42,0.45)]`}
+                      >
+                        <Badge
+                          variant="secondary"
+                          className={`text-[9px] px-1 py-0 font-medium ${GENOTYPE_BADGE_CLASS[animal.genotype] || GENOTYPE_BADGE_CLASS.wt}`}
+                        >
+                          {GENOTYPE_LABELS[animal.genotype] || animal.genotype}
+                        </Badge>
                       </td>
 
                       {/* Status cells */}

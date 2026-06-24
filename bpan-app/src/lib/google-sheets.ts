@@ -7,6 +7,22 @@ const SHEETS_SCOPES = [
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_SHEETS_RECONNECT_MESSAGE = "Google Sheets needs to be reconnected. Please connect Google Sheets again.";
+const GOOGLE_SHEETS_API_DISABLED_MESSAGE =
+  "The Google Sheets API (or Google Drive API) is disabled for this app's Google Cloud project. An admin must enable both in Google Cloud Console → APIs & Services → Library, then retry. (No reconnect needed.)";
+
+// Google returns a 403 with this shape when the Sheets/Drive API itself is
+// not enabled on the Cloud project (distinct from a per-user scope/auth
+// problem). Surface it as an actionable message instead of a raw dump or a
+// misleading "reconnect" prompt.
+function isGoogleApiDisabled(raw: string) {
+  return /has not been used in project|accessNotConfigured|SERVICE_DISABLED|it is disabled\b|API .*?\bis disabled/i.test(
+    raw,
+  );
+}
+
+export function getGoogleSheetsApiDisabledMessage() {
+  return GOOGLE_SHEETS_API_DISABLED_MESSAGE;
+}
 
 type GoogleSheetsSupabaseLike = Awaited<ReturnType<typeof createSupabaseClient>>;
 
@@ -100,6 +116,9 @@ export async function validateGoogleSheetsAccess(accessToken: string) {
   }
 
   const text = await res.text();
+  if (res.status === 403 && isGoogleApiDisabled(text)) {
+    throw new Error(GOOGLE_SHEETS_API_DISABLED_MESSAGE);
+  }
   if (res.status === 401 || (res.status === 403 && shouldReconnectGoogleSheets(text))) {
     throw new Error(GOOGLE_SHEETS_RECONNECT_MESSAGE);
   }
@@ -332,6 +351,9 @@ export async function createGoogleSpreadsheet(
 
   if (!res.ok) {
     const text = await res.text();
+    if (isGoogleApiDisabled(text)) {
+      throw new Error(GOOGLE_SHEETS_API_DISABLED_MESSAGE);
+    }
     if (shouldReconnectGoogleSheets(text) || /PERMISSION_DENIED|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(text)) {
       throw new Error(GOOGLE_SHEETS_RECONNECT_MESSAGE);
     }

@@ -87,6 +87,117 @@ export function applyDerivedMeasures<
   return measures;
 }
 
+// ─── Generic "Average" result columns ────────────────────────────────
+//
+// A research result schema can declare an "average" column whose value is
+// the mean of one or more numeric source columns in the same row. The
+// average is encoded in the column's `options` array as a marker entry
+// "__average__" plus one "field:<sourceKey>" entry per source column. This
+// matches how the battery-creation wizard serializes average columns.
+//
+// These helpers are generic: any column declared this way is computed,
+// regardless of experiment type. The legacy hardcoded rotarod/stamina
+// averages remain in colony-results-tab for default (non-schema)
+// experiments.
+
+const AVERAGE_MARKER = "__average__";
+const AVERAGE_FIELD_PREFIX = "field:";
+
+/** Minimal shape of a result schema column we need to detect averages. */
+export interface AverageColumnLike {
+  key: string;
+  options?: unknown[] | null;
+  group_key?: string | null;
+}
+
+function optionStrings(column: AverageColumnLike): string[] {
+  if (!Array.isArray(column.options)) return [];
+  return column.options.filter((o): o is string => typeof o === "string");
+}
+
+/**
+ * True if the column is a derived average column (declared via the
+ * "__average__" marker, the conventional "average_score" key, or the
+ * "derived" group).
+ */
+export function isAverageColumn(column: AverageColumnLike): boolean {
+  const opts = optionStrings(column);
+  if (opts.includes(AVERAGE_MARKER)) return true;
+  if (opts.some((o) => o.startsWith(AVERAGE_FIELD_PREFIX))) return true;
+  if (column.key === "average_score") return true;
+  if (column.group_key === "derived") return true;
+  return false;
+}
+
+/**
+ * The source field keys an average column averages over. Pulled from the
+ * column's "field:<sourceKey>" option entries.
+ */
+export function getAverageSourceKeys(column: AverageColumnLike): string[] {
+  return optionStrings(column)
+    .filter((o) => o.startsWith(AVERAGE_FIELD_PREFIX))
+    .map((o) => o.slice(AVERAGE_FIELD_PREFIX.length))
+    .filter((key) => key.length > 0);
+}
+
+/**
+ * Compute the mean of an average column's source fields for one row.
+ * Ignores blank / non-numeric sources. Returns null when no source field
+ * has a numeric value (so the cell renders blank rather than 0).
+ */
+export function computeAverageColumnValue(
+  column: AverageColumnLike,
+  measures: Record<string, unknown> | null | undefined,
+): number | null {
+  if (!measures) return null;
+  const sourceKeys = getAverageSourceKeys(column);
+  if (sourceKeys.length === 0) return null;
+  const values = sourceKeys
+    .map((key) => toNumericOrNull(measures[key]))
+    .filter((value): value is number => value !== null);
+  if (values.length === 0) return null;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return Number(mean.toFixed(2));
+}
+
+/**
+ * Given the schema columns for an experiment and a row's measures, return a
+ * new measures blob with every declared average column recomputed from its
+ * source fields. Non-mutating; returns the original reference when nothing
+ * changed. Average columns are always recomputed (they are derived, not
+ * user-entered), but non-average user fields are never touched.
+ */
+export function applyAverageColumns<M extends Record<string, unknown>>(
+  schemaColumns: AverageColumnLike[] | null | undefined,
+  measures: M,
+): M {
+  if (!schemaColumns || schemaColumns.length === 0) return measures;
+  let next: M | null = null;
+  for (const column of schemaColumns) {
+    if (!isAverageColumn(column)) continue;
+    const computed = computeAverageColumnValue(column, next ?? measures);
+    const nextValue = computed === null ? null : computed;
+    const current = (next ?? measures)[column.key];
+    if (current === nextValue) continue;
+    next = { ...(next ?? measures), [column.key]: nextValue } as M;
+  }
+  return next ?? measures;
+}
+
+/**
+ * The set of column keys in a schema that are derived averages. Used by the
+ * UI to render those cells as read-only computed values.
+ */
+export function getAverageColumnKeys(
+  schemaColumns: AverageColumnLike[] | null | undefined,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const column of schemaColumns || []) {
+    if (isAverageColumn(column)) keys.add(column.key);
+  }
+  return keys;
+}
+
 /**
  * The human-readable label for a derived key. Used by the analysis panel
  * when building measure dropdowns so the derived column shows up with a

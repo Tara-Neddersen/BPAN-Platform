@@ -28,7 +28,7 @@ import type {
 import { MiniEarTag } from "@/components/ear-tag-selector";
 import { BehaviorImportDialog } from "@/components/behavior-import-dialog";
 import { exportColonyResultsMigrationWorkbook, exportColonyResultsWorkbook } from "@/lib/results-export";
-import { applyDerivedMeasures } from "@/lib/derived-measures";
+import { applyDerivedMeasures, applyAverageColumns, getAverageColumnKeys } from "@/lib/derived-measures";
 
 // ─── Default experiment measures per type ─────────────────────────────
 
@@ -212,10 +212,17 @@ function toNumericOrNull(value: MeasureValue | undefined) {
 
 function applyDerivedMeasuresForExperiment(
   exp: string,
-  measures: MeasureMap
+  measures: MeasureMap,
+  schemaColumns?: ResultSchemaColumnSnapshot[] | null
 ): MeasureMap {
+  // Generic schema-declared "Average" columns (e.g. average_score) compute
+  // the mean of their source fields. Applied first so they layer on top of
+  // any user-entered source values; legacy hardcoded averages below handle
+  // default (non-schema) experiments.
+  const withAverages = applyAverageColumns(schemaColumns, measures) as MeasureMap;
+
   if (isStaminaWithAverageExperiment(exp)) {
-    const next = { ...measures };
+    const next = { ...withAverages };
     const staminaValues = STAMINA_TRIAL_KEYS.map((key) => toNumericOrNull(next[key])).filter(
       (value): value is number => value !== null
     );
@@ -226,9 +233,9 @@ function applyDerivedMeasuresForExperiment(
     return next;
   }
 
-  if (!isRotarodTrialWithAveragesExperiment(exp)) return measures;
+  if (!isRotarodTrialWithAveragesExperiment(exp)) return withAverages;
 
-  const next = { ...measures };
+  const next = { ...withAverages };
   const latencyValues = ROTAROD_TRIAL_LATENCY_KEYS.map((key) => toNumericOrNull(next[key])).filter(
     (value): value is number => value !== null
   );
@@ -378,6 +385,14 @@ const GENOTYPE_LABELS: Record<string, string> = {
   hemi: "Hemi",
   wt: "WT",
   het: "Het",
+};
+
+// Strong, accessible genotype badge colors (light + dark). Distinct per
+// genotype so the value reads clearly in the sticky GT column.
+const GENOTYPE_BADGE_CLASS: Record<string, string> = {
+  hemi: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200",
+  het: "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200",
+  wt: "bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200",
 };
 
 // Experiments that use cage image uploads vs raw data URL links
@@ -771,6 +786,16 @@ export function ColonyResultsTab({
         : [],
     [selectedRun, selectedRunExperimentRows]
   );
+  // Raw schema columns (with `options`) for an experiment — used to detect
+  // and compute generic derived "Average" columns. Returns null when there
+  // is no run schema (default experiments fall back to hardcoded averages).
+  const getSchemaColumnsForExperiment = useCallback(
+    (exp: string): ResultSchemaColumnSnapshot[] | null =>
+      selectedRun
+        ? selectedRunExperimentRows.find((experiment) => experiment.experiment_key === exp)?.schema_snapshot ?? null
+        : null,
+    [selectedRun, selectedRunExperimentRows]
+  );
   const getNormalizedMeasures = useCallback(
     (exp: string, measures: MeasureMap | null | undefined) => {
       const rawMeasures = measures || {};
@@ -962,13 +987,17 @@ export function ColonyResultsTab({
         return {
           measures: applyDerivedMeasuresForExperiment(
             exp,
-            getNormalizedMeasures(exp, (existing.measures as MeasureMap) || {})
+            getNormalizedMeasures(exp, (existing.measures as MeasureMap) || {}),
+            getSchemaColumnsForExperiment(exp)
           ),
           notes: existing.notes || "",
         };
-      return { measures: applyDerivedMeasuresForExperiment(exp, {}), notes: "" };
+      return {
+        measures: applyDerivedMeasuresForExperiment(exp, {}, getSchemaColumnsForExperiment(exp)),
+        notes: "",
+      };
     },
-    [editData, getExistingResult, getNormalizedMeasures]
+    [editData, getExistingResult, getNormalizedMeasures, getSchemaColumnsForExperiment]
   );
 
   // Get ALL fields for an experiment (before hiding), with data-filled first
@@ -1072,10 +1101,14 @@ export function ColonyResultsTab({
       const key = `${animalId}-${tp}-${exp}`;
       setEditData((prev) => {
         const current = prev[key] || getRowData(animalId, tp, exp);
-        const nextMeasures = applyDerivedMeasuresForExperiment(exp, {
-          ...current.measures,
-          [fieldKey]: value === "" ? null : value,
-        });
+        const nextMeasures = applyDerivedMeasuresForExperiment(
+          exp,
+          {
+            ...current.measures,
+            [fieldKey]: value === "" ? null : value,
+          },
+          getSchemaColumnsForExperiment(exp)
+        );
         return {
           ...prev,
           [key]: {
@@ -1086,7 +1119,7 @@ export function ColonyResultsTab({
       });
       setDirtyKeys((prev) => new Set(prev).add(key));
     },
-    [getRowData]
+    [getRowData, getSchemaColumnsForExperiment]
   );
 
   const updateAttachments = useCallback(
@@ -1100,14 +1133,15 @@ export function ColonyResultsTab({
             ...current,
             measures: applyDerivedMeasuresForExperiment(
               exp,
-              applyAttachmentUrls(current.measures, arrayKey, legacyKey, urls)
+              applyAttachmentUrls(current.measures, arrayKey, legacyKey, urls),
+              getSchemaColumnsForExperiment(exp)
             ),
           },
         };
       });
       setDirtyKeys((prev) => new Set(prev).add(key));
     },
-    [getRowData]
+    [getRowData, getSchemaColumnsForExperiment]
   );
 
   // Update notes for an animal
@@ -1168,7 +1202,11 @@ export function ColonyResultsTab({
         const data = editData[key] || getRowData(animal.id, tp, exp);
         // Convert string numbers to actual numbers
         const cleanMeasures: MeasureMap = {};
-        const normalizedMeasures = applyDerivedMeasuresForExperiment(exp, data.measures);
+        const normalizedMeasures = applyDerivedMeasuresForExperiment(
+          exp,
+          data.measures,
+          getSchemaColumnsForExperiment(exp)
+        );
         for (const [k, v] of Object.entries(normalizedMeasures)) {
           if (Array.isArray(v)) {
             cleanMeasures[k] = v.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
@@ -1210,7 +1248,7 @@ export function ColonyResultsTab({
     }
 
     await executeSave(tp, exp, entries);
-  }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, getExistingResult, hasMeaningfulMeasures, executeSave, selectedRun, selectedRunTimepoint]);
+  }, [activeTimepoint, activeExperiment, activeAnimals, dirtyKeys, editData, getRowData, getExistingResult, hasMeaningfulMeasures, executeSave, selectedRun, selectedRunTimepoint, getSchemaColumnsForExperiment]);
 
   const handleReconcileTracker = useCallback(async () => {
     setReconciling(true);
@@ -2244,17 +2282,17 @@ export function ColonyResultsTab({
                         <table className="w-full text-sm">
                           <thead className="sticky top-0 z-20">
                             <tr className="border-b bg-background shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-                              <th className="sticky left-0 z-30 min-w-[150px] bg-background px-3 py-2.5 text-left text-xs font-medium text-muted-foreground shadow-[6px_0_10px_-10px_rgba(15,23,42,0.35)]">
+                              <th className="sticky left-0 z-30 w-[150px] min-w-[150px] bg-background px-3 py-2.5 text-left text-xs font-medium text-muted-foreground">
                                 Animal
+                              </th>
+                              <th className="sticky left-[150px] z-30 w-[70px] min-w-[70px] bg-background px-3 py-2.5 text-left text-xs font-medium text-muted-foreground shadow-[6px_0_10px_-10px_rgba(15,23,42,0.45)]">
+                                GT
                               </th>
                               <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[90px]">
                                 Cohort
                               </th>
                               <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[55px]">
                                 Sex
-                              </th>
-                              <th className="text-left px-3 py-2.5 font-medium text-xs text-muted-foreground bg-background min-w-[65px]">
-                                GT
                               </th>
                               {currentFields.map((field) => (
                                 <th
@@ -2322,6 +2360,7 @@ export function ColonyResultsTab({
                                 updateNotes={updateNotes}
                                 dirtyKeys={dirtyKeys}
                                 isImageExperiment={IMAGE_EXPERIMENTS.has(exp)}
+                                averageFieldKeys={getAverageColumnKeys(getSchemaColumnsForExperiment(exp))}
                               />
                             ))}
                           </tbody>
@@ -2423,6 +2462,7 @@ interface CohortGroupProps {
   updateNotes: (animalId: string, tp: number, exp: string, notes: string) => void;
   dirtyKeys: Set<string>;
   isImageExperiment: boolean;
+  averageFieldKeys: Set<string>;
 }
 
 function CohortGroup({
@@ -2438,6 +2478,7 @@ function CohortGroup({
   updateNotes,
   dirtyKeys,
   isImageExperiment,
+  averageFieldKeys,
 }: CohortGroupProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -2501,12 +2542,22 @@ function CohortGroup({
               className={`border-b transition-colors ${genotypeRowColor} ${rowBackgroundClass} hover:bg-slate-50/70 dark:hover:bg-slate-900/30`}
             >
               <td
-                className={`sticky left-0 z-10 px-3 py-2 text-xs font-medium ${stickyCellBackgroundClass} shadow-[6px_0_10px_-10px_rgba(15,23,42,0.35)]`}
+                className={`sticky left-0 z-20 w-[150px] min-w-[150px] px-3 py-2 text-xs font-medium ${stickyCellBackgroundClass}`}
               >
                 <div className="flex items-center gap-1.5">
                   <MiniEarTag earTag={animal.ear_tag} size={20} />
                   <span>{animal.identifier}</span>
                 </div>
+              </td>
+              <td
+                className={`sticky left-[150px] z-20 w-[70px] min-w-[70px] px-3 py-2 text-xs ${stickyCellBackgroundClass} shadow-[6px_0_10px_-10px_rgba(15,23,42,0.45)]`}
+              >
+                <Badge
+                  variant="secondary"
+                  className={`text-[10px] py-0 font-medium ${GENOTYPE_BADGE_CLASS[animal.genotype] || GENOTYPE_BADGE_CLASS.wt}`}
+                >
+                  {GENOTYPE_LABELS[animal.genotype] || animal.genotype}
+                </Badge>
               </td>
               <td className="px-3 py-2 text-xs text-muted-foreground">
                 {cohort?.name || "—"}
@@ -2516,24 +2567,11 @@ function CohortGroup({
                   {animal.sex === "male" ? "♂" : "♀"}
                 </span>
               </td>
-              <td className="px-3 py-2 text-xs">
-                <Badge
-                  variant="outline"
-                  className={`text-[10px] py-0 ${
-                    animal.genotype === "hemi"
-                      ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
-                      : animal.genotype === "het"
-                      ? "border-orange-300 text-orange-700 dark:border-orange-800 dark:text-orange-400"
-                      : "border-gray-300 text-gray-600"
-                  }`}
-                >
-                  {GENOTYPE_LABELS[animal.genotype] || animal.genotype}
-                </Badge>
-              </td>
               {fields.map((field) => (
                 <td key={field.key} className="px-1.5 py-1.5">
                   {(() => {
-                    const readOnly = isDerivedReadOnlyField(experiment, field.key);
+                    const readOnly =
+                      isDerivedReadOnlyField(experiment, field.key) || averageFieldKeys.has(field.key);
                     if (field.type === "boolean") {
                       return (
                         <label className="flex h-7 min-w-[100px] items-center justify-center rounded-md border border-slate-200 bg-white px-2">

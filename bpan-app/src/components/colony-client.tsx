@@ -53,6 +53,18 @@ const BREEDER_GENOTYPE_LABELS: Record<string, string> = {
   wt: "WT",
 };
 
+// Strong, accessible genotype badge colors (light + dark mode). Used for
+// any genotype badge in this view so colors stay distinct and readable.
+const GENOTYPE_BADGE_CLASS: Record<string, string> = {
+  hemi: "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200",
+  het: "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200",
+  wt: "bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200",
+};
+
+function genotypeBadgeClass(genotype: string): string {
+  return GENOTYPE_BADGE_CLASS[genotype] || GENOTYPE_BADGE_CLASS.wt;
+}
+
 const GENOTYPE_SORT: Record<string, number> = { hemi: 0, het: 1, wt: 2 };
 const SEX_SORT: Record<string, number> = { male: 0, female: 1 };
 const BREEDER_CAGE_TYPE_LABELS: Record<string, string> = {
@@ -1315,7 +1327,7 @@ export function ColonyClient({
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-semibold text-sm">{animal.identifier}</span>
                           <Badge variant="outline" className="text-xs">{cohort?.name}</Badge>
-                          <Badge variant="secondary" className="text-xs">{genotypeLabel(animal.sex, animal.genotype)}</Badge>
+                          <Badge variant="secondary" className={`text-xs font-medium ${genotypeBadgeClass(animal.genotype)}`}>{genotypeLabel(animal.sex, animal.genotype)}</Badge>
                           {animal.eeg_implanted && <Badge className="bg-purple-100 text-purple-700 text-xs" variant="secondary">EEG</Badge>}
                           {animal.status !== "active" && (
                             animal.status === "breeding" ? (
@@ -3472,7 +3484,7 @@ function AnimalDetail({
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           {animal.identifier}
-          <Badge variant="secondary">{genotypeLabel(animal.sex, animal.genotype)}</Badge>
+          <Badge variant="secondary" className={`font-medium ${genotypeBadgeClass(animal.genotype)}`}>{genotypeLabel(animal.sex, animal.genotype)}</Badge>
         </DialogTitle>
       </DialogHeader>
 
