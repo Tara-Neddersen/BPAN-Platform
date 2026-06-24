@@ -313,6 +313,23 @@ export async function replaceExperimentTimepoints(formData: FormData) {
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
 }
 
+// Derive the representative ("target") age for a colony timepoint from its
+// label, e.g. "30-60" or "30 Day" -> 30. This matches the convention used by
+// existing colony timepoints, where age_days holds the nominal timepoint age
+// (30/120/210) and the min..max range is the scheduling eligibility window.
+// Falls back to the eligibility minimum only when the label has no number.
+// Previously age_days was set to the eligibility minimum (e.g. 25 for a 25-75
+// day window), which spawned spurious extra timepoints (25/115/205) alongside
+// the real ones and prevented matching existing timepoints.
+function deriveTargetAgeDays(label: string, minAgeDays: number): number {
+  const match = String(label).match(/\d+/);
+  if (match) {
+    const parsed = Number(match[0]);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return minAgeDays;
+}
+
 export async function syncBatteryWindowsToColonyTimepoints(args: {
   batteryName: string;
   windows: BatteryWindowSyncInput[];
@@ -368,8 +385,10 @@ export async function syncBatteryWindowsToColonyTimepoints(args: {
     const experimentTypes = inferWindowExperimentTypes(window.experiments);
     if (experimentTypes.length === 0) continue;
 
+    const targetAgeDays = deriveTargetAgeDays(window.label, window.minAgeDays);
+
     const existing = (existingRows || []).find((row) => row.name.trim().toLowerCase() === window.label.toLowerCase()) ||
-      (existingRows || []).find((row) => row.age_days === window.minAgeDays) ||
+      (existingRows || []).find((row) => row.age_days === targetAgeDays) ||
       null;
     const mergedExperiments = Array.from(
       new Set([...(Array.isArray(existing?.experiments) ? existing.experiments : []), ...experimentTypes]),
@@ -382,7 +401,7 @@ export async function syncBatteryWindowsToColonyTimepoints(args: {
     const nextPayload = {
       user_id: user.id,
       name: window.label,
-      age_days: window.minAgeDays,
+      age_days: targetAgeDays,
       experiments: mergedExperiments,
       handling_days_before: existing?.handling_days_before ?? 3,
       duration_days: existing?.duration_days && existing.duration_days > 0 ? existing.duration_days : durationDays,
