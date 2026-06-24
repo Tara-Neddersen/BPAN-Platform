@@ -299,6 +299,13 @@ interface Props {
   initialPrefillExperimentId?: string | null;
   initialPrefillStarterAnalyses?: boolean;
   emptyStateVariant?: "default" | "colony";
+  /**
+   * "full" (default) keeps the complete Results surface (datasets + preview + charts).
+   * "dataSource" surfaces only the unique data-in/out tools (datasets, import, paste,
+   * manual table, .xlsx backup, and the Google Sheets integration) for embedding inside
+   * the Analysis area, where the wizard already owns charts and data preview.
+   */
+  mode?: "full" | "dataSource";
 }
 
 type ResultsDatasetRecord = Dataset & {
@@ -476,7 +483,9 @@ export function ResultsClient({
   initialPrefillExperimentId = null,
   initialPrefillStarterAnalyses = false,
   emptyStateVariant = "default",
+  mode = "full",
 }: Props) {
+  const isDataSourceMode = mode === "dataSource";
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -742,11 +751,21 @@ export function ResultsClient({
         <div className="page-header">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold tracking-tight">{UI_SURFACE_TITLES.results}</h1>
-              <HelpHint text="Import data, run statistics, and build figures." />
+              <h1 className="text-2xl font-bold tracking-tight">
+                {isDataSourceMode ? "Data & sources" : UI_SURFACE_TITLES.results}
+              </h1>
+              <HelpHint
+                text={
+                  isDataSourceMode
+                    ? "Import, paste, build, back up, and connect datasets. Build charts and run statistics in the Analysis wizard above."
+                    : "Import data, run statistics, and build figures."
+                }
+              />
             </div>
             <p className="text-sm text-muted-foreground">
-              Unified workspace for datasets, exports, and publication-ready figures.
+              {isDataSourceMode
+                ? "Bring data in and out: import files, paste tables, build manual tables, export .xlsx backups, and connect Google Sheets."
+                : "Unified workspace for datasets, exports, and publication-ready figures."}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary" className="gap-1">
@@ -981,12 +1000,16 @@ export function ResultsClient({
                     {datasetAnalyses.length} analyses • {datasetFigures.length} figures • {selectedDataset.columns.length} columns • {selectedDataset.row_count} rows
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => router.push("/colony/analysis")}>
-                      Open Analysis
-                    </Button>
-                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setActiveTab("visualize")}>
-                      Open Visualize
-                    </Button>
+                    {!isDataSourceMode && (
+                      <>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => router.push("/colony/analysis")}>
+                          Open Analysis
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setActiveTab("visualize")}>
+                          Open Visualize
+                        </Button>
+                      </>
+                    )}
                     <Button size="sm" variant="outline" className="h-7 text-xs hidden sm:inline-flex" onClick={exportSelectedDatasetCsv}>
                       Export CSV
                     </Button>
@@ -1132,6 +1155,14 @@ export function ResultsClient({
             </p>
           </div>
         )
+      ) : isDataSourceMode ? (
+        // Data & sources mode: the Analysis wizard owns the data preview and charts.
+        // Here we only confirm the selected dataset is ready to use as a source.
+        <div className="rounded-2xl border bg-background/85 px-4 py-3 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">{selectedDataset.name}</span> is ready as a data source —{" "}
+          {selectedDataset.columns.length} columns • {selectedDataset.row_count} rows. Use the Analysis wizard above to
+          preview, chart, and run statistics, or the tools here to import, back up, or connect this data.
+        </div>
       ) : (
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "data" | "visualize")} className="space-y-4">
           <TabsList className="sticky-section-switcher h-auto w-full justify-start gap-1 px-1 py-1">

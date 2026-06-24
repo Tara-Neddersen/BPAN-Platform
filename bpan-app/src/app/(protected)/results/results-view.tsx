@@ -47,6 +47,7 @@ export type ResultsSearchParams = {
 
 type ResultsViewOptions = {
   emptyStateVariant?: "default" | "colony";
+  mode?: "full" | "dataSource";
 };
 
 async function fetchOptionalRows(supabase: unknown, table: string, orderBy?: Array<{ column: string; ascending?: boolean }>) {
@@ -195,6 +196,7 @@ export async function renderResultsView(params?: ResultsSearchParams, options?: 
       initialPrefillExperimentId={params?.prefill_experiment_id ?? null}
       initialPrefillStarterAnalyses={params?.prefill_starter_analyses === "1"}
       emptyStateVariant={options?.emptyStateVariant ?? "default"}
+      mode={options?.mode ?? "full"}
     />
   );
 }
