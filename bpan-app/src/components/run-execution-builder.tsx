@@ -172,7 +172,9 @@ function slotKindLabel(slotKind: PlatformSlotKind) {
 function getAssignmentDraft(assignment: RunAssignment | undefined): AssignmentDraft {
   if (!assignment) {
     return {
-      scope_type: "study",
+      // Default to cohort: it's the practical way to put animals on a run.
+      // ("study" requires a raw UUID and was a confusing default.)
+      scope_type: "cohort",
       study_id: "",
       cohort_id: "",
       animal_id: "",
@@ -348,7 +350,7 @@ export function RunExecutionBuilder({
     start_anchor_date: "",
     start_alignment: "exact" as StartAlignment,
     assignment: {
-      scope_type: "study" as PlatformAssignmentScope,
+      scope_type: "cohort" as PlatformAssignmentScope,
       study_id: "",
       cohort_id: "",
       animal_id: "",
@@ -1245,9 +1247,9 @@ export function RunExecutionBuilder({
               }
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             >
-              <option value="study">Study</option>
               <option value="cohort">Cohort</option>
               <option value="animal">Animal</option>
+              <option value="study">Study (advanced)</option>
             </select>
 
             {createDraft.assignment.scope_type === "study" ? (
@@ -1495,6 +1497,12 @@ export function RunExecutionBuilder({
                     You have unsaved run edits. Save timeline/assignment to persist, or discard unsaved changes to revert.
                   </div>
                 ) : null}
+                <p className="text-sm font-medium">
+                  Assign animals to this run
+                  <span className="ml-1 font-normal text-muted-foreground">
+                    — pick a cohort (or a single animal), then click Save Assignment. Animals appear in Results once assigned.
+                  </span>
+                </p>
                 <div className="grid gap-2 lg:grid-cols-[180px_minmax(0,1fr)]">
                   <select
                     value={selectedAssignment.scope_type}
@@ -1511,9 +1519,9 @@ export function RunExecutionBuilder({
                     }
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                   >
-                    <option value="study">Study</option>
                     <option value="cohort">Cohort</option>
                     <option value="animal">Animal</option>
+                    <option value="study">Study (advanced)</option>
                   </select>
 
                   {selectedAssignment.scope_type === "study" ? (
