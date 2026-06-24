@@ -72,6 +72,18 @@ function requiredStr(value: FormDataEntryValue | null): string | null {
   return str === "" ? null : str;
 }
 
+/**
+ * Read an optional strain_id from FormData.
+ * The UI Select uses "__none__" as the sentinel for "no strain" (shadcn Select
+ * forbids empty-string item values), so map that + empty to null.
+ */
+function strainIdField(formData: FormData): string | null {
+  const raw = (formData.get("strain_id") as string) || "";
+  const v = raw.trim();
+  if (v === "" || v === "__none__") return null;
+  return v;
+}
+
 // ─── Breeder Cages ─────────────────────────────────────────────────────
 
 function addDaysIso(dateStr: string, days: number) {
@@ -95,6 +107,7 @@ function getBreederCagePayload(formData: FormData) {
 
   return {
     name: formData.get("name") as string,
+    strain_id: strainIdField(formData),
     strain: (formData.get("strain") as string) || null,
     barcode: (formData.get("barcode") as string) || null,
     cage_type: cageType,
@@ -389,6 +402,7 @@ export async function createTempSplitCageFromBreeder(breederCageId: string) {
 
   const basePayload = {
     name: "",
+    strain_id: source.strain_id || null,
     strain: source.strain || null,
     barcode: null,
     cage_type: "temp_split",
@@ -497,6 +511,7 @@ export async function createCohort(formData: FormData) {
   const { data: cohort, error } = await supabase.from("cohorts").insert({
     user_id: user.id,
     breeder_cage_id: (formData.get("breeder_cage_id") as string) || null,
+    strain_id: strainIdField(formData),
     name: cohortName,
     birth_date: birthDate,
     litter_size: toInt(formData.get("litter_size")),
@@ -539,6 +554,7 @@ export async function updateCohort(id: string, formData: FormData) {
     .from("cohorts")
     .update({
       breeder_cage_id: (formData.get("breeder_cage_id") as string) || null,
+      strain_id: strainIdField(formData),
       name: cohortName,
       birth_date: newBirthDate,
       litter_size: toInt(formData.get("litter_size")),
@@ -2397,6 +2413,7 @@ export async function createHousingCage(formData: FormData) {
 
   const { error } = await supabase.from("housing_cages").insert({
     user_id: user.id,
+    strain_id: strainIdField(formData),
     cage_label: formData.get("cage_label") as string,
     cage_id: (formData.get("cage_id") as string) || null,
     cage_sex: (formData.get("cage_sex") as string) || "female",
@@ -2419,6 +2436,7 @@ export async function updateHousingCage(id: string, formData: FormData) {
   const { error } = await supabase
     .from("housing_cages")
     .update({
+      strain_id: strainIdField(formData),
       cage_label: formData.get("cage_label") as string,
       cage_id: (formData.get("cage_id") as string) || null,
       cage_sex: (formData.get("cage_sex") as string) || "female",
@@ -2554,6 +2572,86 @@ export async function moveAnimalToBreeders(animalId: string, breederCageId?: str
     }
   }
 
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true };
+}
+
+// ─── Strains ────────────────────────────────────────────────────────────
+//
+// Strains are the top-level grouping above cohorts (e.g. BPAN, SynGAP).
+// Cohorts, breeder cages, and housing cages reference a strain via their
+// nullable `strain_id` FK (ON DELETE SET NULL). UNIQUE(user_id, name) is
+// enforced at the DB level; a duplicate name is mapped to a friendly error.
+
+export async function createStrain(name: string, description?: string | null, color?: string | null) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const strainName = requiredStr(name);
+  if (!strainName) return { error: "Strain name is required." };
+
+  const { data, error } = await supabase
+    .from("strains")
+    .insert({
+      user_id: user.id,
+      name: strainName,
+      description: requiredStr(description ?? null),
+      color: requiredStr(color ?? null),
+    })
+    .select("id")
+    .single();
+  if (error) {
+    if (error.code === "23505") return { error: `A strain named "${strainName}" already exists.` };
+    return { error: error.message };
+  }
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true, id: data.id };
+}
+
+export async function updateStrain(
+  id: string,
+  fields: { name?: string; description?: string | null; color?: string | null }
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const update: Record<string, unknown> = {};
+  if (fields.name !== undefined) {
+    const strainName = requiredStr(fields.name);
+    if (!strainName) return { error: "Strain name is required." };
+    update.name = strainName;
+  }
+  if (fields.description !== undefined) update.description = requiredStr(fields.description ?? null);
+  if (fields.color !== undefined) update.color = requiredStr(fields.color ?? null);
+  if (Object.keys(update).length === 0) return { success: true };
+
+  const { error } = await supabase
+    .from("strains")
+    .update(update)
+    .eq("id", id)
+    .eq("user_id", user.id);
+  if (error) {
+    if (error.code === "23505") return { error: `A strain named "${update.name}" already exists.` };
+    return { error: error.message };
+  }
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true };
+}
+
+export async function deleteStrain(id: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  // The strain_id FK on cohorts / breeder_cages / housing_cages is
+  // ON DELETE SET NULL, so dependent rows are detached automatically.
+  const { error } = await supabase.from("strains").delete().eq("id", id).eq("user_id", user.id);
+  if (error) return { error: error.message };
   revalidatePath("/colony");
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };

@@ -883,7 +883,7 @@ export function ColonyResultsTab({
         // Sort by cohort name
         const cohortA = cohorts.find((c) => c.id === a.cohort_id)?.name || "";
         const cohortB = cohorts.find((c) => c.id === b.cohort_id)?.name || "";
-        if (cohortA !== cohortB) return cohortA.localeCompare(cohortB);
+        if (cohortA !== cohortB) return cohortA.localeCompare(cohortB, undefined, { numeric: true });
         // Then sex
         if (a.sex !== b.sex) return a.sex === "male" ? -1 : 1;
         // Then genotype
@@ -934,7 +934,7 @@ export function ColonyResultsTab({
     return [...scopedAnimals].sort((left, right) => {
       const cohortA = cohorts.find((cohort) => cohort.id === left.cohort_id)?.name || "";
       const cohortB = cohorts.find((cohort) => cohort.id === right.cohort_id)?.name || "";
-      if (cohortA !== cohortB) return cohortA.localeCompare(cohortB);
+      if (cohortA !== cohortB) return cohortA.localeCompare(cohortB, undefined, { numeric: true });
       return left.identifier.localeCompare(right.identifier, undefined, { numeric: true });
     });
   }, [activeAnimals, bulkDeleteCohortId, bulkDeleteScope, cohorts]);

@@ -23,6 +23,7 @@ import type {
   RunTimepointExperiment,
   Dataset,
   Analysis,
+  Strain,
 } from "@/types";
 import {
   createBreederCage,
@@ -59,6 +60,9 @@ import {
   createHousingCage,
   updateHousingCage,
   deleteHousingCage,
+  createStrain,
+  updateStrain,
+  deleteStrain,
   assignAnimalToCage,
   rescheduleTimepointExperiments,
   batchUpdateExperimentStatus,
@@ -138,6 +142,7 @@ interface ColonyPageViewOptions {
   defaultTab?: string;
   initialFilterCohort?: string;
   initialRunId?: string | null;
+  initialStrainId?: string;
   title?: string;
   description?: string;
   showTabList?: boolean;
@@ -150,6 +155,7 @@ export async function renderColonyPageView({
   defaultTab = "animals",
   initialFilterCohort = "all",
   initialRunId = null,
+  initialStrainId = "all",
   title = "Mouse Colony",
   description = "Manage breeder cages, cohorts, animals, experiment schedules, meetings, and PI access.",
   showTabList = true,
@@ -216,6 +222,7 @@ export async function renderColonyPageView({
   // Small tables use normal queries (well under 1000 rows)
   // Large tables use paginated RPC to bypass PostgREST 1000-row hard limit
   const [
+    { data: strains },
     { data: breederCages },
     { data: cohorts },
     { data: timepoints },
@@ -237,6 +244,7 @@ export async function renderColonyPageView({
     { data: colonyAnalysisDatasets },
     { data: colonyAnalysisRevisions },
   ] = await Promise.all([
+    supabase.from("strains").select("*").eq("user_id", user.id).order("name"),
     supabase.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
     supabase.from("cohorts").select("*").eq("user_id", user.id).order("name"),
     supabase.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
@@ -292,9 +300,11 @@ export async function renderColonyPageView({
           defaultTab={defaultTab}
           initialFilterCohort={initialFilterCohort}
           initialRunId={initialRunId}
+          initialStrainId={initialStrainId}
           showTabList={showTabList}
           initialOpenAnimalDialog={initialOpenAnimalDialog}
           initialOpenPiAccessDialog={initialOpenPiAccessDialog}
+          strains={(strains || []) as Strain[]}
           breederCages={(breederCages || []) as BreederCage[]}
           cohorts={(cohorts || []) as Cohort[]}
           animals={(animals || []) as Animal[]}
@@ -358,6 +368,9 @@ export async function renderColonyPageView({
             createHousingCage,
             updateHousingCage,
             deleteHousingCage,
+            createStrain,
+            updateStrain,
+            deleteStrain,
             assignAnimalToCage,
             moveAnimalToBreeders,
             rescheduleTimepointExperiments,

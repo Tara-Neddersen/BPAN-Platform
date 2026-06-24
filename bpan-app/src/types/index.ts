@@ -346,10 +346,26 @@ export interface PaperOutline {
 
 // ─── Mouse Colony Manager ────────────────────────────────────────────────────
 
+/**
+ * Top-level grouping above cohorts (e.g. BPAN, SynGAP). Cohorts, breeder cages,
+ * and housing cages reference a strain via their nullable `strain_id` FK;
+ * animals inherit a strain through their cohort.
+ */
+export interface Strain {
+  id: string;
+  user_id: string;
+  name: string;
+  description?: string | null;
+  color?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface BreederCage {
   id: string;
   user_id: string;
   name: string;
+  strain_id?: string | null;
   strain: string | null;
   barcode: string | null;
   cage_type: string | null;
@@ -388,6 +404,7 @@ export interface Cohort {
   id: string;
   user_id: string;
   breeder_cage_id: string | null;
+  strain_id?: string | null;
   name: string;
   birth_date: string;
   litter_size: number | null;
@@ -551,6 +568,7 @@ export interface ColonyPhoto {
 export interface HousingCage {
   id: string;
   user_id: string;
+  strain_id?: string | null;
   cage_label: string;
   cage_id: string | null;
   cage_sex: AnimalSex;

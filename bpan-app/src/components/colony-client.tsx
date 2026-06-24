@@ -8,7 +8,7 @@ import {
   ExternalLink, ChevronDown, ChevronUp,
   Calendar, AlertTriangle, Link2, Mouse, Home, Rabbit,
   RefreshCw, CheckCircle2,
-  Upload, CloudOff, Cloud, ImageIcon,
+  Upload, CloudOff, Cloud, ImageIcon, Dna,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,7 @@ import type {
   ColonyTimepoint, AdvisorPortal, MeetingNote, CageChange, ColonyPhoto,
   HousingCage, ColonyResult, AnimalSex, AnimalGenotype, AdvisorPortalAccessLog,
   ExperimentRun, RunAssignment, RunExperimentScheduleStep, RunScheduleBlock, RunTimepoint, RunTimepointExperiment,
-  Dataset, Analysis,
+  Dataset, Analysis, Strain,
 } from "@/types";
 import { ColonyResultsTab } from "@/components/colony-results-tab";
 import { ColonyAnalysisPanel } from "@/components/colony-analysis-panel";
@@ -201,9 +201,17 @@ interface ColonyClientProps {
    * existing default. "__all__" is a valid value (means "All runs").
    */
   initialRunId?: string | null;
+  /**
+   * Selected strain carried in the `strain` URL param. "all" (the default)
+   * preserves today's behavior exactly: nothing is filtered. Any other value
+   * is a strain id that filters the Animals / Cohorts / Breeders / Housing
+   * lists to that strain.
+   */
+  initialStrainId?: string;
   showTabList?: boolean;
   initialOpenAnimalDialog?: boolean;
   initialOpenPiAccessDialog?: boolean;
+  strains: Strain[];
   breederCages: BreederCage[];
   cohorts: Cohort[];
   animals: Animal[];
@@ -309,6 +317,9 @@ interface ColonyClientProps {
     createHousingCage: (fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     updateHousingCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     deleteHousingCage: (id: string) => Promise<{ success?: boolean; error?: string }>;
+    createStrain: (name: string, description?: string | null, color?: string | null) => Promise<{ success?: boolean; error?: string; id?: string }>;
+    updateStrain: (id: string, fields: { name?: string; description?: string | null; color?: string | null }) => Promise<{ success?: boolean; error?: string }>;
+    deleteStrain: (id: string) => Promise<{ success?: boolean; error?: string }>;
     assignAnimalToCage: (animalId: string, housingCageId: string | null) => Promise<{ success?: boolean; error?: string }>;
     moveAnimalToBreeders: (animalId: string, breederCageId?: string | null) => Promise<{ success?: boolean; error?: string }>;
     rescheduleTimepointExperiments: (animalId: string, timepointAgeDays: number, newStartDate: string, birthDate: string) => Promise<{ success?: boolean; error?: string; rescheduled?: number; lastDate?: string; message?: string }>;
@@ -407,9 +418,11 @@ export function ColonyClient({
   defaultTab = "animals",
   initialFilterCohort = "all",
   initialRunId = null,
+  initialStrainId = "all",
   showTabList = true,
   initialOpenAnimalDialog = false,
   initialOpenPiAccessDialog = false,
+  strains: initStrains,
   breederCages: initCages,
   cohorts: initCohorts,
   animals: initAnimals,
@@ -445,6 +458,12 @@ export function ColonyClient({
   const [activeTab, setActiveTab] = useState(initialTab);
 
   // Local state — updated via refetch after each action
+  const [strains, setStrains] = useState(initStrains);
+  // Natural/numeric ordering so e.g. "Strain 2" sorts before "Strain 10".
+  const sortedStrains = useMemo(
+    () => [...strains].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+    [strains],
+  );
   const [cages, setCages] = useState(initCages);
   const [cohorts, setCohorts] = useState(initCohorts);
   // Natural/numeric ordering so "Cohort 3" sorts before "Cohort 10" (not after).
@@ -487,7 +506,7 @@ export function ColonyClient({
     router.replace(buildColonyUrl(activeTab, filterCohort, undefined, runId), { scroll: false });
   }
 
-  function buildColonyUrl(tab: string, cohort: string, create?: "animal", run?: string | null) {
+  function buildColonyUrl(tab: string, cohort: string, create?: "animal", run?: string | null, strain?: string) {
     const params = new URLSearchParams();
     if (tab !== "animals") {
       params.set("tab", tab);
@@ -501,8 +520,30 @@ export function ColonyClient({
     if (run) {
       params.set("run", run);
     }
+    // "all" is the default (no filtering) so it is omitted from the URL.
+    const strainValue = strain ?? filterStrain;
+    if (strainValue && strainValue !== "all") {
+      params.set("strain", strainValue);
+    }
     const query = params.toString();
     return query ? `/colony?${query}` : "/colony";
+  }
+
+  // Persist the strain switcher choice into the `strain` URL param so it sticks
+  // across navigation (mirrors how the `run` param is handled).
+  function handleStrainChange(strainId: string) {
+    setFilterStrain(strainId);
+    // If the active cohort filter no longer belongs to the selected strain,
+    // reset it to "all" so the cohort dropdown stays consistent with its list.
+    let nextCohort = filterCohort;
+    if (strainId !== "all" && filterCohort !== "all") {
+      const stillInStrain = cohorts.some((c) => c.id === filterCohort && c.strain_id === strainId);
+      if (!stillInStrain) {
+        nextCohort = "all";
+        setFilterCohort("all");
+      }
+    }
+    router.replace(buildColonyUrl(activeTab, nextCohort, undefined, sharedRunId, strainId), { scroll: false });
   }
 
   function clearCreateParam() {
@@ -542,7 +583,8 @@ export function ColonyClient({
         return;
       }
       // Small tables: normal query. Large tables: cursor-based pagination.
-      const [r1, r2, r5, r6, r6b, r9, r10, allAnimals, allExps, allCageChanges, allResults] = await Promise.all([
+      const [r0, r1, r2, r5, r6, r6b, r9, r10, allAnimals, allExps, allCageChanges, allResults] = await Promise.all([
+        sb.from("strains").select("*").eq("user_id", user.id).order("name"),
         sb.from("breeder_cages").select("*").eq("user_id", user.id).order("name"),
         sb.from("cohorts").select("*").eq("user_id", user.id).order("name"),
         sb.from("colony_timepoints").select("*").eq("user_id", user.id).order("sort_order"),
@@ -555,6 +597,7 @@ export function ColonyClient({
         fetchAllClientRows(sb, "cage_changes", user.id),
         fetchAllClientRows(sb, "colony_results", user.id),
       ]);
+      setStrains((r0.data || []) as Strain[]);
       setCages((r1.data || []) as BreederCage[]);
       setCohorts((r2.data || []) as Cohort[]);
       setAnimals(allAnimals as Animal[]);
@@ -579,6 +622,13 @@ export function ColonyClient({
   const [showAddPI, setShowAddPI] = useState(initialOpenPiAccessDialog);
   const [showGenerateCageChanges, setShowGenerateCageChanges] = useState(false);
   const [showAddHousingCage, setShowAddHousingCage] = useState(false);
+  // Strain management dialog + add/rename form state.
+  const [showManageStrains, setShowManageStrains] = useState(false);
+  const [newStrainName, setNewStrainName] = useState("");
+  const [newStrainColor, setNewStrainColor] = useState("#6366f1");
+  const [editingStrainId, setEditingStrainId] = useState<string | null>(null);
+  const [editStrainName, setEditStrainName] = useState("");
+  const [editStrainColor, setEditStrainColor] = useState("#6366f1");
   useEffect(() => {
     setShowAddAnimal(initialOpenAnimalDialog);
   }, [initialOpenAnimalDialog]);
@@ -640,6 +690,9 @@ export function ColonyClient({
   const [photoUploading, setPhotoUploading] = useState(false);
   const photoUploadInputRef = useRef<HTMLInputElement>(null);
   const [filterCohort, setFilterCohort] = useState(initialFilterCohort);
+  // Selected strain. "all" = today's behavior (no strain filtering). Persisted
+  // to the `strain` URL param so the choice sticks across navigation.
+  const [filterStrain, setFilterStrain] = useState(initialStrainId || "all");
   const [filterGenotype, setFilterGenotype] = useState("all");
   // Status filter for the animals list. Defaults to "all" (preserves prior
   // behavior); "breeding" surfaces repurposed animals so they stay findable.
@@ -648,6 +701,9 @@ export function ColonyClient({
   useEffect(() => {
     setFilterCohort(initialFilterCohort || "all");
   }, [initialFilterCohort]);
+  useEffect(() => {
+    setFilterStrain(initialStrainId || "all");
+  }, [initialStrainId]);
   const [animalFormCohortId, setAnimalFormCohortId] = useState("");
   const [animalFormEarTag, setAnimalFormEarTag] = useState("0000");
   const birthDateRef = useRef<HTMLInputElement>(null);
@@ -877,9 +933,50 @@ export function ColonyClient({
     }
   }
 
+  // Strain filtering. "all" → no filtering (today's behavior). Otherwise:
+  //   • cohorts/animals: matched by the cohort's strain_id
+  //   • breeder & housing cages: matched directly by their own strain_id
+  // Cohort ids that belong to the selected strain (used to scope animals).
+  const cohortIdsInStrain = useMemo(() => {
+    if (filterStrain === "all") return null;
+    return new Set(cohorts.filter((c) => c.strain_id === filterStrain).map((c) => c.id));
+  }, [cohorts, filterStrain]);
+
+  const strainFilteredCohorts = useMemo(() => {
+    if (filterStrain === "all") return cohorts;
+    return cohorts.filter((c) => c.strain_id === filterStrain);
+  }, [cohorts, filterStrain]);
+
+  // Strain-filtered, naturally sorted cohorts for list rendering + dropdowns.
+  const sortedStrainCohorts = useMemo(
+    () => [...strainFilteredCohorts].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+    [strainFilteredCohorts],
+  );
+
+  const strainFilteredCages = useMemo(() => {
+    if (filterStrain === "all") return cages;
+    return cages.filter((c) => c.strain_id === filterStrain);
+  }, [cages, filterStrain]);
+
+  const strainFilteredHousingCages = useMemo(() => {
+    if (filterStrain === "all") return housingCages;
+    return housingCages.filter((hc) => hc.strain_id === filterStrain);
+  }, [housingCages, filterStrain]);
+
+  // Default strain id for new cohorts/cages: the active switcher strain when
+  // one is selected, otherwise BPAN (if present), otherwise the first strain.
+  // "" means "no strain" (kept as an explicit option so nothing is forced).
+  const defaultStrainId = useMemo(() => {
+    if (filterStrain && filterStrain !== "all") return filterStrain;
+    const bpan = strains.find((s) => s.name.toUpperCase() === "BPAN");
+    if (bpan) return bpan.id;
+    return strains[0]?.id ?? "";
+  }, [filterStrain, strains]);
+
   // Sort animals: cohort → sex → genotype
   const sortedAnimals = useMemo(() => {
     let filtered = [...animals];
+    if (cohortIdsInStrain) filtered = filtered.filter((a) => cohortIdsInStrain.has(a.cohort_id));
     if (filterCohort !== "all") filtered = filtered.filter((a) => a.cohort_id === filterCohort);
     if (filterStatus !== "all") filtered = filtered.filter((a) => a.status === filterStatus);
     if (filterGenotype !== "all") {
@@ -900,7 +997,7 @@ export function ColonyClient({
       if (sexComp !== 0) return sexComp;
       return GENOTYPE_SORT[a.genotype] - GENOTYPE_SORT[b.genotype];
     });
-  }, [animals, cohorts, filterCohort, filterGenotype, filterStatus]);
+  }, [animals, cohorts, cohortIdsInStrain, filterCohort, filterGenotype, filterStatus]);
 
   // Date helpers
   const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
@@ -1002,6 +1099,48 @@ export function ColonyClient({
     if (result.error) toast.error(result.error);
     else await refetchAll();
     return result;
+  }
+
+  // ─── Strain management handlers ─────────────────────────────────────────
+  async function handleCreateStrain() {
+    const name = newStrainName.trim();
+    if (!name) { toast.error("Strain name is required."); return; }
+    setBusy(true);
+    const result = await actions.createStrain(name, null, newStrainColor || null);
+    setBusy(false);
+    if (result.error) { toast.error(result.error); return; }
+    toast.success("Strain added!");
+    setNewStrainName("");
+    setNewStrainColor("#6366f1");
+    await refetchAll();
+  }
+
+  function startEditStrain(s: Strain) {
+    setEditingStrainId(s.id);
+    setEditStrainName(s.name);
+    setEditStrainColor(s.color || "#6366f1");
+  }
+
+  async function handleSaveStrainEdit() {
+    if (!editingStrainId) return;
+    const name = editStrainName.trim();
+    if (!name) { toast.error("Strain name is required."); return; }
+    setBusy(true);
+    const result = await actions.updateStrain(editingStrainId, { name, color: editStrainColor || null });
+    setBusy(false);
+    if (result.error) { toast.error(result.error); return; }
+    toast.success("Strain updated!");
+    setEditingStrainId(null);
+    await refetchAll();
+  }
+
+  async function handleDeleteStrain(s: Strain) {
+    if (!window.confirm(`Delete strain "${s.name}"? Cohorts and cages in this strain will be unassigned (set to no strain). This cannot be undone.`)) return;
+    const result = await act(actions.deleteStrain(s.id));
+    if (!result.error) {
+      // If the deleted strain was the active filter, fall back to "All strains".
+      if (filterStrain === s.id) handleStrainChange("all");
+    }
   }
 
   // Repurpose a cohort animal as a breeder (status → "breeding"). Guarded by
@@ -1453,6 +1592,41 @@ export function ColonyClient({
         </Card>
       )}
 
+      {/* ─── Strain switcher (top-level grouping above cohorts) ──── */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
+          <Dna className="h-4 w-4 text-muted-foreground" />
+          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Strain</span>
+        </div>
+        <Select value={filterStrain} onValueChange={handleStrainChange}>
+          <SelectTrigger className="w-[200px]"><SelectValue placeholder="All strains" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All strains</SelectItem>
+            {sortedStrains.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                <span className="inline-flex items-center gap-2">
+                  {s.color && (
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-full border border-black/10"
+                      style={{ backgroundColor: s.color }}
+                    />
+                  )}
+                  {s.name}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button variant="outline" size="sm" onClick={() => setShowManageStrains(true)}>
+          <Dna className="h-4 w-4 mr-1" /> Manage strains
+        </Button>
+        {filterStrain !== "all" && (
+          <Badge variant="secondary" className="text-xs">
+            Filtering by {strains.find((s) => s.id === filterStrain)?.name || "strain"}
+          </Badge>
+        )}
+      </div>
+
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         {showTabList ? (
           <TabsList className="sticky-section-switcher h-auto w-full justify-start gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white/85 p-1">
@@ -1471,7 +1645,7 @@ export function ColonyClient({
               <SelectTrigger className="w-[160px]"><SelectValue placeholder="Cohort" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Cohorts</SelectItem>
-                {sortedCohorts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                {sortedStrainCohorts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={filterGenotype} onValueChange={setFilterGenotype}>
@@ -1621,11 +1795,13 @@ export function ColonyClient({
               ))}
             </div>
           )}
-          {cohorts.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">No cohorts yet.</div>
+          {sortedStrainCohorts.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              {filterStrain === "all" ? "No cohorts yet." : "No cohorts in this strain yet."}
+            </div>
           ) : (
             <div className="space-y-2">
-              {sortedCohorts.map((c) => {
+              {sortedStrainCohorts.map((c) => {
                 const cage = cages.find((b) => b.id === c.breeder_cage_id);
                 const cohortAnimals = animals.filter((a) => a.cohort_id === c.id && a.status === "active");
                 const age = daysOld(c.birth_date);
@@ -1793,11 +1969,13 @@ export function ColonyClient({
           <div className="flex justify-end">
             <Button onClick={() => setShowAddCage(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Breeder Cage</Button>
           </div>
-          {cages.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">No breeder cages yet.</div>
+          {strainFilteredCages.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              {filterStrain === "all" ? "No breeder cages yet." : "No breeder cages in this strain yet."}
+            </div>
           ) : (
             <div className="space-y-2">
-              {cages.map((c) => {
+              {strainFilteredCages.map((c) => {
                 const cageCohorts = cohorts.filter((co) => co.breeder_cage_id === c.id);
                 const needsCheck = c.is_pregnant && c.last_check_date
                   ? (Date.now() - new Date(c.last_check_date).getTime()) / (1000 * 60 * 60 * 24) >= (c.check_interval_days || 7)
@@ -2039,14 +2217,14 @@ export function ColonyClient({
             <Button onClick={() => setShowAddHousingCage(true)} size="sm"><Plus className="h-4 w-4 mr-1" /> Add Cage</Button>
           </div>
 
-          {housingCages.length === 0 ? (
+          {strainFilteredHousingCages.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               <Home className="h-10 w-10 mx-auto mb-3 opacity-30" />
-              <p>No housing cages yet. Create one to start assigning animals.</p>
+              <p>{filterStrain === "all" ? "No housing cages yet. Create one to start assigning animals." : "No housing cages in this strain yet."}</p>
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {housingCages.filter(hc => hc.is_active).map((hc) => {
+              {strainFilteredHousingCages.filter(hc => hc.is_active).map((hc) => {
                 const occupants = animals.filter(a => a.housing_cage_id === hc.id && a.status === "active");
                 const availableAnimals = animals.filter(
                   (a) => a.status === "active" && !a.housing_cage_id && a.sex === hc.cage_sex
@@ -2711,6 +2889,19 @@ export function ColonyClient({
                 </Select>
               </div>
               <div>
+                <Label className="text-xs">Strain</Label>
+                <Select
+                  name="strain_id"
+                  defaultValue={editingCohort ? (editingCohort.strain_id || "__none__") : (defaultStrainId || "__none__")}
+                >
+                  <SelectTrigger><SelectValue placeholder="No strain" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">No strain</SelectItem>
+                    {sortedStrains.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
                 <Label className="text-xs">Litter Size</Label>
                 <Input name="litter_size" type="number" placeholder="Optional" defaultValue={editingCohort?.litter_size ?? newCohortSeed?.litterSize ?? ""} />
               </div>
@@ -2790,7 +2981,20 @@ export function ColonyClient({
                 />
               </div>
               <div><Label className="text-xs">Barcode</Label><Input name="barcode" placeholder="Scan or enter barcode" defaultValue={editingCage?.barcode || ""} /></div>
-              <div><Label className="text-xs">Strain</Label><Input name="strain" placeholder="e.g. BPAN / ATP13A2" defaultValue={editingCage?.strain || ""} /></div>
+              <div>
+                <Label className="text-xs">Strain</Label>
+                <Select
+                  name="strain_id"
+                  defaultValue={editingCage ? (editingCage.strain_id || "__none__") : (defaultStrainId || "__none__")}
+                >
+                  <SelectTrigger><SelectValue placeholder="No strain" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">No strain</SelectItem>
+                    {sortedStrains.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div><Label className="text-xs">Strain label (free text)</Label><Input name="strain" placeholder="e.g. ATP13A2 line / sub-strain" defaultValue={editingCage?.strain || ""} /></div>
               <div>
                 <Label className="text-xs">Cage Type</Label>
                 <Select
@@ -3645,6 +3849,19 @@ export function ColonyClient({
               </div>
             </div>
             <div>
+              <Label className="text-xs">Strain</Label>
+              <Select
+                name="strain_id"
+                defaultValue={editingHousingCage ? (editingHousingCage.strain_id || "__none__") : (defaultStrainId || "__none__")}
+              >
+                <SelectTrigger><SelectValue placeholder="No strain" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No strain</SelectItem>
+                  {sortedStrains.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label className="text-xs">Cage Sex</Label>
               <Select name="cage_sex" defaultValue={editingHousingCage?.cage_sex || "female"}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -3681,6 +3898,99 @@ export function ColonyClient({
               <Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}{editingHousingCage ? "Save" : "Add Cage"}</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Manage Strains Dialog ─────────────────────────────── */}
+      <Dialog open={showManageStrains} onOpenChange={(v) => { if (!v) { setShowManageStrains(false); setEditingStrainId(null); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Dna className="h-4 w-4" /> Manage Strains</DialogTitle>
+            <DialogDescription>
+              Strains are the top-level grouping above cohorts (e.g. BPAN, SynGAP). Cohorts, breeders, and housing cages can each be assigned a strain.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Add strain */}
+          <div className="rounded-md border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+            <Label className="text-xs">Add a strain</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                aria-label="Strain color"
+                value={newStrainColor}
+                onChange={(e) => setNewStrainColor(e.target.value)}
+                className="h-9 w-10 cursor-pointer rounded border border-slate-300 bg-white p-1"
+              />
+              <Input
+                placeholder="e.g. SynGAP"
+                value={newStrainName}
+                onChange={(e) => setNewStrainName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleCreateStrain(); } }}
+              />
+              <Button size="sm" onClick={handleCreateStrain} disabled={busy}>
+                {busy && <Loader2 className="h-4 w-4 animate-spin mr-1" />}<Plus className="h-4 w-4 mr-1" /> Add
+              </Button>
+            </div>
+          </div>
+
+          {/* Existing strains */}
+          <div className="space-y-2">
+            {sortedStrains.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">No strains yet. Add one above.</p>
+            ) : (
+              sortedStrains.map((s) => {
+                const cohortCount = cohorts.filter((c) => c.strain_id === s.id).length;
+                const isEditing = editingStrainId === s.id;
+                return (
+                  <div key={s.id} className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2">
+                    {isEditing ? (
+                      <>
+                        <input
+                          type="color"
+                          aria-label="Strain color"
+                          value={editStrainColor}
+                          onChange={(e) => setEditStrainColor(e.target.value)}
+                          className="h-9 w-10 cursor-pointer rounded border border-slate-300 bg-white p-1"
+                        />
+                        <Input
+                          value={editStrainName}
+                          onChange={(e) => setEditStrainName(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSaveStrainEdit(); } }}
+                          className="flex-1"
+                        />
+                        <Button size="sm" onClick={handleSaveStrainEdit} disabled={busy} aria-label="Save strain">
+                          <Check className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingStrainId(null)} aria-label="Cancel edit">
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <span
+                          className="inline-block h-3 w-3 flex-shrink-0 rounded-full border border-black/10"
+                          style={{ backgroundColor: s.color || "#94a3b8" }}
+                        />
+                        <span className="flex-1 text-sm font-medium">{s.name}</span>
+                        <Badge variant="outline" className="text-xs">{cohortCount} {cohortCount === 1 ? "cohort" : "cohorts"}</Badge>
+                        <Button size="sm" variant="ghost" onClick={() => startEditStrain(s)} aria-label="Rename strain">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => handleDeleteStrain(s)} aria-label="Delete strain">
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowManageStrains(false); setEditingStrainId(null); }}>Done</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
