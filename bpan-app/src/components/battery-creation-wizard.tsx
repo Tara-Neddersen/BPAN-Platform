@@ -791,6 +791,47 @@ export function BatteryCreationWizard({
     [activeLayoutWindow?.id, timepointWindows],
   );
 
+  const timepointWindowErrors = timepointWindows.map((window) => {
+    const errors: { name?: string; minAgeDays?: string; maxAgeDays?: string } = {};
+
+    if (!window.name.trim()) {
+      errors.name = "Name is required.";
+    }
+
+    const minRaw = window.minAgeDays.trim();
+    const maxRaw = window.maxAgeDays.trim();
+    const integerPattern = /^\d+$/;
+
+    let minValue: number | null = null;
+    let maxValue: number | null = null;
+
+    if (!minRaw) {
+      errors.minAgeDays = "Min age is required.";
+    } else if (!integerPattern.test(minRaw)) {
+      errors.minAgeDays = "Min age must be a whole number ≥ 0.";
+    } else {
+      minValue = Number(minRaw);
+    }
+
+    if (!maxRaw) {
+      errors.maxAgeDays = "Max age is required.";
+    } else if (!integerPattern.test(maxRaw)) {
+      errors.maxAgeDays = "Max age must be a whole number ≥ 0.";
+    } else {
+      maxValue = Number(maxRaw);
+    }
+
+    if (minValue !== null && maxValue !== null && maxValue < minValue) {
+      errors.maxAgeDays = "Max age must be ≥ min age.";
+    }
+
+    return errors;
+  });
+
+  const timepointWindowsValid = timepointWindowErrors.every((errors) => Object.keys(errors).length === 0);
+
+  const timepointWindowIssueCount = timepointWindowErrors.filter((errors) => Object.keys(errors).length > 0).length;
+
   const canMoveNext =
     currentStep.key === "experiments"
       ? batteryName.trim().length > 0 && experimentDrafts.every((experiment) => experiment.name.trim().length > 0)
@@ -803,7 +844,7 @@ export function BatteryCreationWizard({
             return chosenColumns.length > 0;
           })
         : currentStep.key === "timepoints"
-          ? timepointWindows.every((window) => window.name.trim() && window.minAgeDays.trim() && window.maxAgeDays.trim())
+          ? timepointWindowsValid
           : currentStep.key === "layout"
             ? layoutItems.length > 0 &&
               layoutItems.every((item) =>
@@ -1091,6 +1132,11 @@ export function BatteryCreationWizard({
   const saveBattery = () => {
     if (!persistenceEnabled) {
       toast.error("This workspace is still in draft mode. Saving is not available yet.");
+      return;
+    }
+
+    if (!timepointWindowsValid) {
+      toast.error("Fix the timepoint windows before saving (check ages and names).");
       return;
     }
 
@@ -1908,7 +1954,9 @@ export function BatteryCreationWizard({
 
           {currentStep.key === "timepoints" ? (
             <section className="space-y-4">
-              {timepointWindows.map((window, index) => (
+              {timepointWindows.map((window, index) => {
+                const windowErrors = timepointWindowErrors[index] ?? {};
+                return (
                 <div key={window.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
                   <div className="mb-3 flex items-center justify-between">
                     <p className="text-sm font-semibold text-slate-900">Window {index + 1}</p>
@@ -1928,19 +1976,30 @@ export function BatteryCreationWizard({
                   <div className="grid gap-4 md:grid-cols-3">
                     <div className="space-y-2">
                       <Label>Name</Label>
-                      <Input value={window.name} onChange={(event) => setTimepointWindows((current) => current.map((item) => item.id === window.id ? { ...item, name: event.target.value } : item))} placeholder="Young Adult" />
+                      <Input value={window.name} onChange={(event) => setTimepointWindows((current) => current.map((item) => item.id === window.id ? { ...item, name: event.target.value } : item))} placeholder="Young Adult" className={windowErrors.name ? "border-red-500 focus-visible:ring-red-500" : undefined} aria-invalid={windowErrors.name ? true : undefined} />
+                      {windowErrors.name ? <p className="text-xs text-red-600">{windowErrors.name}</p> : null}
                     </div>
                     <div className="space-y-2">
                       <Label>Min Age (days)</Label>
-                      <Input value={window.minAgeDays} onChange={(event) => setTimepointWindows((current) => current.map((item) => item.id === window.id ? { ...item, minAgeDays: event.target.value } : item))} placeholder="30" />
+                      <Input value={window.minAgeDays} onChange={(event) => setTimepointWindows((current) => current.map((item) => item.id === window.id ? { ...item, minAgeDays: event.target.value } : item))} placeholder="30" inputMode="numeric" className={windowErrors.minAgeDays ? "border-red-500 focus-visible:ring-red-500" : undefined} aria-invalid={windowErrors.minAgeDays ? true : undefined} />
+                      {windowErrors.minAgeDays ? <p className="text-xs text-red-600">{windowErrors.minAgeDays}</p> : null}
                     </div>
                     <div className="space-y-2">
                       <Label>Max Age (days)</Label>
-                      <Input value={window.maxAgeDays} onChange={(event) => setTimepointWindows((current) => current.map((item) => item.id === window.id ? { ...item, maxAgeDays: event.target.value } : item))} placeholder="60" />
+                      <Input value={window.maxAgeDays} onChange={(event) => setTimepointWindows((current) => current.map((item) => item.id === window.id ? { ...item, maxAgeDays: event.target.value } : item))} placeholder="60" inputMode="numeric" className={windowErrors.maxAgeDays ? "border-red-500 focus-visible:ring-red-500" : undefined} aria-invalid={windowErrors.maxAgeDays ? true : undefined} />
+                      {windowErrors.maxAgeDays ? <p className="text-xs text-red-600">{windowErrors.maxAgeDays}</p> : null}
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
+              {timepointWindowIssueCount > 0 ? (
+                <p className="text-xs text-red-600">
+                  {timepointWindowIssueCount === 1
+                    ? "1 window needs attention: each window needs a name and whole-number ages (0 or more) where max age is at least min age."
+                    : `${timepointWindowIssueCount} windows need attention: each window needs a name and whole-number ages (0 or more) where max age is at least min age.`}
+                </p>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
@@ -2204,7 +2263,7 @@ export function BatteryCreationWizard({
             </div>
             <div className="flex gap-2">
               {currentStep.key === "review" ? (
-                <Button type="button" onClick={saveBattery} disabled={isPending || !canMoveNext}>
+                <Button type="button" onClick={saveBattery} disabled={isPending || !canMoveNext || !timepointWindowsValid}>
                   {isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                   {editingBattery ? "Save changes" : "Save battery"}
                 </Button>
