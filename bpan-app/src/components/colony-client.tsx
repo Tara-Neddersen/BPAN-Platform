@@ -38,6 +38,7 @@ import { ExperimentTrackerMatrix } from "@/components/experiment-tracker-matrix"
 import { EarTagSelector, MiniEarTag, parseEarTag } from "@/components/ear-tag-selector";
 import { HelpHint } from "@/components/ui/help-hint";
 import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
+import { createAnimalsBulk } from "@/app/(protected)/colony/actions";
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -356,6 +357,50 @@ function convertDriveUrl(url: string): string {
   return url;
 }
 
+// ─── Animal-entry helpers (ID suggestion + ear-tag convention) ──────────
+
+// Lab ear-tag convention keyed ONLY by the mouse number (not cohort).
+// Numbers > 12 have no convention tag → leave the ear tag blank.
+const EAR_TAG_BY_NUMBER: Record<number, string> = {
+  1: "0100", 2: "0001", 3: "0101", 4: "1000", 5: "0010", 6: "1010",
+  7: "1100", 8: "1001", 9: "1101", 10: "0110", 11: "0011", 12: "0111",
+};
+
+/** Ear tag for a mouse number per the lab convention; "" past the map. */
+function earTagForNumber(mouseNumber: number): string {
+  return EAR_TAG_BY_NUMBER[mouseNumber] ?? "";
+}
+
+/**
+ * Cohort number = the first integer parsed from the cohort name
+ * (e.g. "BPAN 3" → "3"). Falls back to the cohort name when it has no digits.
+ */
+function cohortNumberFromName(name: string): string {
+  const match = name.match(/\d+/);
+  return match ? match[0] : name;
+}
+
+/** Mouse number = integer after the last "-" in an identifier, or null. */
+function mouseNumberFromIdentifier(identifier: string): number | null {
+  const tail = identifier.slice(identifier.lastIndexOf("-") + 1);
+  const n = parseInt(tail, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Next mouse number for a cohort: (max existing mouse-number among the
+ * cohort's animals) + 1. Falls back to count + 1 when none parse.
+ */
+function nextMouseNumberForCohort(cohortAnimals: Animal[]): number {
+  let max = 0;
+  let parsedAny = false;
+  for (const a of cohortAnimals) {
+    const n = mouseNumberFromIdentifier(a.identifier);
+    if (n != null) { parsedAny = true; if (n > max) max = n; }
+  }
+  return parsedAny ? max + 1 : cohortAnimals.length + 1;
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────
 
 export function ColonyClient({
@@ -578,8 +623,6 @@ export function ColonyClient({
   const [batchTimepointAgeDays, setBatchTimepointAgeDays] = useState<string>("");
   const [batchSelectedAnimalIds, setBatchSelectedAnimalIds] = useState<Set<string>>(new Set());
   // Animal ID auto-suggest
-  const [animalFormSex, setAnimalFormSex] = useState<string>("");
-  const [animalFormGenotype, setAnimalFormGenotype] = useState<string>("");
   const [suggestedIdentifier, setSuggestedIdentifier] = useState<string>("");
 
   // Schedule / Delete dialog state
@@ -610,6 +653,110 @@ export function ColonyClient({
   const birthDateRef = useRef<HTMLInputElement>(null);
   const identifierRef = useRef<HTMLInputElement>(null);
 
+  // ── Bulk "Add N animals" while/after creating a cohort ──────────────
+  type BulkRow = {
+    identifier: string;
+    ear_tag: string;
+    sex: string;
+    genotype: string;
+    birth_date: string;
+  };
+  const [bulkDialog, setBulkDialog] = useState<null | { cohortId: string; cohortName: string }>(null);
+  const [bulkCount, setBulkCount] = useState<number>(8);
+  const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
+  const [bulkSaving, setBulkSaving] = useState(false);
+
+  // Build N editable rows pre-filled for a cohort:
+  //   identifier = `<cohortNumber>-1` … `<cohortNumber>-N`
+  //   ear_tag    = lab convention by mouse number (blank past 12)
+  //   sex/genotype default to male / wt (editable per row)
+  //   birth_date defaults to the cohort's birth_date (required, editable)
+  const buildBulkRows = useCallback((cohort: Cohort, count: number): BulkRow[] => {
+    const cohortNumber = cohortNumberFromName(cohort.name);
+    const existing = animals.filter((a) => a.cohort_id === cohort.id);
+    const start = nextMouseNumberForCohort(existing);
+    const rows: BulkRow[] = [];
+    for (let i = 0; i < count; i++) {
+      const mouseNumber = start + i;
+      rows.push({
+        identifier: `${cohortNumber}-${mouseNumber}`,
+        ear_tag: earTagForNumber(mouseNumber),
+        sex: "male",
+        genotype: "wt",
+        birth_date: cohort.birth_date || "",
+      });
+    }
+    return rows;
+  }, [animals]);
+
+  function openBulkDialog(cohort: Cohort, count = 8) {
+    const n = Math.max(1, Math.min(count, 60));
+    setBulkCount(n);
+    setBulkRows(buildBulkRows(cohort, n));
+    setBulkDialog({ cohortId: cohort.id, cohortName: cohort.name });
+  }
+
+  function regenerateBulkRows(count: number) {
+    const n = Math.max(1, Math.min(count, 60));
+    setBulkCount(n);
+    if (!bulkDialog) return;
+    const cohort = cohorts.find((c) => c.id === bulkDialog.cohortId);
+    if (cohort) setBulkRows(buildBulkRows(cohort, n));
+  }
+
+  function updateBulkRow(index: number, patch: Partial<BulkRow>) {
+    setBulkRows((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
+  // When creating a cohort with "add animals now" checked, create the cohort,
+  // refetch, then locate the new cohort (by name + birth_date) and open the
+  // bulk-add rows editor pre-seeded for it.
+  async function handleCohortCreateSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy(true);
+    const fd = new FormData(e.currentTarget);
+    const name = String(fd.get("name") || "").trim();
+    const birthDate = String(fd.get("birth_date") || "").trim();
+    const wantBulk = fd.get("add_animals_now") === "true";
+    const result = await actions.createCohort(fd);
+    setBusy(false);
+    if (result.error) { toast.error(result.error); return; }
+    toast.success("Saved!");
+    setShowAddCohort(false);
+    setNewCohortSeed(null);
+    await refetchAll();
+    if (!wantBulk) return;
+    // Find the just-created cohort from fresh data.
+    const sb = supabaseRef.current;
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) return;
+    const { data } = await sb
+      .from("cohorts")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("name", name)
+      .eq("birth_date", birthDate)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const created = (data?.[0] as Cohort | undefined) || null;
+    if (created) openBulkDialog(created);
+  }
+
+  async function handleBulkSave() {
+    if (!bulkDialog) return;
+    setBulkSaving(true);
+    const result = await createAnimalsBulk(bulkDialog.cohortId, bulkRows);
+    setBulkSaving(false);
+    if (result.error) {
+      toast.error(result.error);
+    } else {
+      toast.success(`Added ${result.created ?? bulkRows.length} animals`);
+      setBulkDialog(null);
+      setBulkRows([]);
+      await refetchAll();
+    }
+  }
+
   const portalAccessByPortalId = useMemo(() => {
     const byPortal = new Map<string, AdvisorPortalAccessLog[]>();
     for (const log of portalAccessLogs) {
@@ -620,31 +767,31 @@ export function ColonyClient({
     return byPortal;
   }, [portalAccessLogs]);
 
-  // Auto-suggest animal identifier when cohort + sex + genotype are selected
+  // Auto-suggest animal identifier as `<cohortNumber>-<nextMouseNumber>` once a
+  // cohort is selected. The user names animals e.g. "3-1","3-2" for cohort
+  // "BPAN 3". Also auto-fills the ear tag from the lab convention by the
+  // suggested mouse number. Both stay editable.
   useEffect(() => {
-    if (!animalFormCohortId || !animalFormSex || !animalFormGenotype || editingAnimal) {
+    if (!animalFormCohortId || editingAnimal) {
       setSuggestedIdentifier("");
       return;
     }
     const cohort = cohorts.find(c => c.id === animalFormCohortId);
     if (!cohort) { setSuggestedIdentifier(""); return; }
 
-    // Build cohort short code from first letter + digits in name
-    const cohortShort = cohort.name.replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase();
-    const genoCode = animalFormGenotype === "hemi" ? "HM" : animalFormGenotype === "het" ? "HT" : "WT";
-    const sexCode = animalFormSex === "male" ? "M" : "F";
-
-    // Count existing animals in this cohort with same genotype+sex
-    const existing = animals.filter(a => a.cohort_id === animalFormCohortId && a.genotype === animalFormGenotype && a.sex === animalFormSex);
-    const nextNum = String(existing.length + 1).padStart(3, "0");
-    const suggested = `${cohortShort}-${genoCode}${sexCode}-${nextNum}`;
+    const cohortNumber = cohortNumberFromName(cohort.name);
+    const cohortAnimals = animals.filter(a => a.cohort_id === animalFormCohortId);
+    const nextNum = nextMouseNumberForCohort(cohortAnimals);
+    const suggested = `${cohortNumber}-${nextNum}`;
     setSuggestedIdentifier(suggested);
     // Pre-fill the input if it's currently empty or was previously auto-suggested
     if (identifierRef.current && (!identifierRef.current.value || identifierRef.current.dataset.autoSuggested === "true")) {
       identifierRef.current.value = suggested;
       identifierRef.current.dataset.autoSuggested = "true";
+      // Auto-fill ear tag from the lab convention for this mouse number.
+      setAnimalFormEarTag(earTagForNumber(nextNum) || "0000");
     }
-  }, [animalFormCohortId, animalFormSex, animalFormGenotype, animals, cohorts, editingAnimal]);
+  }, [animalFormCohortId, animals, cohorts, editingAnimal]);
 
   // Google Drive integration
   const [driveStatus, setDriveStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null }>({ configured: false, connected: false });
@@ -1507,6 +1654,14 @@ export function ColonyClient({
                           <Button
                             variant="outline"
                             size="sm"
+                            className="h-7 text-xs gap-1 text-violet-700 border-violet-200 hover:bg-violet-50"
+                            onClick={() => openBulkDialog(c)}
+                          >
+                            <Mouse className="h-3 w-3" /> Add Animals
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
                             className="h-7 text-xs gap-1"
                             onClick={() => {
                               setSelectedTpAges(new Set(timepoints.map(tp => tp.age_days)));
@@ -2308,8 +2463,6 @@ export function ColonyClient({
             setEditingAnimal(null);
             setAnimalFormCohortId("");
             setAnimalFormEarTag("0000");
-            setAnimalFormSex("");
-            setAnimalFormGenotype("");
             setSuggestedIdentifier("");
             clearCreateParam();
           }
@@ -2324,9 +2477,9 @@ export function ColonyClient({
           </DialogHeader>
           <form onSubmit={(e) => {
             if (editingAnimal) {
-              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => { setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); clearCreateParam(); });
+              handleFormAction((fd) => actions.updateAnimal(editingAnimal.id, fd), e, () => { setEditingAnimal(null); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setSuggestedIdentifier(""); clearCreateParam(); });
             } else {
-              handleFormAction(actions.createAnimal, e, () => { setShowAddAnimal(false); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setAnimalFormSex(""); setAnimalFormGenotype(""); setSuggestedIdentifier(""); clearCreateParam(); });
+              handleFormAction(actions.createAnimal, e, () => { setShowAddAnimal(false); setAnimalFormCohortId(""); setAnimalFormEarTag("0000"); setSuggestedIdentifier(""); clearCreateParam(); });
             }
           }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -2355,7 +2508,7 @@ export function ColonyClient({
               </div>
               <div>
                 <Label className="text-xs">Sex *</Label>
-                <Select name="sex" required defaultValue={editingAnimal?.sex || ""} onValueChange={(v) => setAnimalFormSex(v)}>
+                <Select name="sex" required defaultValue={editingAnimal?.sex || ""}>
                   <SelectTrigger><SelectValue placeholder="Sex" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="male">Male</SelectItem>
@@ -2365,7 +2518,7 @@ export function ColonyClient({
               </div>
               <div>
                 <Label className="text-xs">Genotype *</Label>
-                <Select name="genotype" required defaultValue={editingAnimal?.genotype || ""} onValueChange={(v) => setAnimalFormGenotype(v)}>
+                <Select name="genotype" required defaultValue={editingAnimal?.genotype || ""}>
                   <SelectTrigger><SelectValue placeholder="Genotype" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="hemi">Hemizygous (Hemi)</SelectItem>
@@ -2437,6 +2590,93 @@ export function ColonyClient({
         </DialogContent>
       </Dialog>
 
+      {/* Bulk Add Animals to a cohort */}
+      <Dialog
+        open={!!bulkDialog}
+        onOpenChange={(v) => { if (!v) { setBulkDialog(null); setBulkRows([]); } }}
+      >
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add Animals — {bulkDialog?.cohortName}</DialogTitle>
+            <DialogDescription>
+              Enter how many animals to add. Identifiers and ear tags are pre-filled by the lab convention; set sex, genotype, and birth date per row, then save them all at once.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex items-end gap-3">
+            <div>
+              <Label className="text-xs">Number of animals</Label>
+              <Input
+                type="number"
+                min={1}
+                max={60}
+                value={bulkCount}
+                onChange={(e) => regenerateBulkRows(parseInt(e.target.value, 10) || 1)}
+                className="w-28"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground pb-2">
+              Ear tags follow the lab convention by mouse number (blank past #12). All fields stay editable.
+            </p>
+          </div>
+
+          <div className="mt-2 space-y-2">
+            <div className="hidden sm:grid grid-cols-[1.4fr_1fr_1fr_1fr_1.2fr] gap-2 px-1 text-[11px] font-medium text-muted-foreground">
+              <span>Identifier *</span>
+              <span>Ear tag</span>
+              <span>Sex *</span>
+              <span>Genotype *</span>
+              <span>Birth date *</span>
+            </div>
+            {bulkRows.map((row, i) => (
+              <div key={i} className="grid grid-cols-2 sm:grid-cols-[1.4fr_1fr_1fr_1fr_1.2fr] gap-2 rounded-md border border-slate-100 bg-slate-50/50 p-2 sm:border-0 sm:bg-transparent sm:p-0">
+                <Input
+                  value={row.identifier}
+                  onChange={(e) => updateBulkRow(i, { identifier: e.target.value })}
+                  placeholder="e.g. 3-1"
+                  className="h-8 text-sm"
+                />
+                <Input
+                  value={row.ear_tag}
+                  onChange={(e) => updateBulkRow(i, { ear_tag: e.target.value })}
+                  placeholder="blank"
+                  className="h-8 text-sm"
+                />
+                <Select value={row.sex} onValueChange={(v) => updateBulkRow(i, { sex: v })}>
+                  <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Sex" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="male">Male</SelectItem>
+                    <SelectItem value="female">Female</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={row.genotype} onValueChange={(v) => updateBulkRow(i, { genotype: v })}>
+                  <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Genotype" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="hemi">Hemi</SelectItem>
+                    <SelectItem value="wt">WT</SelectItem>
+                    <SelectItem value="het">Het</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="date"
+                  value={row.birth_date}
+                  onChange={(e) => updateBulkRow(i, { birth_date: e.target.value })}
+                  className="h-8 text-sm"
+                />
+              </div>
+            ))}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" type="button" onClick={() => { setBulkDialog(null); setBulkRows([]); }}>Cancel</Button>
+            <Button type="button" onClick={handleBulkSave} disabled={bulkSaving || bulkRows.length === 0}>
+              {bulkSaving && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Add {bulkRows.length} Animal{bulkRows.length === 1 ? "" : "s"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Add / Edit Cohort */}
       <Dialog open={showAddCohort || !!editingCohort} onOpenChange={(v) => { if (!v) { setShowAddCohort(false); setEditingCohort(null); setNewCohortSeed(null); } }}>
         <DialogContent>
@@ -2445,7 +2685,7 @@ export function ColonyClient({
             if (editingCohort) {
               handleFormAction((fd) => actions.updateCohort(editingCohort.id, fd), e, () => { setEditingCohort(null); setNewCohortSeed(null); });
             } else {
-              handleFormAction(actions.createCohort, e, () => { setShowAddCohort(false); setNewCohortSeed(null); });
+              handleCohortCreateSubmit(e);
             }
           }} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -2490,6 +2730,26 @@ export function ColonyClient({
                     Create follow-up reminders automatically from DOB:
                     <span className="block mt-1">
                       Day 21 for pup count/sex/weaning details, and Day 30 (30–35d window) for genotyping follow-up.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
+            {!editingCohort && (
+              <div className="rounded-md border border-violet-200 bg-violet-50/60 p-3">
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input type="hidden" name="add_animals_now" value="false" />
+                  <input
+                    type="checkbox"
+                    name="add_animals_now"
+                    value="true"
+                    defaultChecked
+                    className="mt-0.5 h-4 w-4"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Add animals right after creating this cohort.
+                    <span className="block mt-1">
+                      Opens a rows editor pre-filled with identifiers and ear tags so you can enter the whole litter in one save.
                     </span>
                   </span>
                 </label>

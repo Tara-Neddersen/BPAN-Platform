@@ -644,6 +644,83 @@ export async function createAnimal(formData: FormData) {
   return { success: true, id: data.id };
 }
 
+/**
+ * Bulk-create animals for a cohort in a single save.
+ *
+ * Each row must satisfy the animals NOT NULL columns (identifier, sex,
+ * genotype, cohort_id, birth_date) plus the sex CHECK ('male'|'female') and
+ * genotype CHECK ('hemi'|'wt'|'het'). Validation mirrors `createAnimal` and
+ * reuses the same requiredStr helper and {error} contract.
+ */
+export async function createAnimalsBulk(
+  cohortId: string,
+  rows: {
+    identifier?: string;
+    sex?: string;
+    genotype?: string;
+    ear_tag?: string | null;
+    birth_date?: string;
+    cage_number?: string | null;
+    notes?: string | null;
+  }[]
+) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const validCohortId = requiredStr(cohortId);
+  if (!validCohortId) return { error: "Cohort is required." };
+  if (!Array.isArray(rows) || rows.length === 0) return { error: "Add at least one animal row." };
+
+  // Confirm the cohort belongs to this user before inserting against it.
+  const { data: cohort, error: cohortErr } = await supabase
+    .from("cohorts")
+    .select("id")
+    .eq("id", validCohortId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (cohortErr) return { error: cohortErr.message };
+  if (!cohort) return { error: "Cohort not found." };
+
+  const SEX_VALUES = ["male", "female"];
+  const GENOTYPE_VALUES = ["hemi", "wt", "het"];
+
+  const payloads: Record<string, unknown>[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || {};
+    const label = `Row ${i + 1}`;
+    const identifier = requiredStr(row.identifier ?? null);
+    const sex = requiredStr(row.sex ?? null);
+    const genotype = requiredStr(row.genotype ?? null);
+    const birthDate = requiredStr(row.birth_date ?? null);
+    if (!identifier) return { error: `${label}: Animal identifier is required.` };
+    if (!sex) return { error: `${label}: Sex is required.` };
+    if (!SEX_VALUES.includes(sex)) return { error: `${label}: Sex must be male or female.` };
+    if (!genotype) return { error: `${label}: Genotype is required.` };
+    if (!GENOTYPE_VALUES.includes(genotype)) return { error: `${label}: Genotype must be hemi, wt, or het.` };
+    if (!birthDate) return { error: `${label}: Birth date is required.` };
+
+    payloads.push({
+      user_id: user.id,
+      cohort_id: validCohortId,
+      identifier,
+      sex,
+      genotype,
+      ear_tag: requiredStr(row.ear_tag ?? null),
+      birth_date: birthDate,
+      cage_number: requiredStr(row.cage_number ?? null),
+      notes: requiredStr(row.notes ?? null),
+    });
+  }
+
+  const { error } = await supabase.from("animals").insert(payloads);
+  if (error) return { error: error.message };
+
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true, created: payloads.length };
+}
+
 export async function updateAnimal(id: string, formData: FormData) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
