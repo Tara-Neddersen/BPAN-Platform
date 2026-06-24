@@ -825,8 +825,19 @@ export function ScheduleBuilder({
       return;
     }
 
+    // Base the update on the RESOLVED settings (what the UI is currently
+    // showing) — not the raw windowSettingsByName map, which is empty until a
+    // field is explicitly edited. Using the raw map + DEFAULT here clobbered the
+    // discovered dayCount (back to 1) whenever another field changed, which made
+    // every day past Day 1 disappear from the weekly calendar.
+    const baseSettings =
+      resolvedWindowSettingsByName[windowName] ??
+      windowSettingsByName[windowName] ??
+      discoveredWindowSettings[windowName] ??
+      DEFAULT_WINDOW_SETTINGS;
+
     const nextSettings = {
-      ...(windowSettingsByName[windowName] ?? DEFAULT_WINDOW_SETTINGS),
+      ...baseSettings,
       ...patch,
     };
 
