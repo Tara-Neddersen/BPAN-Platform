@@ -555,6 +555,28 @@ function normalizeAssignmentInput(value: unknown): RunAssignmentInput | null {
   };
 }
 
+// Parse a run-assignment payload supporting both the new `assignments` array and
+// the legacy singular `assignment` object. Returns valid, deduped rows with
+// sort_order assigned by position.
+function parseRunAssignmentsPayload(formData: FormData): RunAssignmentInput[] {
+  const rawArray = parseJsonField<unknown[]>(formData, "assignments", []);
+  const source = Array.isArray(rawArray) && rawArray.length > 0
+    ? rawArray
+    : [parseJsonField<unknown>(formData, "assignment", null)];
+
+  const seen = new Set<string>();
+  const rows: RunAssignmentInput[] = [];
+  for (const item of source) {
+    const normalized = normalizeAssignmentInput(item);
+    if (!normalized) continue;
+    const dedupeKey = `${normalized.scope_type}|${normalized.study_id || ""}|${normalized.cohort_id || ""}|${normalized.animal_id || ""}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    rows.push({ ...normalized, sort_order: rows.length });
+  }
+  return rows;
+}
+
 async function fetchScheduledBlocksForTemplateSchedule(
   supabase: Awaited<ReturnType<typeof createClient>>,
   scheduleTemplateId: string,
@@ -1186,7 +1208,7 @@ export async function saveRunAssignment(formData: FormData) {
     throw new Error("Run id is required.");
   }
 
-  const assignment = normalizeAssignmentInput(parseJsonField(formData, "assignment", null));
+  const assignments = parseRunAssignmentsPayload(formData);
 
   const { error: deleteError } = await supabase
     .from("run_assignments")
@@ -1197,15 +1219,17 @@ export async function saveRunAssignment(formData: FormData) {
     throw new Error(withRunSchemaGuidance(deleteError.message));
   }
 
-  if (assignment) {
-    const { error: insertError } = await supabase.from("run_assignments").insert({
-      experiment_run_id: runId,
-      scope_type: assignment.scope_type,
-      study_id: assignment.study_id,
-      cohort_id: assignment.cohort_id,
-      animal_id: assignment.animal_id,
-      sort_order: assignment.sort_order,
-    });
+  if (assignments.length > 0) {
+    const { error: insertError } = await supabase.from("run_assignments").insert(
+      assignments.map((assignment) => ({
+        experiment_run_id: runId,
+        scope_type: assignment.scope_type,
+        study_id: assignment.study_id,
+        cohort_id: assignment.cohort_id,
+        animal_id: assignment.animal_id,
+        sort_order: assignment.sort_order,
+      })),
+    );
 
     if (insertError) {
       throw new Error(withRunSchemaGuidance(insertError.message));
@@ -1225,31 +1249,47 @@ export async function generateCohortScheduleFromRun(runId: string) {
     throw new Error("Unauthorized");
   }
 
-  const { data: assignment, error } = await supabase
+  const { data: assignments, error } = await supabase
     .from("run_assignments")
     .select("scope_type,cohort_id")
     .eq("experiment_run_id", runId)
-    .order("sort_order", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .order("sort_order", { ascending: true });
 
   if (error) {
     throw new Error(withRunSchemaGuidance(error.message));
   }
 
-  if (!assignment || assignment.scope_type !== "cohort" || !assignment.cohort_id) {
+  // A run may be assigned multiple cohorts; generate for each distinct one.
+  const cohortIds = [
+    ...new Set(
+      (assignments || [])
+        .filter((assignment) => assignment.scope_type === "cohort" && assignment.cohort_id)
+        .map((assignment) => String(assignment.cohort_id)),
+    ),
+  ];
+
+  if (cohortIds.length === 0) {
     throw new Error("Assign this run to a cohort before generating the cohort schedule.");
   }
 
-  const result = await generateCohortScheduleFromRunInternal(supabase, user.id, runId, String(assignment.cohort_id));
+  let scheduledAnimals = 0;
+  let totalItems = 0;
+  let rescheduledItems = 0;
+  for (const cohortId of cohortIds) {
+    const result = await generateCohortScheduleFromRunInternal(supabase, user.id, runId, cohortId);
+    scheduledAnimals += typeof result.scheduled_animals === "number" ? result.scheduled_animals : 0;
+    totalItems += typeof result.total_items === "number" ? result.total_items : 0;
+    rescheduledItems += typeof result.rescheduled_items === "number" ? result.rescheduled_items : 0;
+  }
 
   revalidatePath("/experiments");
   revalidatePath("/colony");
 
   return {
-    cohort_id: String(assignment.cohort_id),
-    scheduled_animals: typeof result.scheduled_animals === "number" ? result.scheduled_animals : 0,
-    total_items: typeof result.total_items === "number" ? result.total_items : 0,
-    rescheduled_items: typeof result.rescheduled_items === "number" ? result.rescheduled_items : 0,
+    cohort_id: cohortIds[0],
+    cohort_count: cohortIds.length,
+    scheduled_animals: scheduledAnimals,
+    total_items: totalItems,
+    rescheduled_items: rescheduledItems,
   };
 }

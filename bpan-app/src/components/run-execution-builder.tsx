@@ -47,9 +47,11 @@ import {
   GripVertical,
   Layers2,
   Play,
+  Plus,
   RefreshCcw,
   Save,
   Shuffle,
+  X,
 } from "lucide-react";
 
 type EditableRunBlock = Omit<RunScheduleBlock, "metadata"> & {
@@ -187,6 +189,32 @@ function getAssignmentDraft(assignment: RunAssignment | undefined): AssignmentDr
     cohort_id: assignment.cohort_id || "",
     animal_id: assignment.animal_id || "",
   };
+}
+
+// True when a draft row actually targets something (so empty starter rows are ignored).
+function assignmentDraftHasTarget(draft: AssignmentDraft) {
+  if (draft.scope_type === "study") return Boolean(draft.study_id.trim());
+  if (draft.scope_type === "cohort") return Boolean(draft.cohort_id.trim());
+  if (draft.scope_type === "animal") return Boolean(draft.animal_id.trim());
+  return false;
+}
+
+// Normalize drafts for dirty detection: keep only meaningful rows, null irrelevant
+// fields per scope, and sort so order changes alone don't count as dirty.
+function serializeAssignmentDrafts(drafts: AssignmentDraft[]) {
+  return drafts
+    .filter(assignmentDraftHasTarget)
+    .map((draft) => ({
+      scope_type: draft.scope_type,
+      study_id: draft.scope_type === "study" ? draft.study_id.trim() : "",
+      cohort_id: draft.scope_type === "cohort" ? draft.cohort_id.trim() : "",
+      animal_id: draft.scope_type === "animal" ? draft.animal_id.trim() : "",
+    }))
+    .sort((a, b) => {
+      const aKey = `${a.scope_type}|${a.study_id}|${a.cohort_id}|${a.animal_id}`;
+      const bKey = `${b.scope_type}|${b.study_id}|${b.cohort_id}|${b.animal_id}`;
+      return aKey.localeCompare(bKey);
+    });
 }
 
 function normalizeRunBlocks(blocks: EditableRunBlock[]) {
@@ -360,7 +388,7 @@ export function RunExecutionBuilder({
 
   const [selectedRunId, setSelectedRunId] = useState<string>(runs[0]?.id || "");
   const [runBlocksDraftByRunId, setRunBlocksDraftByRunId] = useState<Record<string, EditableRunBlock[]>>({});
-  const [assignmentDraftByRunId, setAssignmentDraftByRunId] = useState<Record<string, AssignmentDraft>>({});
+  const [assignmentDraftsByRunId, setAssignmentDraftsByRunId] = useState<Record<string, AssignmentDraft[]>>({});
   const [notesDraftByRunId, setNotesDraftByRunId] = useState<Record<string, string>>({});
   const [dayShiftOffset, setDayShiftOffset] = useState<string>("1");
   const [optimisticRuns, setOptimisticRuns] = useState<ExperimentRun[]>([]);
@@ -449,20 +477,32 @@ export function RunExecutionBuilder({
       })),
   );
 
-  const selectedAssignment =
-    assignmentDraftByRunId[selectedRunId] ||
-    getAssignmentDraft(runAssignments.find((assignment) => assignment.experiment_run_id === selectedRunId));
-  const persistedSelectedAssignment = getAssignmentDraft(
-    runAssignments.find((assignment) => assignment.experiment_run_id === selectedRunId),
-  );
+  const persistedSelectedAssignments = useMemo(() => {
+    const rows = runAssignments
+      .filter((assignment) => assignment.experiment_run_id === selectedRunId)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map(getAssignmentDraft);
+    // A run with no assignment starts as a single empty Cohort row.
+    return rows.length > 0 ? rows : [getAssignmentDraft(undefined)];
+  }, [runAssignments, selectedRunId]);
+
+  const selectedAssignments = assignmentDraftsByRunId[selectedRunId] ?? persistedSelectedAssignments;
+
+  // First cohort assignment drives the cohort-handoff buttons (Generate / Open Cohort Tasks).
+  const firstCohortAssignment =
+    selectedAssignments.find(
+      (assignment) => assignment.scope_type === "cohort" && Boolean(assignment.cohort_id),
+    ) || null;
+  const cohortAssignmentCount = selectedAssignments.filter(
+    (assignment) => assignment.scope_type === "cohort" && Boolean(assignment.cohort_id),
+  ).length;
+
   const assignmentDirty =
-    JSON.stringify(selectedAssignment) !== JSON.stringify(persistedSelectedAssignment);
+    JSON.stringify(serializeAssignmentDrafts(selectedAssignments)) !==
+    JSON.stringify(serializeAssignmentDrafts(persistedSelectedAssignments));
   const selectedRunNotes = notesDraftByRunId[selectedRunId] ?? selectedRun?.notes ?? "";
   const isCreateCohortAssignment = createDraft.assignment.scope_type === "cohort" && Boolean(createDraft.assignment.cohort_id);
-  const canGenerateScheduleFromSelectedRun =
-    !assignmentDirty &&
-    selectedAssignment.scope_type === "cohort" &&
-    Boolean(selectedAssignment.cohort_id);
+  const canGenerateScheduleFromSelectedRun = !assignmentDirty && cohortAssignmentCount >= 1;
 
   const filteredSchedules = scheduleTemplates.filter(
     (schedule) => schedule.template_id === createDraft.template_id,
@@ -637,12 +677,41 @@ export function RunExecutionBuilder({
       delete next[selectedRunId];
       return next;
     });
-    setAssignmentDraftByRunId((current) => {
+    setAssignmentDraftsByRunId((current) => {
       const next = { ...current };
       delete next[selectedRunId];
       return next;
     });
     toast.success("Unsaved run edits discarded.");
+  };
+
+  // ─── Assignment list editing (multi-cohort) ────────────────────────────
+  const setAssignmentDraftsForSelectedRun = (
+    updater: (current: AssignmentDraft[]) => AssignmentDraft[],
+  ) => {
+    if (!selectedRunId) return;
+    setAssignmentDraftsByRunId((current) => ({
+      ...current,
+      [selectedRunId]: updater(current[selectedRunId] ?? selectedAssignments),
+    }));
+  };
+
+  const updateAssignmentRow = (index: number, patch: Partial<AssignmentDraft>) => {
+    setAssignmentDraftsForSelectedRun((drafts) =>
+      drafts.map((draft, idx) => (idx === index ? { ...draft, ...patch } : draft)),
+    );
+  };
+
+  const addAssignmentRow = () => {
+    setAssignmentDraftsForSelectedRun((drafts) => [...drafts, getAssignmentDraft(undefined)]);
+  };
+
+  const removeAssignmentRow = (index: number) => {
+    setAssignmentDraftsForSelectedRun((drafts) => {
+      const next = drafts.filter((_, idx) => idx !== index);
+      // Never leave the editor with zero rows — keep one empty starter row.
+      return next.length > 0 ? next : [getAssignmentDraft(undefined)];
+    });
   };
 
   const createRun = () => {
@@ -722,8 +791,10 @@ export function RunExecutionBuilder({
     startTransition(async () => {
       try {
         const result = await generateCohortScheduleFromRun(selectedRunId);
+        const cohortLabel =
+          result.cohort_count === 1 ? "cohort" : `${result.cohort_count} cohorts`;
         toast.success(
-          `Generated ${result.total_items} cohort schedule item${result.total_items === 1 ? "" : "s"} across ${result.scheduled_animals} animal${result.scheduled_animals === 1 ? "" : "s"}.`,
+          `Generated ${result.total_items} schedule item${result.total_items === 1 ? "" : "s"} across ${result.scheduled_animals} animal${result.scheduled_animals === 1 ? "" : "s"} for ${cohortLabel}.`,
         );
         router.refresh();
       } catch (error) {
@@ -862,7 +933,7 @@ export function RunExecutionBuilder({
 
   const saveAssignmentForRun = () => {
     if (!selectedRunId) return;
-    const assignment = assignmentDraftByRunId[selectedRunId] || selectedAssignment;
+    const drafts = assignmentDraftsByRunId[selectedRunId] ?? selectedAssignments;
 
     setPendingAction("save_assignment");
     startTransition(async () => {
@@ -870,13 +941,17 @@ export function RunExecutionBuilder({
         const fd = new FormData();
         fd.append("run_id", selectedRunId);
         fd.append(
-          "assignment",
-          JSON.stringify({
-            scope_type: assignment.scope_type,
-            study_id: assignment.scope_type === "study" ? assignment.study_id || null : null,
-            cohort_id: assignment.scope_type === "cohort" ? assignment.cohort_id || null : null,
-            animal_id: assignment.scope_type === "animal" ? assignment.animal_id || null : null,
-          }),
+          "assignments",
+          JSON.stringify(
+            drafts
+              .filter(assignmentDraftHasTarget)
+              .map((assignment) => ({
+                scope_type: assignment.scope_type,
+                study_id: assignment.scope_type === "study" ? assignment.study_id || null : null,
+                cohort_id: assignment.scope_type === "cohort" ? assignment.cohort_id || null : null,
+                animal_id: assignment.scope_type === "animal" ? assignment.animal_id || null : null,
+              })),
+          ),
         );
         await saveRunAssignment(fd);
         router.refresh();
@@ -1035,13 +1110,15 @@ export function RunExecutionBuilder({
   };
 
   const goToCohortTasksFromRun = () => {
-    if (!selectedRun || selectedAssignment.scope_type !== "cohort" || !selectedAssignment.cohort_id) {
+    // Multiple cohorts can be assigned; the colony tasks view takes one cohort,
+    // so we open the FIRST cohort assignment.
+    if (!selectedRun || !firstCohortAssignment?.cohort_id) {
       return;
     }
 
     const params = new URLSearchParams();
     params.set("tab", "animals");
-    params.set("cohort", selectedAssignment.cohort_id);
+    params.set("cohort", firstCohortAssignment.cohort_id);
     router.push(`/colony?${params.toString()}`);
   };
 
@@ -1415,11 +1492,11 @@ export function RunExecutionBuilder({
                   size="sm"
                   variant="outline"
                   onClick={goToCohortTasksFromRun}
-                  disabled={!selectedRunId || selectedAssignment.scope_type !== "cohort" || !selectedAssignment.cohort_id}
+                  disabled={!selectedRunId || !firstCohortAssignment?.cohort_id}
                   className="w-full gap-2 sm:w-auto"
                 >
                   <ExternalLink className="h-4 w-4" />
-                  Open Cohort Tasks
+                  {cohortAssignmentCount > 1 ? "Open Cohort Tasks (first)" : "Open Cohort Tasks"}
                 </Button>
                 <Button size="sm" variant="outline" onClick={saveAssignmentForRun} disabled={!selectedRunId || isPending || !assignmentDirty} className="w-full sm:w-auto">
                   {pendingAction === "save_assignment" ? "Saving Assignment..." : "Save Assignment"}
@@ -1477,10 +1554,10 @@ export function RunExecutionBuilder({
                   Duplicate and drag actions are local until you save timeline. Use discard to undo local edits quickly.
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {selectedAssignment.scope_type === "cohort" && selectedAssignment.cohort_id
+                  {cohortAssignmentCount >= 1
                     ? assignmentDirty
                       ? "Save assignment changes before generating the cohort schedule from this run."
-                      : "Use Generate Cohort Schedule to create or refresh the per-animal task list for this cohort."
+                      : `Use Generate Cohort Schedule to create or refresh the per-animal task list${cohortAssignmentCount > 1 ? ` for all ${cohortAssignmentCount} cohorts` : " for this cohort"}.`
                     : "Assign this run to a cohort if you want the run workflow to generate the underlying animal schedule."}
                 </p>
               </div>
@@ -1500,78 +1577,81 @@ export function RunExecutionBuilder({
                 <p className="text-sm font-medium">
                   Assign animals to this run
                   <span className="ml-1 font-normal text-muted-foreground">
-                    — pick a cohort (or a single animal), then click Save Assignment. Animals appear in Results once assigned.
+                    — add one or more cohorts (or single animals), then click Save Assignment. Animals appear in Results once assigned.
                   </span>
                 </p>
-                <div className="grid gap-2 lg:grid-cols-[180px_minmax(0,1fr)]">
-                  <select
-                    value={selectedAssignment.scope_type}
-                    onChange={(event) =>
-                      setAssignmentDraftByRunId((current) => ({
-                        ...current,
-                        [selectedRunId]: {
-                          scope_type: event.target.value as PlatformAssignmentScope,
-                          study_id: "",
-                          cohort_id: "",
-                          animal_id: "",
-                        },
-                      }))
-                    }
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="cohort">Cohort</option>
-                    <option value="animal">Animal</option>
-                    <option value="study">Study (advanced)</option>
-                  </select>
+                <div className="space-y-2">
+                  {selectedAssignments.map((assignment, index) => (
+                    <div
+                      key={`assignment-row-${index}`}
+                      className="grid gap-2 lg:grid-cols-[180px_minmax(0,1fr)_auto]"
+                    >
+                      <select
+                        value={assignment.scope_type}
+                        onChange={(event) =>
+                          updateAssignmentRow(index, {
+                            scope_type: event.target.value as PlatformAssignmentScope,
+                            study_id: "",
+                            cohort_id: "",
+                            animal_id: "",
+                          })
+                        }
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        <option value="cohort">Cohort</option>
+                        <option value="animal">Animal</option>
+                        <option value="study">Study (advanced)</option>
+                      </select>
 
-                  {selectedAssignment.scope_type === "study" ? (
-                    <Input
-                      value={selectedAssignment.study_id}
-                      onChange={(event) =>
-                        setAssignmentDraftByRunId((current) => ({
-                          ...current,
-                          [selectedRunId]: { ...selectedAssignment, study_id: event.target.value },
-                        }))
-                      }
-                      placeholder="Study UUID"
-                    />
-                  ) : selectedAssignment.scope_type === "cohort" ? (
-                    <select
-                      value={selectedAssignment.cohort_id}
-                      onChange={(event) =>
-                        setAssignmentDraftByRunId((current) => ({
-                          ...current,
-                          [selectedRunId]: { ...selectedAssignment, cohort_id: event.target.value },
-                        }))
-                      }
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="">Select cohort</option>
-                      {cohorts.map((cohort) => (
-                        <option key={cohort.id} value={cohort.id}>
-                          {cohort.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <select
-                      value={selectedAssignment.animal_id}
-                      onChange={(event) =>
-                        setAssignmentDraftByRunId((current) => ({
-                          ...current,
-                          [selectedRunId]: { ...selectedAssignment, animal_id: event.target.value },
-                        }))
-                      }
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="">Select animal</option>
-                      {animals.map((animal) => (
-                        <option key={animal.id} value={animal.id}>
-                          {animal.ear_tag || animal.id}
-                        </option>
-                      ))}
-                    </select>
-                  )}
+                      {assignment.scope_type === "study" ? (
+                        <Input
+                          value={assignment.study_id}
+                          onChange={(event) => updateAssignmentRow(index, { study_id: event.target.value })}
+                          placeholder="Study UUID"
+                        />
+                      ) : assignment.scope_type === "cohort" ? (
+                        <select
+                          value={assignment.cohort_id}
+                          onChange={(event) => updateAssignmentRow(index, { cohort_id: event.target.value })}
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="">Select cohort</option>
+                          {cohorts.map((cohort) => (
+                            <option key={cohort.id} value={cohort.id}>
+                              {cohort.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <select
+                          value={assignment.animal_id}
+                          onChange={(event) => updateAssignmentRow(index, { animal_id: event.target.value })}
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="">Select animal</option>
+                          {animals.map((animal) => (
+                            <option key={animal.id} value={animal.id}>
+                              {animal.ear_tag || animal.id}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => removeAssignmentRow(index)}
+                        title="Remove assignment"
+                        aria-label="Remove assignment"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button size="sm" variant="outline" onClick={addAssignmentRow} className="gap-1">
+                    <Plus className="h-3.5 w-3.5" />
+                    Add cohort
+                  </Button>
                 </div>
 
                 <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_320px]">
