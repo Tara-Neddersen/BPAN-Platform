@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
+import { sortCohortsByName } from "@/lib/cohort-sort";
 import {
   Plus, Edit, Trash2, Loader2, Check, X, Copy, Pencil,
   ExternalLink, ChevronDown, ChevronUp,
@@ -468,7 +469,7 @@ export function ColonyClient({
   const [cohorts, setCohorts] = useState(initCohorts);
   // Natural/numeric ordering so "Cohort 3" sorts before "Cohort 10" (not after).
   const sortedCohorts = useMemo(
-    () => [...cohorts].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+    () => sortCohortsByName(cohorts),
     [cohorts],
   );
   const [animals, setAnimals] = useState(initAnimals);
@@ -949,7 +950,7 @@ export function ColonyClient({
 
   // Strain-filtered, naturally sorted cohorts for list rendering + dropdowns.
   const sortedStrainCohorts = useMemo(
-    () => [...strainFilteredCohorts].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+    () => sortCohortsByName(strainFilteredCohorts),
     [strainFilteredCohorts],
   );
 

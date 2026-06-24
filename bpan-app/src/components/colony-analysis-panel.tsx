@@ -122,6 +122,7 @@ import {
   DERIVED_MEASURE_KEYS_BY_EXPERIMENT,
   DERIVED_MEASURE_LABELS,
 } from "@/lib/derived-measures";
+import { sortCohortsByName, compareCohortName } from "@/lib/cohort-sort";
 
 // Dynamically import Plotly
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -2203,6 +2204,8 @@ export function ColonyAnalysisPanel({
   const [dataTableDialogOpen, setDataTableDialogOpen] = useState(false);
 
   const visibleRuns = useMemo(() => experimentRuns.filter((run) => run.status !== "cancelled"), [experimentRuns]);
+  // Natural/numeric sort for the cohort dropdown ("BPAN 3" before "BPAN 10").
+  const sortedCohorts = useMemo(() => sortCohortsByName(cohorts), [cohorts]);
   const resolvedRunId =
     activeRunId === "__all__" || visibleRuns.some((run) => run.id === activeRunId) ? activeRunId : "__all__";
   // Update local run state (immediate source of truth for this tab) and persist
@@ -3396,7 +3399,7 @@ export function ColonyAnalysisPanel({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">All Cohorts</SelectItem>
-              {cohorts.map((c) => (
+              {sortedCohorts.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
                   {c.name}
                 </SelectItem>
@@ -3462,7 +3465,9 @@ export function ColonyAnalysisPanel({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              {Array.from(new Set(analysisAnimals.map((animal) => animal.cohort))).map((cohort) => (
+              {Array.from(new Set(analysisAnimals.map((animal) => animal.cohort)))
+                .sort((a, b) => compareCohortName(String(a ?? ""), String(b ?? "")))
+                .map((cohort) => (
                 <Button
                   key={cohort}
                   variant="ghost"
@@ -7828,7 +7833,7 @@ function VisualizationPanel({
         } else if (timeSeriesMode === "cohort") {
           const cohorts = Array.from(
             new Set(flatData.filter((r) => !isNaN(Number(r[measureKey]))).map((r) => r.cohort)),
-          ).sort();
+          ).sort((a, b) => compareCohortName(String(a ?? ""), String(b ?? "")));
           lineSpecs = cohorts.map((cohort) => ({
             key: cohort,
             name: cohort,

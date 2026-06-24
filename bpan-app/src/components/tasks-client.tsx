@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import type { Task } from "@/types";
+import { compareCohortName } from "@/lib/cohort-sort";
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -243,7 +244,7 @@ function WeekCalendar({
     g.count++;
   }
   const expGroups = [...seenGroups.entries()]
-    .map(([type, v]) => ({ type, cohortNames: [...v.cohorts], count: v.count }))
+    .map(([type, v]) => ({ type, cohortNames: [...v.cohorts].sort(compareCohortName), count: v.count }))
     .sort((a, b) => a.type.localeCompare(b.type));
 
   const [sy, sm, sd] = selectedDay.split("-").map(Number);
@@ -666,7 +667,12 @@ export function TasksClient({
                 batch.count++;
               }
 
-              const sortedBatches = [...batches.values()].sort((a, b) => a.firstDate.localeCompare(b.firstDate));
+              const sortedBatches = [...batches.values()].sort(
+                (a, b) =>
+                  a.firstDate.localeCompare(b.firstDate) ||
+                  compareCohortName(a.cohortName, b.cohortName) ||
+                  a.timepointDays - b.timepointDays,
+              );
 
               return sortedBatches.map((batch, i) => {
                 const dateRange = batch.firstDate === batch.lastDate

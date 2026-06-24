@@ -19,6 +19,7 @@ import type {
   RunTimepoint,
   RunTimepointExperiment,
 } from "@/types";
+import { sortCohortsByName } from "@/lib/cohort-sort";
 
 // ─── Labels ────────────────────────────────────────────────────────────
 
@@ -426,6 +427,9 @@ export function ExperimentTrackerMatrix({
     return m;
   }, [cohorts]);
 
+  // Natural/numeric sort for cohort dropdown + batch-select chips ("BPAN 3" before "BPAN 10").
+  const sortedCohorts = useMemo(() => sortCohortsByName(cohorts), [cohorts]);
+
   const sortedAnimals = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
     const byCohortThenId = (a: Animal, b: Animal) => {
@@ -500,7 +504,7 @@ export function ExperimentTrackerMatrix({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Cohorts</SelectItem>
-                {cohorts.map((c) => (
+                {sortedCohorts.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
                     {c.name}
                   </SelectItem>
@@ -570,7 +574,7 @@ export function ExperimentTrackerMatrix({
             <div className="space-y-1.5">
               <p className="text-xs text-muted-foreground font-medium">Cohorts <span className="text-muted-foreground/60">(none = all)</span></p>
               <div className="flex flex-wrap gap-1.5">
-                {cohorts.map((c) => (
+                {sortedCohorts.map((c) => (
                   <button
                     key={c.id}
                     type="button"

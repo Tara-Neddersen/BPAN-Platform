@@ -17,6 +17,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Animal, Cohort, ColonyTimepoint, ColonyResult } from "@/types";
 import type { WorkspaceCalendarEvent } from "@/types";
+import { sortCohortsByName, compareCohortName } from "@/lib/cohort-sort";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -400,7 +401,14 @@ function ColonyResultsView({
       </div>
 
       {/* Results table per cohort */}
-      {Array.from(cohortGroups.entries()).map(([cohortId, groupAnimals]) => {
+      {Array.from(cohortGroups.entries())
+        .sort(([aId], [bId]) =>
+          compareCohortName(
+            cohorts.find((c) => c.id === aId)?.name ?? "",
+            cohorts.find((c) => c.id === bId)?.name ?? "",
+          ),
+        )
+        .map(([cohortId, groupAnimals]) => {
         const cohort = cohorts.find((c) => c.id === cohortId);
         return (
           <Card key={cohortId}>
@@ -968,6 +976,9 @@ function PITrackerTab({
     return map;
   }, [cohorts]);
 
+  // Natural/numeric sort for the cohort filter dropdown ("BPAN 3" before "BPAN 10").
+  const sortedCohorts = useMemo(() => sortCohortsByName(cohorts), [cohorts]);
+
   // Build sorted animal list: cohort name → sex → genotype → numeric identifier
   const sortedAnimals = useMemo(() => {
     const animalIdsWithExps = new Set(experiments.map(e => e.animal_id));
@@ -979,7 +990,7 @@ function PITrackerTab({
       // 1. Cohort name
       const cohortA = cohortById.get(a.cohort_id)?.name || "";
       const cohortB = cohortById.get(b.cohort_id)?.name || "";
-      const cohortCmp = cohortA.localeCompare(cohortB, undefined, { numeric: true });
+      const cohortCmp = compareCohortName(cohortA, cohortB);
       if (cohortCmp !== 0) return cohortCmp;
 
       // 2. Sex (male first)
@@ -1201,7 +1212,7 @@ function PITrackerTab({
             <SelectTrigger className="h-8 text-xs w-[180px]"><SelectValue placeholder="Filter by cohort" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Cohorts</SelectItem>
-              {cohorts.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              {sortedCohorts.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
         )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -81,6 +81,7 @@ import type {
   RunAssignment,
 } from "@/types";
 import { UI_SURFACE_TITLES } from "@/lib/ui-copy";
+import { sortCohortsByName, compareCohortName } from "@/lib/cohort-sort";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -219,6 +220,10 @@ export function ExperimentsClient({
   const [showNewExperiment, setShowNewExperiment] = useState(false);
   const [editingExperiment, setEditingExperiment] = useState<Experiment | null>(null);
 
+  // Natural/numeric sort once at the top so every child (CalendarView, GanttView,
+  // RunExecutionBuilder) inherits naturally-ordered cohorts ("BPAN 3" before "BPAN 10").
+  const sortedCohorts = useMemo(() => sortCohortsByName(cohorts), [cohorts]);
+
   return (
     <div className="page-shell">
       <div className="page-header">
@@ -310,7 +315,7 @@ export function ExperimentsClient({
           onEdit={setEditingExperiment}
           animalExperiments={animalExperiments}
           animals={animals}
-          cohorts={cohorts}
+          cohorts={sortedCohorts}
           colonyTimepoints={colonyTimepoints}
           workspaceCalendarEvents={workspaceCalendarEvents}
         />
@@ -321,7 +326,7 @@ export function ExperimentsClient({
           timepoints={timepoints}
           animalExperiments={animalExperiments}
           animals={animals}
-          cohorts={cohorts}
+          cohorts={sortedCohorts}
           onEdit={setEditingExperiment}
         />
       )}
@@ -348,7 +353,7 @@ export function ExperimentsClient({
           runScheduleBlocks={runScheduleBlocks}
           runAssignments={runAssignments}
           protocols={protocols}
-          cohorts={cohorts}
+          cohorts={sortedCohorts}
           animals={animals}
           persistenceEnabled={runExecutionPersistenceEnabled}
           dataWarning={runExecutionWarning}
@@ -2247,7 +2252,7 @@ function GanttView({
       .values()
   ).sort((a, b) =>
     a.startDate.localeCompare(b.startDate)
-    || a.cohortName.localeCompare(b.cohortName)
+    || compareCohortName(a.cohortName, b.cohortName)
     || a.timepointLabel.localeCompare(b.timepointLabel)
     || a.typeLabel.localeCompare(b.typeLabel)
   );

@@ -76,6 +76,7 @@ import {
   type SnapshotReconciliationGuardrails,
 } from "@/lib/results-run-adapters";
 import { maybeDecodeRtf, parseMetricReportPreview } from "@/lib/results-import";
+import { compareCohortName } from "@/lib/cohort-sort";
 
 // Dynamically import Plotly (it's heavy and client-only)
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -1509,7 +1510,9 @@ function RunCapturePanel({
       existing.animals.push(animal);
       groups.set(key, existing);
     }
-    return Array.from(groups.values());
+    return Array.from(groups.values()).sort((a, b) =>
+      compareCohortName(a.cohort?.name ?? "", b.cohort?.name ?? ""),
+    );
   }, [assignedAnimals, cohorts]);
 
   const currentDraft = draftByBlockId[selectedBlock?.id || "__default__"] || {};
