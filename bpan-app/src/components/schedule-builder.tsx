@@ -1188,6 +1188,25 @@ export function ScheduleBuilder({
     });
   };
 
+  // Calendar day-drag: move a day to an explicit zero-based position in the
+  // ordered day list. Used by the weekly calendar where a day can be dropped
+  // onto any weekday cell (including empty cells past the last day). day_index,
+  // sort_order and the derived weekday position are re-derived by normalizeDays
+  // (via updateDays); each day keeps its own slots/blocks because the whole day
+  // object is moved intact.
+  const moveDayToPosition = (sourceDayId: string, targetPosition: number) => {
+    updateDays((current) => {
+      const fromIndex = current.findIndex((day) => day.id === sourceDayId);
+      if (fromIndex === -1) {
+        return current;
+      }
+      // Clamp into [0, length - 1]; reorder() treats indices as positions in
+      // the post-removal list, matching splice-out-then-splice-in semantics.
+      const toIndex = Math.min(Math.max(targetPosition, 0), current.length - 1);
+      return reorder(current, fromIndex, toIndex);
+    });
+  };
+
   const moveSlot = (sourceDayId: string, slotId: string, targetDayId: string, targetSlotId: string) => {
     updateDays((current) => {
       const sourceMatch = findSlot(current, sourceDayId, slotId);
@@ -1321,6 +1340,63 @@ export function ScheduleBuilder({
           targetBlockId,
         );
       }
+    }
+
+    setDragging(null);
+  };
+
+  // Weekly-calendar day-drop. A day card is dragged (via its grip) and dropped
+  // onto a weekday cell at the given absolute calendar index (week*7 + weekday).
+  // We translate that calendar slot into a target position in the ordered day
+  // list, then reorder. Dropping a day onto its own current slot is a no-op.
+  const handleCalendarDayDrop = (dropAbsoluteIndex: number) => {
+    if (dragging?.kind !== "day") {
+      setDragging(null);
+      return;
+    }
+    const sourceDayId = dragging.dayId;
+
+    // Absolute calendar index for each displayed day mirrors the calendarWeeks
+    // memo: startIndex offset + (day_index - 1).
+    const startIndex = Math.max(
+      0,
+      WEEKDAY_OPTIONS.findIndex((option) => option.value === activeWindowSettings.preferredStartWeekday) - 1,
+    );
+    const absoluteIndexOf = (day: BuilderDay) => startIndex + Math.max(day.day_index - 1, 0);
+
+    const sourceDay = displayedDays.find((day) => day.id === sourceDayId);
+    if (!sourceDay) {
+      setDragging(null);
+      return;
+    }
+
+    // No-op: dropped back onto the cell it already occupies.
+    if (absoluteIndexOf(sourceDay) === dropAbsoluteIndex) {
+      setDragging(null);
+      return;
+    }
+
+    // Target position among the displayed days = how many days currently sit
+    // before the drop slot, excluding the dragged day itself.
+    let targetVisibleIndex = 0;
+    for (const day of displayedDays) {
+      if (day.id === sourceDayId) {
+        continue;
+      }
+      if (absoluteIndexOf(day) < dropAbsoluteIndex) {
+        targetVisibleIndex += 1;
+      }
+    }
+
+    // Map the visible (window-filtered) target back to an index into draft.days.
+    // When no window is active displayedDays === draft.days, so this is identity;
+    // otherwise we anchor on the day currently at targetVisibleIndex.
+    const anchorDay = displayedDays.filter((day) => day.id !== sourceDayId)[targetVisibleIndex];
+    if (anchorDay) {
+      moveDay(sourceDayId, anchorDay.id);
+    } else {
+      // Past the last day -> move to end of the list.
+      moveDayToPosition(sourceDayId, draft.days.length - 1);
     }
 
     setDragging(null);
@@ -1981,7 +2057,24 @@ export function ScheduleBuilder({
                 {week.map((day, weekdayIndex) => (
                   <div
                     key={`week-${weekIndex}-weekday-${weekdayIndex}`}
-                    className="min-h-[140px] rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-2"
+                    className={cn(
+                      "min-h-[140px] rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-2 transition-colors",
+                      dragging?.kind === "day" ? "hover:border-slate-400 hover:bg-slate-100" : null,
+                    )}
+                    // Day-drag drop target. Only days (not slots/blocks) can be
+                    // dropped here; preventDefault gates which drag types this
+                    // cell accepts, keeping day-drag isolated from block-drag.
+                    onDragOver={(event) => {
+                      if (dragging?.kind === "day") {
+                        event.preventDefault();
+                      }
+                    }}
+                    onDrop={(event) => {
+                      if (dragging?.kind === "day") {
+                        event.preventDefault();
+                        handleCalendarDayDrop(weekIndex * 7 + weekdayIndex);
+                      }
+                    }}
                   >
                     {day ? (
                       <button
@@ -1998,11 +2091,31 @@ export function ScheduleBuilder({
                         )}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">Day {day.day_index}</p>
-                            <p className="text-xs text-slate-500">
-                              {day.slots.length === 0 ? "No work day" : `${day.slots.length} slot${day.slots.length === 1 ? "" : "s"}`}
-                            </p>
+                          <div className="flex items-start gap-1.5">
+                            {/* Dedicated day drag handle. Draggable lives on the
+                                grip (not the card button) so click-to-edit and
+                                day-drag never conflict. */}
+                            <span
+                              role="button"
+                              tabIndex={-1}
+                              aria-label={`Drag Day ${day.day_index} to another weekday`}
+                              draggable
+                              onClick={(event) => event.stopPropagation()}
+                              onDragStart={(event) => {
+                                event.stopPropagation();
+                                setDragging({ kind: "day", dayId: day.id });
+                              }}
+                              onDragEnd={() => setDragging(null)}
+                              className="mt-0.5 cursor-grab rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 active:cursor-grabbing"
+                            >
+                              <GripVertical className="h-4 w-4" />
+                            </span>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">Day {day.day_index}</p>
+                              <p className="text-xs text-slate-500">
+                                {day.slots.length === 0 ? "No work day" : `${day.slots.length} slot${day.slots.length === 1 ? "" : "s"}`}
+                              </p>
+                            </div>
                           </div>
                           <span className="text-xs text-slate-400">
                             {resolvedCalendarDayId === day.id ? "Editing" : "Open"}
