@@ -18,6 +18,10 @@ import {
   ChevronRight,
   Copy,
   Check,
+  Settings2,
+  SlidersHorizontal,
+  Sigma,
+  Palette,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +36,15 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { WorkspaceEmptyState } from "@/components/workspace-empty-state";
 import type { Animal, Cohort, ColonyResult, ExperimentRun, RunAssignment, RunTimepoint, RunTimepointExperiment, Dataset, Analysis } from "@/types";
@@ -6641,6 +6654,12 @@ function VisualizationPanel({
   const [autoPAdjust, setAutoPAdjust] = useState<"none" | "bonferroni">(normalizedInitialConfig.autoPAdjust);
   const [includeNsAnnotations, setIncludeNsAnnotations] = useState(normalizedInitialConfig.includeNsAnnotations);
   const [showManualSigControls, setShowManualSigControls] = useState(false);
+  // Presentational-only state: which configuration dialog is open. These do
+  // not affect any chart computation, data, stats, or persistence — they only
+  // control whether a modal is visible.
+  const [groupingDialogOpen, setGroupingDialogOpen] = useState(false);
+  const [chartSettingsDialogOpen, setChartSettingsDialogOpen] = useState(false);
+  const [chartSettingsTab, setChartSettingsTab] = useState("figure");
   const [autoStatsSummary, setAutoStatsSummary] = useState<{
     tested: number;
     added: number;
@@ -7838,129 +7857,217 @@ function VisualizationPanel({
 
   return (
     <div className="space-y-4">
+      {/* ─── Toolbar: chart is the hero, config lives in dialogs ─────────── */}
       <Card className="border-slate-200/80 bg-white shadow-sm">
-        <CardContent className="pt-4 space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-12">
-            <div className="min-w-0 lg:col-span-2">
-              <Label className="text-xs mb-1 block">Chart Type</Label>
-              <Select value={effectiveChartType} onValueChange={(value) => setChartType(value as VisualizationChartType)}>
-                <SelectTrigger className="w-full min-w-0">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableChartOptions.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {showMeasureSelectors && (
-            <div className={`min-w-0 ${allowSecondaryMeasure ? "lg:col-span-3" : "lg:col-span-4"}`}>
-              <Label className="text-xs mb-1 block">
-                {allowSecondaryMeasure ? "X Measure" : "Measure"}
-              </Label>
-              <Select value={measureKey} onValueChange={setMeasureKey}>
-                <SelectTrigger className="w-full min-w-0">
-                  <SelectValue placeholder="Select" />
-                </SelectTrigger>
-                <SelectContent>
-                  {numericKeys.map((k) => (
-                    <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            )}
-
-            {allowSecondaryMeasure && (
-              <div className="min-w-0 lg:col-span-3">
-                <Label className="text-xs mb-1 block">Y Measure</Label>
-                <Select value={measureKey2} onValueChange={setMeasureKey2}>
+        <CardContent className="py-3 px-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end lg:justify-between">
+            {/* Most-used inline controls: chart type + measure(s) */}
+            <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+              <div className="min-w-0 sm:w-44">
+                <Label className="text-xs mb-1 block">Chart Type</Label>
+                <Select value={effectiveChartType} onValueChange={(value) => setChartType(value as VisualizationChartType)}>
                   <SelectTrigger className="w-full min-w-0">
-                    <SelectValue placeholder="Select" />
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {numericKeys.filter((k) => k !== measureKey).map((k) => (
-                      <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                    {availableChartOptions.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-            )}
 
-            <div className={`min-w-0 ${allowSecondaryMeasure ? "lg:col-span-2" : "lg:col-span-3"}`}>
-              <Label className="text-xs mb-1 block">Group By</Label>
-              <Select value={groupBy} onValueChange={(v) => setGroupBy(v as typeof groupBy)}>
-                <SelectTrigger className="w-full min-w-0">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="group">Genotype × Sex</SelectItem>
-                  <SelectItem value="group_timepoint">Genotype × Sex × Timepoint</SelectItem>
-                  <SelectItem value="genotype">Genotype only</SelectItem>
-                  <SelectItem value="sex">Sex only</SelectItem>
-                  <SelectItem value="timepoint">Timepoint only</SelectItem>
-                  <SelectItem value="cohort">Cohort</SelectItem>
-                </SelectContent>
-              </Select>
+              {showMeasureSelectors && (
+                <div className="min-w-0 sm:w-48">
+                  <Label className="text-xs mb-1 block">
+                    {allowSecondaryMeasure ? "X Measure" : "Measure"}
+                  </Label>
+                  <Select value={measureKey} onValueChange={setMeasureKey}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {numericKeys.map((k) => (
+                        <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {allowSecondaryMeasure && (
+                <div className="min-w-0 sm:w-48">
+                  <Label className="text-xs mb-1 block">Y Measure</Label>
+                  <Select value={measureKey2} onValueChange={setMeasureKey2}>
+                    <SelectTrigger className="w-full min-w-0">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {numericKeys.filter((k) => k !== measureKey).map((k) => (
+                        <SelectItem key={k} value={k}>{measureLabels[k] || k}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
 
-            <div className={`min-w-0 ${allowSecondaryMeasure ? "lg:col-span-2" : "lg:col-span-3"}`}>
-              <Label className="text-xs mb-1 block">Title (optional)</Label>
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Auto-generated"
-                className="w-full min-w-0"
-              />
+            {/* Secondary actions: open the grouped configuration dialogs */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setGroupingDialogOpen(true)}
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" /> Grouping &amp; filters
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => {
+                  setChartSettingsTab("figure");
+                  setChartSettingsDialogOpen(true);
+                }}
+              >
+                <Settings2 className="h-3.5 w-3.5" /> Chart settings
+              </Button>
+              {supportsSignificance && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => {
+                    setChartSettingsTab("significance");
+                    setChartSettingsDialogOpen(true);
+                  }}
+                >
+                  <Sigma className="h-3.5 w-3.5" /> Significance
+                </Button>
+              )}
             </div>
           </div>
+        </CardContent>
+      </Card>
 
-          {effectiveChartType === "timepoint_line" && (
-            <div className="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-white/70 px-2.5 py-2">
+      {/* ─── Grouping & filters dialog ───────────────────────────────────── */}
+      <Dialog open={groupingDialogOpen} onOpenChange={setGroupingDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <SlidersHorizontal className="h-4 w-4" /> Grouping &amp; filters
+            </DialogTitle>
+            <DialogDescription>
+              Choose how data is grouped, set the figure title, and configure
+              time-series and point options.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="min-w-0">
-                <Label className="text-xs mb-1 block">Line grouping</Label>
-                <Select
-                  value={timeSeriesMode}
-                  onValueChange={(v) => setTimeSeriesMode(v as typeof timeSeriesMode)}
-                >
-                  <SelectTrigger className="w-full min-w-[10rem]">
+                <Label className="text-xs mb-1 block">Group By</Label>
+                <Select value={groupBy} onValueChange={(v) => setGroupBy(v as typeof groupBy)}>
+                  <SelectTrigger className="w-full min-w-0">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="genotype">Per genotype (mean ± SEM)</SelectItem>
-                    <SelectItem value="animal">Per animal (spaghetti)</SelectItem>
-                    <SelectItem value="cohort">Per cohort (mean)</SelectItem>
+                    <SelectItem value="group">Genotype × Sex</SelectItem>
+                    <SelectItem value="group_timepoint">Genotype × Sex × Timepoint</SelectItem>
+                    <SelectItem value="genotype">Genotype only</SelectItem>
+                    <SelectItem value="sex">Sex only</SelectItem>
+                    <SelectItem value="timepoint">Timepoint only</SelectItem>
+                    <SelectItem value="cohort">Cohort</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              {timeSeriesMode === "genotype" && (
-                <label className="flex items-center gap-1.5 text-xs cursor-pointer self-end pb-2">
-                  <input
-                    type="checkbox"
-                    checked={timeSeriesSplitSex}
-                    onChange={(e) => setTimeSeriesSplitSex(e.target.checked)}
-                    className="rounded h-3.5 w-3.5"
-                  />
-                  Split by sex
-                </label>
-              )}
+
+              <div className="min-w-0">
+                <Label className="text-xs mb-1 block">Title (optional)</Label>
+                <Input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Auto-generated"
+                  className="w-full min-w-0"
+                />
+              </div>
             </div>
-          )}
 
-          <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white/70 px-2.5 py-2">
-            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showPoints}
-                onChange={(e) => setShowPoints(e.target.checked)}
-                className="rounded h-3.5 w-3.5"
-              />
-              Show individual data points
-            </label>
+            {effectiveChartType === "timepoint_line" && (
+              <div className="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-white/70 px-2.5 py-2">
+                <div className="min-w-0">
+                  <Label className="text-xs mb-1 block">Line grouping</Label>
+                  <Select
+                    value={timeSeriesMode}
+                    onValueChange={(v) => setTimeSeriesMode(v as typeof timeSeriesMode)}
+                  >
+                    <SelectTrigger className="w-full min-w-[10rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="genotype">Per genotype (mean ± SEM)</SelectItem>
+                      <SelectItem value="animal">Per animal (spaghetti)</SelectItem>
+                      <SelectItem value="cohort">Per cohort (mean)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {timeSeriesMode === "genotype" && (
+                  <label className="flex items-center gap-1.5 text-xs cursor-pointer self-end pb-2">
+                    <input
+                      type="checkbox"
+                      checked={timeSeriesSplitSex}
+                      onChange={(e) => setTimeSeriesSplitSex(e.target.checked)}
+                      className="rounded h-3.5 w-3.5"
+                    />
+                    Split by sex
+                  </label>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-white/70 px-2.5 py-2">
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showPoints}
+                  onChange={(e) => setShowPoints(e.target.checked)}
+                  className="rounded h-3.5 w-3.5"
+                />
+                Show individual data points
+              </label>
+            </div>
           </div>
+        </DialogContent>
+      </Dialog>
 
+      {/* ─── Chart settings dialog (Figure Studio + Significance tabs) ────── */}
+      <Dialog open={chartSettingsDialogOpen} onOpenChange={setChartSettingsDialogOpen}>
+        <DialogContent className="max-h-[90vh] sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Settings2 className="h-4 w-4" /> Chart settings
+            </DialogTitle>
+            <DialogDescription>
+              Fine-tune the figure presentation: titles, axes, colors, styling
+              and significance annotations.
+            </DialogDescription>
+          </DialogHeader>
+
+          <Tabs value={chartSettingsTab} onValueChange={setChartSettingsTab} className="min-h-0">
+            <TabsList className="w-full justify-start">
+              <TabsTrigger value="figure" className="gap-1.5">
+                <Palette className="h-3.5 w-3.5" /> Figure Studio
+              </TabsTrigger>
+              {supportsSignificance && (
+                <TabsTrigger value="significance" className="gap-1.5">
+                  <Sigma className="h-3.5 w-3.5" /> Significance
+                </TabsTrigger>
+              )}
+            </TabsList>
+
+            <TabsContent value="figure" className="mt-3">
+              <ScrollArea className="max-h-[60vh] pr-3">
           <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50/70 p-3">
             <div className="flex items-center justify-between gap-2">
               <Label className="text-xs font-medium">Figure Studio</Label>
@@ -8372,9 +8479,13 @@ function VisualizationPanel({
               </label>
             </div>
           </div>
+              </ScrollArea>
+            </TabsContent>
 
-          {/* ─── Significance Annotations ─────────────── */}
-          {supportsSignificance && (
+            {/* ─── Significance Annotations ─────────────── */}
+            {supportsSignificance && (
+            <TabsContent value="significance" className="mt-3">
+              <ScrollArea className="max-h-[60vh] pr-3">
             <div className="space-y-3 rounded-md border border-slate-200 bg-white/70 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Label className="text-xs font-medium">Significance</Label>
@@ -8558,16 +8669,21 @@ function VisualizationPanel({
                 </div>
               )}
             </div>
-          )}
-        </CardContent>
-      </Card>
+              </ScrollArea>
+            </TabsContent>
+            )}
+          </Tabs>
+        </DialogContent>
+      </Dialog>
 
       {plotData && (
         <Card className="border-slate-200/80 shadow-sm">
           <CardHeader className="border-b bg-slate-50/70 py-3 px-4">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium">Preview</CardTitle>
-              <div className="flex gap-1">
+              <CardTitle className="flex items-center gap-1.5 text-sm font-semibold">
+                <BarChart3 className="h-4 w-4 text-slate-500" /> Figure
+              </CardTitle>
+              <div className="flex flex-wrap gap-1">
                 <Button variant="outline" size="sm" className="gap-1 text-xs h-7" onClick={handleExportFigureMetadata}>
                   <Download className="h-3 w-3" /> Packet
                 </Button>
