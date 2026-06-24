@@ -1670,6 +1670,7 @@ function CalendarView({
                             variant="ghost"
                             size="sm"
                             className="h-7 w-7 p-0 text-destructive"
+                            aria-label="Delete event"
                             onClick={async () => {
                               const result = await deleteWorkspaceCalendarEvent(ev.id);
                               if (result.error) toast.error(result.error);
@@ -1698,7 +1699,7 @@ function CalendarView({
                         <Badge className={`text-[10px] ${STATUS_STYLES[e.status]?.bg || ""}`}>{e.status}</Badge>
                         <span className="font-medium">{e.title}</span>
                       </div>
-                      <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => onEdit(e)}>
+                      <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => onEdit(e)} aria-label="Edit experiment">
                         <Pencil className="h-3 w-3" />
                       </Button>
                     </div>
@@ -1970,6 +1971,7 @@ function CalendarView({
                       size="sm"
                       className="h-7 text-xs text-destructive"
                       onClick={() => { if (window.confirm(`Delete timepoint "${t.label}"? This cannot be undone.`)) deleteTimepoint(t.id); }}
+                      aria-label="Delete timepoint"
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
@@ -2061,10 +2063,10 @@ function ExperimentCard({
             {e.description && <p className="text-xs text-muted-foreground mt-1">{e.description}</p>}
           </div>
           <div className="flex gap-1">
-            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onEdit}>
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onEdit} aria-label="Edit experiment">
               <Pencil className="h-3.5 w-3.5" />
             </Button>
-            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive" onClick={() => { if (window.confirm(`Delete experiment "${e.title}" and its timepoints? This cannot be undone.`)) deleteExperiment(e.id); }}>
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive" onClick={() => { if (window.confirm(`Delete experiment "${e.title}" and its timepoints? This cannot be undone.`)) deleteExperiment(e.id); }} aria-label="Delete experiment">
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -2131,11 +2133,11 @@ function ExperimentCard({
                   </div>
                   <div className="flex gap-1">
                     {!t.completed_at && (
-                      <button onClick={() => completeTimepoint(t.id)} className="text-green-600 hover:text-green-800">
+                      <button onClick={() => completeTimepoint(t.id)} className="text-green-600 hover:text-green-800" aria-label="Mark timepoint complete">
                         <CheckCircle2 className="h-3 w-3" />
                       </button>
                     )}
-                    <button onClick={() => { if (window.confirm(`Delete timepoint "${t.label}"? This cannot be undone.`)) deleteTimepoint(t.id); }} className="text-destructive hover:text-destructive/80">
+                    <button onClick={() => { if (window.confirm(`Delete timepoint "${t.label}"? This cannot be undone.`)) deleteTimepoint(t.id); }} className="text-destructive hover:text-destructive/80" aria-label="Delete timepoint">
                       <Trash2 className="h-3 w-3" />
                     </button>
                   </div>
@@ -2868,6 +2870,7 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                       size="sm"
                       className="h-9 w-9 p-0 text-destructive"
                       onClick={() => setSteps(steps.filter((_, j) => j !== i))}
+                      aria-label="Remove step"
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
@@ -2926,10 +2929,10 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                     )}
                   </div>
                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => startEdit(p)}>
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => startEdit(p)} aria-label="Edit protocol">
                       <Pencil className="h-3 w-3" />
                     </Button>
-                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive" onClick={() => { if (window.confirm(`Delete protocol "${p.title}"? This cannot be undone.`)) deleteProtocol(p.id); }}>
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive" onClick={() => { if (window.confirm(`Delete protocol "${p.title}"? This cannot be undone.`)) deleteProtocol(p.id); }} aria-label="Delete protocol">
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
@@ -3163,10 +3166,10 @@ function ReagentsView({ reagents }: { reagents: Reagent[] }) {
                     <td className="py-2 pr-3 text-xs text-muted-foreground">{r.storage_location || "—"}</td>
                     <td className="py-2">
                       <div className="flex gap-1">
-                        <button onClick={() => { setEditing(r); setShowForm(true); }} className="text-muted-foreground hover:text-foreground">
+                        <button onClick={() => { setEditing(r); setShowForm(true); }} className="text-muted-foreground hover:text-foreground" aria-label="Edit reagent">
                           <Pencil className="h-3 w-3" />
                         </button>
-                        <button onClick={() => { if (window.confirm(`Delete reagent "${r.name}"? This cannot be undone.`)) deleteReagent(r.id); }} className="text-destructive hover:text-destructive/80">
+                        <button onClick={() => { if (window.confirm(`Delete reagent "${r.name}"? This cannot be undone.`)) deleteReagent(r.id); }} className="text-destructive hover:text-destructive/80" aria-label="Delete reagent">
                           <Trash2 className="h-3 w-3" />
                         </button>
                       </div>

@@ -2251,7 +2251,7 @@ export function ColonyResultsTab({
                               className="h-8 text-sm"
                             />
                           </div>
-                          <Button size="sm" onClick={handleAddField} className="h-8">
+                          <Button size="sm" onClick={handleAddField} className="h-8" aria-label="Add field">
                             <Check className="w-3.5 h-3.5" />
                           </Button>
                         </div>

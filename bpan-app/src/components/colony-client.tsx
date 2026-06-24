@@ -1698,10 +1698,10 @@ export function ColonyClient({
                           >
                             <Rabbit className="h-3 w-3" /> Breeders
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => setEditingCohort(c)}>
+                          <Button variant="ghost" size="sm" onClick={() => setEditingCohort(c)} aria-label="Edit cohort">
                             <Edit className="h-3.5 w-3.5" />
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete cohort "${c.name}" and all its animals and data? This cannot be undone.`)) act(actions.deleteCohort(c.id)); }}>
+                          <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete cohort "${c.name}" and all its animals and data? This cannot be undone.`)) act(actions.deleteCohort(c.id)); }} aria-label="Delete cohort">
                             <Trash2 className="h-3.5 w-3.5 text-destructive" />
                           </Button>
                         </div>
@@ -1771,10 +1771,10 @@ export function ColonyClient({
                         </div>
                       </div>
                       <div className="flex gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => setEditingTP(tp)}>
+                        <Button variant="ghost" size="sm" onClick={() => setEditingTP(tp)} aria-label="Edit timepoint">
                           <Edit className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete timepoint "${tp.name}" (${tp.age_days} days)? This cannot be undone.`)) act(actions.deleteColonyTimepoint(tp.id)); }}>
+                        <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete timepoint "${tp.name}" (${tp.age_days} days)? This cannot be undone.`)) act(actions.deleteColonyTimepoint(tp.id)); }} aria-label="Delete timepoint">
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -1919,10 +1919,10 @@ export function ColonyClient({
                               <Check className="h-3 w-3" /> Checked
                             </Button>
                           )}
-                          <Button variant="ghost" size="sm" className="h-6 px-1.5 sm:h-7 sm:px-2" onClick={() => setEditingCage(c)}>
+                          <Button variant="ghost" size="sm" className="h-6 px-1.5 sm:h-7 sm:px-2" onClick={() => setEditingCage(c)} aria-label="Edit breeder cage">
                             <Edit className="h-3.5 w-3.5" />
                           </Button>
-                          <Button variant="ghost" size="sm" className="h-6 px-1.5 sm:h-7 sm:px-2" onClick={() => { if (window.confirm(`Delete breeder cage "${c.name}"? This cannot be undone.`)) act(actions.deleteBreederCage(c.id)); }}>
+                          <Button variant="ghost" size="sm" className="h-6 px-1.5 sm:h-7 sm:px-2" onClick={() => { if (window.confirm(`Delete breeder cage "${c.name}"? This cannot be undone.`)) act(actions.deleteBreederCage(c.id)); }} aria-label="Delete breeder cage">
                             <Trash2 className="h-3.5 w-3.5 text-destructive" />
                           </Button>
                         </div>
@@ -2071,10 +2071,10 @@ export function ColonyClient({
                           <Badge variant="outline" className={`text-[10px] capitalize ${sexBadgeClass}`}>{hc.cage_sex}</Badge>
                         </CardTitle>
                         <div className="flex items-center gap-1">
-                          <Button variant="ghost" size="sm" onClick={() => setEditingHousingCage(hc)}>
+                          <Button variant="ghost" size="sm" onClick={() => setEditingHousingCage(hc)} aria-label="Edit housing cage">
                             <Pencil className="h-3 w-3" />
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete housing cage "${hc.cage_label}"? This cannot be undone.`)) act(actions.deleteHousingCage(hc.id)); }}>
+                          <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete housing cage "${hc.cage_label}"? This cannot be undone.`)) act(actions.deleteHousingCage(hc.id)); }} aria-label="Delete housing cage">
                             <Trash2 className="h-3 w-3 text-destructive" />
                           </Button>
                         </div>
@@ -2221,7 +2221,7 @@ export function ColonyClient({
                             )}
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete cage change scheduled for ${cc.scheduled_date}? This cannot be undone.`)) act(actions.deleteCageChange(cc.id)); }}>
+                        <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete cage change scheduled for ${cc.scheduled_date}? This cannot be undone.`)) act(actions.deleteCageChange(cc.id)); }} aria-label="Delete cage change">
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -2304,7 +2304,7 @@ export function ColonyClient({
                             {copiedToken === p.token ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
                             {copiedToken === p.token ? "Copied!" : "Copy Link"}
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Revoke advisor access for ${p.advisor_name}? This cannot be undone.`)) act(actions.deleteAdvisorAccess(p.id)); }}>
+                          <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Revoke advisor access for ${p.advisor_name}? This cannot be undone.`)) act(actions.deleteAdvisorAccess(p.id)); }} aria-label="Revoke advisor access">
                             <Trash2 className="h-3.5 w-3.5 text-destructive" />
                           </Button>
                         </div>
@@ -2350,6 +2350,7 @@ export function ColonyClient({
                         variant="destructive" size="sm"
                         className="absolute top-1 right-1 h-6 w-6 p-0 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                         onClick={() => { if (window.confirm(`Delete this photo${p.caption ? ` "${p.caption}"` : ""}? This cannot be undone.`)) act(actions.deleteColonyPhoto(p.id)); }}
+                        aria-label="Delete photo"
                       >
                         <Trash2 className="h-3 w-3" />
                       </Button>
@@ -4083,6 +4084,7 @@ function AnimalDetail({
                                 size="sm"
                                 className="h-6 text-xs px-2"
                                 onClick={() => { if (resultUrls[exp.id]) onSaveResultUrl(exp.id, resultUrls[exp.id]); }}
+                                aria-label="Save result link"
                               >
                                 <Link2 className="h-3 w-3" />
                               </Button>
