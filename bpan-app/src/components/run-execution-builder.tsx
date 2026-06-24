@@ -18,7 +18,9 @@ import type {
   ScheduledBlock,
   ScheduleSlot,
   ScheduleTemplate,
+  Strain,
 } from "@/types";
+import { sortCohortsByName } from "@/lib/cohort-sort";
 import type { ExperimentTemplateRecord } from "@/components/experiment-template-builder";
 import {
   cloneExperimentRun,
@@ -62,6 +64,7 @@ type AssignmentDraft = {
   scope_type: PlatformAssignmentScope;
   study_id: string;
   cohort_id: string;
+  strain_id: string;
   animal_id: string;
 };
 
@@ -122,6 +125,7 @@ interface Props {
   runAssignments: RunAssignment[];
   protocols: Protocol[];
   cohorts: Cohort[];
+  strains: Strain[];
   animals: Animal[];
   persistenceEnabled: boolean;
   dataWarning?: string | null;
@@ -179,6 +183,7 @@ function getAssignmentDraft(assignment: RunAssignment | undefined): AssignmentDr
       scope_type: "cohort",
       study_id: "",
       cohort_id: "",
+      strain_id: "",
       animal_id: "",
     };
   }
@@ -187,6 +192,7 @@ function getAssignmentDraft(assignment: RunAssignment | undefined): AssignmentDr
     scope_type: assignment.scope_type,
     study_id: assignment.study_id || "",
     cohort_id: assignment.cohort_id || "",
+    strain_id: assignment.strain_id || "",
     animal_id: assignment.animal_id || "",
   };
 }
@@ -195,6 +201,7 @@ function getAssignmentDraft(assignment: RunAssignment | undefined): AssignmentDr
 function assignmentDraftHasTarget(draft: AssignmentDraft) {
   if (draft.scope_type === "study") return Boolean(draft.study_id.trim());
   if (draft.scope_type === "cohort") return Boolean(draft.cohort_id.trim());
+  if (draft.scope_type === "strain") return Boolean(draft.strain_id.trim());
   if (draft.scope_type === "animal") return Boolean(draft.animal_id.trim());
   return false;
 }
@@ -208,11 +215,12 @@ function serializeAssignmentDrafts(drafts: AssignmentDraft[]) {
       scope_type: draft.scope_type,
       study_id: draft.scope_type === "study" ? draft.study_id.trim() : "",
       cohort_id: draft.scope_type === "cohort" ? draft.cohort_id.trim() : "",
+      strain_id: draft.scope_type === "strain" ? draft.strain_id.trim() : "",
       animal_id: draft.scope_type === "animal" ? draft.animal_id.trim() : "",
     }))
     .sort((a, b) => {
-      const aKey = `${a.scope_type}|${a.study_id}|${a.cohort_id}|${a.animal_id}`;
-      const bKey = `${b.scope_type}|${b.study_id}|${b.cohort_id}|${b.animal_id}`;
+      const aKey = `${a.scope_type}|${a.study_id}|${a.cohort_id}|${a.strain_id}|${a.animal_id}`;
+      const bKey = `${b.scope_type}|${b.study_id}|${b.cohort_id}|${b.strain_id}|${b.animal_id}`;
       return aKey.localeCompare(bKey);
     });
 }
@@ -347,6 +355,7 @@ export function RunExecutionBuilder({
   runAssignments,
   protocols,
   cohorts,
+  strains,
   animals,
   persistenceEnabled,
   dataWarning = null,
@@ -381,6 +390,7 @@ export function RunExecutionBuilder({
       scope_type: "cohort" as PlatformAssignmentScope,
       study_id: "",
       cohort_id: "",
+      strain_id: "",
       animal_id: "",
     },
     generate_cohort_schedule: true,
@@ -399,6 +409,9 @@ export function RunExecutionBuilder({
       current.filter((optimisticRun) => !runs.some((persistedRun) => persistedRun.id === optimisticRun.id)),
     );
   }, [runs]);
+
+  const sortedCohorts = useMemo(() => sortCohortsByName(cohorts), [cohorts]);
+  const sortedStrains = useMemo(() => sortCohortsByName(strains), [strains]);
 
   const protocolTitleById = useMemo(
     () => new Map(protocols.map((protocol) => [protocol.id, protocol.title])),
@@ -744,6 +757,7 @@ export function RunExecutionBuilder({
             scope_type: createDraft.assignment.scope_type,
             study_id: createDraft.assignment.scope_type === "study" ? createDraft.assignment.study_id || null : null,
             cohort_id: createDraft.assignment.scope_type === "cohort" ? createDraft.assignment.cohort_id || null : null,
+            strain_id: createDraft.assignment.scope_type === "strain" ? createDraft.assignment.strain_id || null : null,
             animal_id: createDraft.assignment.scope_type === "animal" ? createDraft.assignment.animal_id || null : null,
           }),
         );
@@ -949,6 +963,7 @@ export function RunExecutionBuilder({
                 scope_type: assignment.scope_type,
                 study_id: assignment.scope_type === "study" ? assignment.study_id || null : null,
                 cohort_id: assignment.scope_type === "cohort" ? assignment.cohort_id || null : null,
+                strain_id: assignment.scope_type === "strain" ? assignment.strain_id || null : null,
                 animal_id: assignment.scope_type === "animal" ? assignment.animal_id || null : null,
               })),
           ),
@@ -1318,6 +1333,7 @@ export function RunExecutionBuilder({
                     scope_type: event.target.value as PlatformAssignmentScope,
                     study_id: "",
                     cohort_id: "",
+                    strain_id: "",
                     animal_id: "",
                   },
                 }))
@@ -1325,6 +1341,7 @@ export function RunExecutionBuilder({
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             >
               <option value="cohort">Cohort</option>
+              <option value="strain">Strain (whole strain)</option>
               <option value="animal">Animal</option>
               <option value="study">Study (advanced)</option>
             </select>
@@ -1352,9 +1369,27 @@ export function RunExecutionBuilder({
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
               >
                 <option value="">Select cohort</option>
-                {cohorts.map((cohort) => (
+                {sortedCohorts.map((cohort) => (
                   <option key={cohort.id} value={cohort.id}>
                     {cohort.name}
+                  </option>
+                ))}
+              </select>
+            ) : createDraft.assignment.scope_type === "strain" ? (
+              <select
+                value={createDraft.assignment.strain_id}
+                onChange={(event) =>
+                  setCreateDraft((current) => ({
+                    ...current,
+                    assignment: { ...current.assignment, strain_id: event.target.value },
+                  }))
+                }
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="">Select strain</option>
+                {sortedStrains.map((strain) => (
+                  <option key={strain.id} value={strain.id}>
+                    {strain.name}
                   </option>
                 ))}
               </select>
@@ -1593,12 +1628,14 @@ export function RunExecutionBuilder({
                             scope_type: event.target.value as PlatformAssignmentScope,
                             study_id: "",
                             cohort_id: "",
+                            strain_id: "",
                             animal_id: "",
                           })
                         }
                         className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                       >
                         <option value="cohort">Cohort</option>
+                        <option value="strain">Strain (whole strain)</option>
                         <option value="animal">Animal</option>
                         <option value="study">Study (advanced)</option>
                       </select>
@@ -1616,9 +1653,22 @@ export function RunExecutionBuilder({
                           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                         >
                           <option value="">Select cohort</option>
-                          {cohorts.map((cohort) => (
+                          {sortedCohorts.map((cohort) => (
                             <option key={cohort.id} value={cohort.id}>
                               {cohort.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : assignment.scope_type === "strain" ? (
+                        <select
+                          value={assignment.strain_id}
+                          onChange={(event) => updateAssignmentRow(index, { strain_id: event.target.value })}
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="">Select strain</option>
+                          {sortedStrains.map((strain) => (
+                            <option key={strain.id} value={strain.id}>
+                              {strain.name}
                             </option>
                           ))}
                         </select>
@@ -1648,10 +1698,21 @@ export function RunExecutionBuilder({
                       </Button>
                     </div>
                   ))}
-                  <Button size="sm" variant="outline" onClick={addAssignmentRow} className="gap-1">
-                    <Plus className="h-3.5 w-3.5" />
-                    Add cohort
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={addAssignmentRow} className="gap-1">
+                      <Plus className="h-3.5 w-3.5" />
+                      Add cohort
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={saveAssignmentForRun}
+                      disabled={!selectedRunId || isPending || !assignmentDirty}
+                      className="gap-1"
+                    >
+                      <Save className="h-3.5 w-3.5" />
+                      {pendingAction === "save_assignment" ? "Saving Assignment..." : "Save Assignment"}
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_320px]">

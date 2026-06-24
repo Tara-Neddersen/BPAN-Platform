@@ -121,12 +121,20 @@ function resultHasData(result: ColonyResult) {
   });
 }
 
-function animalMatchesRunAssignments(animal: Animal, assignments: RunAssignment[]) {
+function animalMatchesRunAssignments(
+  animal: Animal,
+  assignments: RunAssignment[],
+  cohortStrainById?: Map<string, string | null>,
+) {
   if (assignments.length === 0) return true;
 
   return assignments.some((assignment) => {
     if (assignment.scope_type === "study") return true;
     if (assignment.scope_type === "cohort" && assignment.cohort_id) return animal.cohort_id === assignment.cohort_id;
+    if (assignment.scope_type === "strain" && assignment.strain_id) {
+      const animalStrainId = animal.cohort_id ? cohortStrainById?.get(animal.cohort_id) ?? null : null;
+      return animalStrainId === assignment.strain_id;
+    }
     if (assignment.scope_type === "animal" && assignment.animal_id) return animal.id === assignment.animal_id;
     return false;
   });
@@ -165,6 +173,12 @@ export function ExperimentTrackerMatrix({
   const [batchSkipReason, setBatchSkipReason] = useState<string>("");
   const [isPending, startTransition] = useTransition();
   const [batchResult, setBatchResult] = useState<string | null>(null);
+
+  // Lookup so strain-scoped run assignments can match animals via their cohort's strain.
+  const cohortStrainById = useMemo(
+    () => new Map<string, string | null>(cohorts.map((cohort) => [cohort.id, cohort.strain_id ?? null])),
+    [cohorts],
+  );
 
   // Update local run state (immediate source of truth for this tab) and persist
   // the choice to the shared `run` URL param so it survives a tab switch.
@@ -261,10 +275,10 @@ export function ExperimentTrackerMatrix({
       list = list.filter((a) => a.cohort_id === filterCohort);
     }
     if (selectedRun) {
-      list = list.filter((animal) => animalMatchesRunAssignments(animal, selectedRunAssignments));
+      list = list.filter((animal) => animalMatchesRunAssignments(animal, selectedRunAssignments, cohortStrainById));
     }
     return list;
-  }, [animals, filterCohort, selectedRun, selectedRunAssignments]);
+  }, [animals, filterCohort, selectedRun, selectedRunAssignments, cohortStrainById]);
 
   // Build a lookup: animalId -> timepointAge -> experimentType -> status
   const statusMap = useMemo(() => {

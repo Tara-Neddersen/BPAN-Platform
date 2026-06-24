@@ -699,7 +699,7 @@ export type PlatformVisibility = (typeof PLATFORM_VISIBILITIES)[number];
 export const PLATFORM_OWNER_TYPES = ["user", "lab"] as const;
 export type PlatformOwnerType = (typeof PLATFORM_OWNER_TYPES)[number];
 
-export const PLATFORM_ASSIGNMENT_SCOPES = ["study", "cohort", "animal"] as const;
+export const PLATFORM_ASSIGNMENT_SCOPES = ["study", "cohort", "strain", "animal"] as const;
 export type PlatformAssignmentScope = (typeof PLATFORM_ASSIGNMENT_SCOPES)[number];
 
 export const PLATFORM_SLOT_KINDS = ["am", "pm", "midday", "evening", "custom", "exact_time"] as const;
@@ -1003,6 +1003,7 @@ export interface RunAssignment {
   scope_type: PlatformAssignmentScope;
   study_id: string | null;
   cohort_id: string | null;
+  strain_id: string | null;
   animal_id: string | null;
   sort_order: number;
   created_at: string;

@@ -79,6 +79,7 @@ import type {
   ExperimentRun,
   RunScheduleBlock,
   RunAssignment,
+  Strain,
 } from "@/types";
 import { UI_SURFACE_TITLES } from "@/lib/ui-copy";
 import { sortCohortsByName, compareCohortName } from "@/lib/cohort-sort";
@@ -177,6 +178,7 @@ interface Props {
   animalExperiments?: AnimalExperiment[];
   animals?: Animal[];
   cohorts?: Cohort[];
+  strains?: Strain[];
   colonyTimepoints?: ColonyTimepoint[];
   workspaceCalendarEvents?: WorkspaceCalendarEvent[];
   experimentTemplates?: ExperimentTemplateRecord[];
@@ -201,6 +203,7 @@ export function ExperimentsClient({
   animalExperiments = [],
   animals = [],
   cohorts = [],
+  strains = [],
   colonyTimepoints = [],
   workspaceCalendarEvents = [],
   experimentTemplates = [],
@@ -354,6 +357,7 @@ export function ExperimentsClient({
           runAssignments={runAssignments}
           protocols={protocols}
           cohorts={sortedCohorts}
+          strains={strains}
           animals={animals}
           persistenceEnabled={runExecutionPersistenceEnabled}
           dataWarning={runExecutionWarning}

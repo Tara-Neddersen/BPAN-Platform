@@ -25,6 +25,7 @@ type RunAssignmentInput = {
   scope_type: PlatformAssignmentScope;
   study_id: string | null;
   cohort_id: string | null;
+  strain_id: string | null;
   animal_id: string | null;
   sort_order: number;
 };
@@ -534,22 +535,25 @@ function normalizeAssignmentInput(value: unknown): RunAssignmentInput | null {
 
   const record = value as Record<string, unknown>;
   const scopeType = typeof record.scope_type === "string" ? record.scope_type.trim() : "";
-  if (!["study", "cohort", "animal"].includes(scopeType)) {
+  if (!["study", "cohort", "strain", "animal"].includes(scopeType)) {
     return null;
   }
 
   const studyId = typeof record.study_id === "string" && record.study_id.trim() ? record.study_id.trim() : null;
   const cohortId = typeof record.cohort_id === "string" && record.cohort_id.trim() ? record.cohort_id.trim() : null;
+  const strainId = typeof record.strain_id === "string" && record.strain_id.trim() ? record.strain_id.trim() : null;
   const animalId = typeof record.animal_id === "string" && record.animal_id.trim() ? record.animal_id.trim() : null;
 
   if (scopeType === "study" && !studyId) return null;
   if (scopeType === "cohort" && !cohortId) return null;
+  if (scopeType === "strain" && !strainId) return null;
   if (scopeType === "animal" && !animalId) return null;
 
   return {
     scope_type: scopeType as PlatformAssignmentScope,
     study_id: scopeType === "study" ? studyId : null,
     cohort_id: scopeType === "cohort" ? cohortId : null,
+    strain_id: scopeType === "strain" ? strainId : null,
     animal_id: scopeType === "animal" ? animalId : null,
     sort_order: 0,
   };
@@ -569,7 +573,7 @@ function parseRunAssignmentsPayload(formData: FormData): RunAssignmentInput[] {
   for (const item of source) {
     const normalized = normalizeAssignmentInput(item);
     if (!normalized) continue;
-    const dedupeKey = `${normalized.scope_type}|${normalized.study_id || ""}|${normalized.cohort_id || ""}|${normalized.animal_id || ""}`;
+    const dedupeKey = `${normalized.scope_type}|${normalized.study_id || ""}|${normalized.cohort_id || ""}|${normalized.strain_id || ""}|${normalized.animal_id || ""}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
     rows.push({ ...normalized, sort_order: rows.length });
@@ -892,6 +896,7 @@ export async function createExperimentRunFromTemplate(formData: FormData) {
       scope_type: assignment.scope_type,
       study_id: assignment.study_id,
       cohort_id: assignment.cohort_id,
+      strain_id: assignment.strain_id,
       animal_id: assignment.animal_id,
       sort_order: assignment.sort_order,
     });
@@ -1151,6 +1156,7 @@ export async function cloneExperimentRun(runId: string) {
         scope_type: assignment.scope_type,
         study_id: assignment.study_id,
         cohort_id: assignment.cohort_id,
+        strain_id: assignment.strain_id,
         animal_id: assignment.animal_id,
         sort_order: assignment.sort_order,
       })),
@@ -1226,6 +1232,7 @@ export async function saveRunAssignment(formData: FormData) {
         scope_type: assignment.scope_type,
         study_id: assignment.study_id,
         cohort_id: assignment.cohort_id,
+        strain_id: assignment.strain_id,
         animal_id: assignment.animal_id,
         sort_order: assignment.sort_order,
       })),
@@ -1251,7 +1258,7 @@ export async function generateCohortScheduleFromRun(runId: string) {
 
   const { data: assignments, error } = await supabase
     .from("run_assignments")
-    .select("scope_type,cohort_id")
+    .select("scope_type,cohort_id,strain_id")
     .eq("experiment_run_id", runId)
     .order("sort_order", { ascending: true });
 
@@ -1260,16 +1267,42 @@ export async function generateCohortScheduleFromRun(runId: string) {
   }
 
   // A run may be assigned multiple cohorts; generate for each distinct one.
-  const cohortIds = [
+  const cohortIdSet = new Set<string>(
+    (assignments || [])
+      .filter((assignment) => assignment.scope_type === "cohort" && assignment.cohort_id)
+      .map((assignment) => String(assignment.cohort_id)),
+  );
+
+  // Strain assignments can't map to one cohort: expand to every cohort whose
+  // strain_id matches the assigned strain (so all current cohorts are scheduled).
+  const strainIds = [
     ...new Set(
       (assignments || [])
-        .filter((assignment) => assignment.scope_type === "cohort" && assignment.cohort_id)
-        .map((assignment) => String(assignment.cohort_id)),
+        .filter((assignment) => assignment.scope_type === "strain" && assignment.strain_id)
+        .map((assignment) => String(assignment.strain_id)),
     ),
   ];
 
+  if (strainIds.length > 0) {
+    const { data: strainCohorts, error: strainCohortsError } = await supabase
+      .from("cohorts")
+      .select("id")
+      .eq("user_id", user.id)
+      .in("strain_id", strainIds);
+
+    if (strainCohortsError) {
+      throw new Error(withRunSchemaGuidance(strainCohortsError.message));
+    }
+
+    for (const cohort of strainCohorts || []) {
+      if (cohort?.id) cohortIdSet.add(String(cohort.id));
+    }
+  }
+
+  const cohortIds = [...cohortIdSet];
+
   if (cohortIds.length === 0) {
-    throw new Error("Assign this run to a cohort before generating the cohort schedule.");
+    throw new Error("Assign this run to a cohort or strain before generating the cohort schedule.");
   }
 
   let scheduledAnimals = 0;

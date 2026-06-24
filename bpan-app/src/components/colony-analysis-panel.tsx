@@ -284,12 +284,20 @@ function resultHasData(result: ColonyResult) {
   });
 }
 
-function animalMatchesRunAssignments(animal: Animal, assignments: RunAssignment[]) {
+function animalMatchesRunAssignments(
+  animal: Animal,
+  assignments: RunAssignment[],
+  cohortStrainById?: Map<string, string | null>,
+) {
   if (assignments.length === 0) return true;
 
   return assignments.some((assignment) => {
     if (assignment.scope_type === "study") return true;
     if (assignment.scope_type === "cohort" && assignment.cohort_id) return animal.cohort_id === assignment.cohort_id;
+    if (assignment.scope_type === "strain" && assignment.strain_id) {
+      const animalStrainId = animal.cohort_id ? cohortStrainById?.get(animal.cohort_id) ?? null : null;
+      return animalStrainId === assignment.strain_id;
+    }
     if (assignment.scope_type === "animal" && assignment.animal_id) return animal.id === assignment.animal_id;
     return false;
   });
@@ -2206,6 +2214,11 @@ export function ColonyAnalysisPanel({
   const visibleRuns = useMemo(() => experimentRuns.filter((run) => run.status !== "cancelled"), [experimentRuns]);
   // Natural/numeric sort for the cohort dropdown ("BPAN 3" before "BPAN 10").
   const sortedCohorts = useMemo(() => sortCohortsByName(cohorts), [cohorts]);
+  // Lookup so strain-scoped run assignments can match animals via their cohort's strain.
+  const cohortStrainById = useMemo(
+    () => new Map<string, string | null>(cohorts.map((cohort) => [cohort.id, cohort.strain_id ?? null])),
+    [cohorts],
+  );
   const resolvedRunId =
     activeRunId === "__all__" || visibleRuns.some((run) => run.id === activeRunId) ? activeRunId : "__all__";
   // Update local run state (immediate source of truth for this tab) and persist
@@ -2435,7 +2448,7 @@ export function ColonyAnalysisPanel({
       const animal = animals.find((a) => a.id === result.animal_id);
       if (!animal) continue;
       if (selectedCohort !== "__all__" && animal.cohort_id !== selectedCohort) continue;
-      if (selectedRun && !animalMatchesRunAssignments(animal, selectedRunAssignments)) continue;
+      if (selectedRun && !animalMatchesRunAssignments(animal, selectedRunAssignments, cohortStrainById)) continue;
 
       const cohort = cohorts.find((c) => c.id === animal.cohort_id);
       const genotypeLabel = animal.genotype === "hemi" ? "Hemi" : animal.genotype === "het" ? "Het" : "WT";
@@ -2502,6 +2515,7 @@ export function ColonyAnalysisPanel({
   }, [
     animals,
     cohorts,
+    cohortStrainById,
     effectiveSelectedExperiment,
     effectiveSelectedTimepoint,
     filteredResults,

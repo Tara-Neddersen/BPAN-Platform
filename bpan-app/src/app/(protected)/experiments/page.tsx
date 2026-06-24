@@ -17,6 +17,7 @@ import type {
   ExperimentRun,
   RunScheduleBlock,
   RunAssignment,
+  Strain,
 } from "@/types";
 import type { ExperimentTemplateColumn, ExperimentTemplateProtocolLink, ExperimentTemplateRecord } from "@/components/experiment-template-builder";
 import { HelpHint } from "@/components/ui/help-hint";
@@ -431,6 +432,7 @@ export default async function ExperimentsPage() {
     animalExperiments,
     animals,
     { data: cohorts },
+    { data: strains },
     { data: colonyTimepoints },
     { data: datasets },
     { data: analyses },
@@ -463,6 +465,11 @@ export default async function ExperimentsPage() {
     fetchAllRows(supabase, "animals", userId),
     supabase
       .from("cohorts")
+      .select("*")
+      .eq("user_id", userId)
+      .order("name"),
+    supabase
+      .from("strains")
       .select("*")
       .eq("user_id", userId)
       .order("name"),
@@ -597,6 +604,7 @@ export default async function ExperimentsPage() {
         animalExperiments={(animalExperiments as AnimalExperiment[]) || []}
         animals={(animals as Animal[]) || []}
         cohorts={(cohorts as Cohort[]) || []}
+        strains={(strains as Strain[]) || []}
         colonyTimepoints={(colonyTimepoints as ColonyTimepoint[]) || []}
         workspaceCalendarEvents={(workspaceCalendarEvents as WorkspaceCalendarEvent[]) || []}
         experimentTemplates={templateBuilderData.templates}

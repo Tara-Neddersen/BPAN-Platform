@@ -667,9 +667,16 @@ export function ColonyResultsTab({
     () => visibleRuns.find((run) => run.id === activeRunId) || null,
     [activeRunId, visibleRuns]
   );
-  const selectedRunAssignment = useMemo(
-    () => runAssignments.find((assignment) => assignment.experiment_run_id === activeRunId) || null,
+  // A run can carry many assignment rows (multiple cohorts/animals/strains); the
+  // recording grid must include animals matching ANY of them.
+  const selectedRunAssignments = useMemo(
+    () => runAssignments.filter((assignment) => assignment.experiment_run_id === activeRunId),
     [activeRunId, runAssignments]
+  );
+  // Lookup so strain-scoped assignments can match an animal via its cohort's strain.
+  const cohortStrainById = useMemo(
+    () => new Map<string, string | null>(cohorts.map((cohort) => [cohort.id, cohort.strain_id ?? null])),
+    [cohorts]
   );
   const selectedRunTimepointRows = useMemo(
     () => runTimepointRows.filter((timepoint) => timepoint.experiment_run_id === activeRunId),
@@ -694,11 +701,17 @@ export function ColonyResultsTab({
         block.metadata && typeof block.metadata === "object" && !Array.isArray(block.metadata)
           ? block.metadata
           : {};
-      const experimentType =
-        getRunMetadataString(metadata, "experimentType") ||
-        inferExperimentTypeFromRunBlockTitle(block.title || "") ||
-        "";
+      // Honor the battery verbatim: whatever experiment is in the schedule is a
+      // recordable column. A block with an explicit type keeps it (so its
+      // predefined measure columns apply); anything else uses its OWN title as
+      // the experiment identity — no "recognized type" gatekeeping and no
+      // title-based merging (e.g. "Room Habituation" stays separate from
+      // "Rotarod Hab", and "DeepLabCut" / "RR S" are no longer dropped).
+      const metadataType = getRunMetadataString(metadata, "experimentType");
+      const experimentType = metadataType || (block.title || "").trim();
 
+      // Only skip blocks with no name at all, or explicit non-recording
+      // scheduling steps (handling/acclimation/etc.) identified by their type.
       if (!experimentType || RUN_SCHEDULE_ONLY_EXPERIMENTS.has(experimentType)) continue;
 
       const windowNamesRaw = Array.isArray(metadata.timepointWindowNames)
@@ -882,11 +895,23 @@ export function ColonyResultsTab({
 
   // Active animals sorted by cohort → sex → genotype
   const activeAnimals = useMemo(() => {
-    const scopedAnimals = selectedRunAssignment?.scope_type === "animal" && selectedRunAssignment.animal_id
-      ? animals.filter((animal) => animal.id === selectedRunAssignment.animal_id)
-      : selectedRunAssignment?.scope_type === "cohort" && selectedRunAssignment.cohort_id
-        ? animals.filter((animal) => animal.cohort_id === selectedRunAssignment.cohort_id)
-        : animals;
+    // Include an animal if it matches ANY of the run's assignment rows
+    // (animal→id, cohort→cohort_id, strain→cohort.strain_id, study→all). With no
+    // assignments, fall back to all animals so an unassigned run isn't empty.
+    const scopedAnimals = selectedRunAssignments.length === 0
+      ? animals
+      : animals.filter((animal) =>
+          selectedRunAssignments.some((assignment) => {
+            if (assignment.scope_type === "study") return true;
+            if (assignment.scope_type === "cohort" && assignment.cohort_id) return animal.cohort_id === assignment.cohort_id;
+            if (assignment.scope_type === "strain" && assignment.strain_id) {
+              const animalStrainId = animal.cohort_id ? cohortStrainById.get(animal.cohort_id) ?? null : null;
+              return animalStrainId === assignment.strain_id;
+            }
+            if (assignment.scope_type === "animal" && assignment.animal_id) return animal.id === assignment.animal_id;
+            return false;
+          }),
+        );
     return scopedAnimals
       .filter((a) => a.status === "active")
       .sort((a, b) => {
@@ -900,7 +925,7 @@ export function ColonyResultsTab({
         const gSort: Record<string, number> = { hemi: 0, het: 1, wt: 2 };
         return (gSort[a.genotype] || 0) - (gSort[b.genotype] || 0);
       });
-  }, [animals, cohorts, selectedRunAssignment]);
+  }, [animals, cohorts, selectedRunAssignments, cohortStrainById]);
 
   const bulkDeleteTimepointOptions = useMemo(
     () =>
@@ -1971,7 +1996,7 @@ export function ColonyResultsTab({
           <div className="space-y-2 text-sm">
             <p>
               This will remove all saved values in <span className="font-medium">{pendingDeleteField?.label}</span> for
-              <span className="font-medium"> {selectedRun ? (runBlockLabelById.get(activeExperiment) || activeExperiment) : (EXPERIMENT_LABELS[activeExperiment] || activeExperiment)}</span> at
+              <span className="font-medium"> {selectedRun ? (runBlockLabelById.get(activeExperiment) || EXPERIMENT_LABELS[activeExperiment] || activeExperiment) : (EXPERIMENT_LABELS[activeExperiment] || activeExperiment)}</span> at
               <span className="font-medium"> {selectedRun ? (selectedRunTimepoint?.label || "General") : `${activeTimepoint} days`}</span>.
             </p>
             <p className="text-muted-foreground">
@@ -2080,7 +2105,7 @@ export function ColonyResultsTab({
                       value={exp}
                       className="relative h-8 flex-none rounded-lg px-3 text-xs font-medium"
                     >
-                      {selectedRun ? (runBlockLabelById.get(exp) || exp) : (EXPERIMENT_LABELS[exp] || exp)}
+                      {selectedRun ? (runBlockLabelById.get(exp) || EXPERIMENT_LABELS[exp] || exp) : (EXPERIMENT_LABELS[exp] || exp)}
                       {count > 0 && (
                         <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
                           {count}
@@ -2099,7 +2124,7 @@ export function ColonyResultsTab({
                         <div>
                           <CardTitle className="text-lg">
                             {selectedRun
-                              ? `${runBlockLabelById.get(exp) || exp} — ${selectedRun.name}`
+                              ? `${runBlockLabelById.get(exp) || EXPERIMENT_LABELS[exp] || exp} — ${selectedRun.name}`
                               : `${EXPERIMENT_LABELS[exp] || exp} — ${age} Day Results`}
                           </CardTitle>
                           <p className="mt-1 text-sm text-muted-foreground">
