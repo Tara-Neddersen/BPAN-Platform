@@ -713,9 +713,19 @@ export function ColonyResultsTab({
       const normalizedWindows = windowNames.length > 0
         ? windowNames.map((windowName) => {
             const numericAge = Number(windowName);
+            // Ranges like "30-60" aren't a plain number; use the leading value
+            // (30) as the representative age so each window gets a DISTINCT age.
+            // Without this every named window collapsed to age 0 and their
+            // results collided / the chips sorted wrong.
+            const leadingAge = Number.parseInt(windowName, 10);
+            const resolvedAge = Number.isFinite(numericAge)
+              ? numericAge
+              : Number.isFinite(leadingAge)
+                ? leadingAge
+                : (targetAgeDays ?? 0);
             return {
               key: windowName,
-              age: Number.isFinite(numericAge) ? numericAge : (targetAgeDays ?? 0),
+              age: resolvedAge,
               label: Number.isFinite(numericAge) ? `${numericAge} Day` : windowName,
             };
           })
@@ -1672,7 +1682,12 @@ export function ColonyResultsTab({
   // Available experiment types for the active timepoint (from timepoint config)
   const availableExperiments = useMemo(() => {
     if (selectedRun) {
-      return selectedRunExperimentRows.map((experiment) => experiment.experiment_key);
+      const rows = selectedRunExperimentRows.map((experiment) => experiment.experiment_key);
+      if (rows.length > 0) return rows;
+      // Fallback: when the run's timepoints aren't materialized (run_timepoint_experiments
+      // is empty), derive recordable experiments from the run's schedule blocks so the
+      // grid still renders and results can be entered.
+      return selectedRunTimepoint?.experiments ?? [];
     }
     const tp = sortedTimepoints.find((t) => t.age_days === Number(activeTimepoint));
     if (tp && tp.experiments.length > 0) {
@@ -1685,7 +1700,7 @@ export function ColonyResultsTab({
       return configured.length > 0 ? configured : RESULT_EXPERIMENT_TYPES;
     }
     return RESULT_EXPERIMENT_TYPES;
-  }, [activeTimepoint, selectedRun, selectedRunExperimentRows, sortedTimepoints]);
+  }, [activeTimepoint, selectedRun, selectedRunExperimentRows, selectedRunTimepoint, sortedTimepoints]);
 
   const runBlockLabelById = useMemo(() => {
     const map = new Map<string, string>();
