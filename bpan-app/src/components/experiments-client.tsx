@@ -935,6 +935,7 @@ function CalendarView({
   }, [loadCalendarIntegrations, router]);
 
   const handleDeleteIcloudFeed = useCallback(async (feedId: string) => {
+    if (!window.confirm("Remove this iCloud calendar feed? This cannot be undone.")) return;
     try {
       const res = await fetch(`/api/calendar/icloud/feeds/${feedId}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({}));
@@ -1968,7 +1969,7 @@ function CalendarView({
                       variant="ghost"
                       size="sm"
                       className="h-7 text-xs text-destructive"
-                      onClick={() => deleteTimepoint(t.id)}
+                      onClick={() => { if (window.confirm(`Delete timepoint "${t.label}"? This cannot be undone.`)) deleteTimepoint(t.id); }}
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
@@ -2063,7 +2064,7 @@ function ExperimentCard({
             <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onEdit}>
               <Pencil className="h-3.5 w-3.5" />
             </Button>
-            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive" onClick={() => deleteExperiment(e.id)}>
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive" onClick={() => { if (window.confirm(`Delete experiment "${e.title}" and its timepoints? This cannot be undone.`)) deleteExperiment(e.id); }}>
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -2134,7 +2135,7 @@ function ExperimentCard({
                         <CheckCircle2 className="h-3 w-3" />
                       </button>
                     )}
-                    <button onClick={() => deleteTimepoint(t.id)} className="text-destructive hover:text-destructive/80">
+                    <button onClick={() => { if (window.confirm(`Delete timepoint "${t.label}"? This cannot be undone.`)) deleteTimepoint(t.id); }} className="text-destructive hover:text-destructive/80">
                       <Trash2 className="h-3 w-3" />
                     </button>
                   </div>
@@ -2928,7 +2929,7 @@ function ProtocolsView({ protocols }: { protocols: Protocol[] }) {
                     <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => startEdit(p)}>
                       <Pencil className="h-3 w-3" />
                     </Button>
-                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive" onClick={() => deleteProtocol(p.id)}>
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive" onClick={() => { if (window.confirm(`Delete protocol "${p.title}"? This cannot be undone.`)) deleteProtocol(p.id); }}>
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
@@ -3165,7 +3166,7 @@ function ReagentsView({ reagents }: { reagents: Reagent[] }) {
                         <button onClick={() => { setEditing(r); setShowForm(true); }} className="text-muted-foreground hover:text-foreground">
                           <Pencil className="h-3 w-3" />
                         </button>
-                        <button onClick={() => deleteReagent(r.id)} className="text-destructive hover:text-destructive/80">
+                        <button onClick={() => { if (window.confirm(`Delete reagent "${r.name}"? This cannot be undone.`)) deleteReagent(r.id); }} className="text-destructive hover:text-destructive/80">
                           <Trash2 className="h-3 w-3" />
                         </button>
                       </div>

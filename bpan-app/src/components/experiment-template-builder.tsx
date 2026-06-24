@@ -603,6 +603,10 @@ export function ExperimentTemplateBuilder({
       return;
     }
 
+    if (!window.confirm(`Delete template "${draft.title}"? This cannot be undone.`)) {
+      return;
+    }
+
     startTransition(async () => {
       try {
         await deleteExperimentTemplate(draft.id as string);

@@ -1701,7 +1701,7 @@ export function ColonyClient({
                           <Button variant="ghost" size="sm" onClick={() => setEditingCohort(c)}>
                             <Edit className="h-3.5 w-3.5" />
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => act(actions.deleteCohort(c.id))}>
+                          <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete cohort "${c.name}" and all its animals and data? This cannot be undone.`)) act(actions.deleteCohort(c.id)); }}>
                             <Trash2 className="h-3.5 w-3.5 text-destructive" />
                           </Button>
                         </div>
@@ -1774,7 +1774,7 @@ export function ColonyClient({
                         <Button variant="ghost" size="sm" onClick={() => setEditingTP(tp)}>
                           <Edit className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteColonyTimepoint(tp.id))}>
+                        <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete timepoint "${tp.name}" (${tp.age_days} days)? This cannot be undone.`)) act(actions.deleteColonyTimepoint(tp.id)); }}>
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -1922,7 +1922,7 @@ export function ColonyClient({
                           <Button variant="ghost" size="sm" className="h-6 px-1.5 sm:h-7 sm:px-2" onClick={() => setEditingCage(c)}>
                             <Edit className="h-3.5 w-3.5" />
                           </Button>
-                          <Button variant="ghost" size="sm" className="h-6 px-1.5 sm:h-7 sm:px-2" onClick={() => act(actions.deleteBreederCage(c.id))}>
+                          <Button variant="ghost" size="sm" className="h-6 px-1.5 sm:h-7 sm:px-2" onClick={() => { if (window.confirm(`Delete breeder cage "${c.name}"? This cannot be undone.`)) act(actions.deleteBreederCage(c.id)); }}>
                             <Trash2 className="h-3.5 w-3.5 text-destructive" />
                           </Button>
                         </div>
@@ -2074,7 +2074,7 @@ export function ColonyClient({
                           <Button variant="ghost" size="sm" onClick={() => setEditingHousingCage(hc)}>
                             <Pencil className="h-3 w-3" />
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => act(actions.deleteHousingCage(hc.id))}>
+                          <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete housing cage "${hc.cage_label}"? This cannot be undone.`)) act(actions.deleteHousingCage(hc.id)); }}>
                             <Trash2 className="h-3 w-3 text-destructive" />
                           </Button>
                         </div>
@@ -2221,7 +2221,7 @@ export function ColonyClient({
                             )}
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => act(actions.deleteCageChange(cc.id))}>
+                        <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Delete cage change scheduled for ${cc.scheduled_date}? This cannot be undone.`)) act(actions.deleteCageChange(cc.id)); }}>
                           <Trash2 className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -2304,7 +2304,7 @@ export function ColonyClient({
                             {copiedToken === p.token ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
                             {copiedToken === p.token ? "Copied!" : "Copy Link"}
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => act(actions.deleteAdvisorAccess(p.id))}>
+                          <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Revoke advisor access for ${p.advisor_name}? This cannot be undone.`)) act(actions.deleteAdvisorAccess(p.id)); }}>
                             <Trash2 className="h-3.5 w-3.5 text-destructive" />
                           </Button>
                         </div>
@@ -2349,7 +2349,7 @@ export function ColonyClient({
                       <Button
                         variant="destructive" size="sm"
                         className="absolute top-1 right-1 h-6 w-6 p-0 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
-                        onClick={() => act(actions.deleteColonyPhoto(p.id))}
+                        onClick={() => { if (window.confirm(`Delete this photo${p.caption ? ` "${p.caption}"` : ""}? This cannot be undone.`)) act(actions.deleteColonyPhoto(p.id)); }}
                       >
                         <Trash2 className="h-3 w-3" />
                       </Button>
@@ -3720,6 +3720,7 @@ export function ColonyClient({
                 else { toast.success("Experiment updated!"); await refetchAll(); }
               }}
               onDeleteExperiment={async (id) => {
+                if (!window.confirm("Delete this experiment and its results? This cannot be undone.")) return;
                 const res = await actions.deleteAnimalExperiment(id);
                 if (res.error) toast.error(res.error);
                 else { toast.success("Experiment deleted"); await refetchAll(); }
@@ -3730,7 +3731,7 @@ export function ColonyClient({
                 else { toast.success("Experiment added!"); await refetchAll(); }
               }}
               onEdit={() => { setEditingAnimal(selectedAnimal); setAnimalFormEarTag(parseEarTag(selectedAnimal.ear_tag)); setSelectedAnimal(null); }}
-              onDelete={() => { act(actions.deleteAnimal(selectedAnimal.id)); setSelectedAnimal(null); }}
+              onDelete={() => { if (!window.confirm(`Delete animal ${selectedAnimal.identifier} and all its experiments and results? This cannot be undone.`)) return; act(actions.deleteAnimal(selectedAnimal.id)); setSelectedAnimal(null); }}
               onMoveToBreeders={async () => { await handleMoveToBreeders(selectedAnimal); setSelectedAnimal(null); }}
               busy={busy}
             />

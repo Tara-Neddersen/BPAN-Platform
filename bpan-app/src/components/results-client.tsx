@@ -2645,6 +2645,7 @@ function AnalyzePanel({
                   )
                 }
                 onDelete={() => {
+                  if (!window.confirm(`Delete analysis "${a.name}"? This cannot be undone.`)) return;
                   deleteAnalysis(a.id);
                   onDeleteAnalysis(a.id);
                 }}
@@ -4475,6 +4476,7 @@ function GoogleSheetsDialog({
   }
 
   async function removeLink(linkId: string) {
+    if (!window.confirm("Remove this linked Google Sheet? This cannot be undone.")) return;
     const res = await fetch(`/api/sheets/google/links/${linkId}`, { method: "DELETE" });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
