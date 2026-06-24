@@ -6,7 +6,7 @@ import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import {
   Plus, Edit, Trash2, Loader2, Check, X, Copy, Pencil,
   ExternalLink, ChevronDown, ChevronUp,
-  Calendar, AlertTriangle, Link2, Mouse, Home,
+  Calendar, AlertTriangle, Link2, Mouse, Home, Rabbit,
   RefreshCw, CheckCircle2,
   Upload, CloudOff, Cloud, ImageIcon,
 } from "lucide-react";
@@ -302,6 +302,7 @@ interface ColonyClientProps {
     updateHousingCage: (id: string, fd: FormData) => Promise<{ success?: boolean; error?: string }>;
     deleteHousingCage: (id: string) => Promise<{ success?: boolean; error?: string }>;
     assignAnimalToCage: (animalId: string, housingCageId: string | null) => Promise<{ success?: boolean; error?: string }>;
+    moveAnimalToBreeders: (animalId: string, breederCageId?: string | null) => Promise<{ success?: boolean; error?: string }>;
     rescheduleTimepointExperiments: (animalId: string, timepointAgeDays: number, newStartDate: string, birthDate: string) => Promise<{ success?: boolean; error?: string; rescheduled?: number; lastDate?: string; message?: string }>;
     batchUpdateExperimentStatus: (cohortIds: string[], timepointAgeDays: number[], experimentTypes: string[], newStatus: string, notes?: string) => Promise<{ success?: boolean; error?: string; updated?: number }>;
     batchScheduleSingleExperiment: (animalIds: string[], expType: string, date: string, timepointAgeDays: number | null) => Promise<{ success?: boolean; error?: string }>;
@@ -570,6 +571,9 @@ export function ColonyClient({
   const photoUploadInputRef = useRef<HTMLInputElement>(null);
   const [filterCohort, setFilterCohort] = useState(initialFilterCohort);
   const [filterGenotype, setFilterGenotype] = useState("all");
+  // Status filter for the animals list. Defaults to "all" (preserves prior
+  // behavior); "breeding" surfaces repurposed animals so they stay findable.
+  const [filterStatus, setFilterStatus] = useState("all");
 
   useEffect(() => {
     setFilterCohort(initialFilterCohort || "all");
@@ -700,6 +704,7 @@ export function ColonyClient({
   const sortedAnimals = useMemo(() => {
     let filtered = [...animals];
     if (filterCohort !== "all") filtered = filtered.filter((a) => a.cohort_id === filterCohort);
+    if (filterStatus !== "all") filtered = filtered.filter((a) => a.status === filterStatus);
     if (filterGenotype !== "all") {
       filtered = filtered.filter((a) => {
         if (filterGenotype === "hemi_male") return a.genotype === "hemi" && a.sex === "male";
@@ -718,7 +723,7 @@ export function ColonyClient({
       if (sexComp !== 0) return sexComp;
       return GENOTYPE_SORT[a.genotype] - GENOTYPE_SORT[b.genotype];
     });
-  }, [animals, cohorts, filterCohort, filterGenotype]);
+  }, [animals, cohorts, filterCohort, filterGenotype, filterStatus]);
 
   // Date helpers
   const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
@@ -820,6 +825,22 @@ export function ColonyClient({
     if (result.error) toast.error(result.error);
     else await refetchAll();
     return result;
+  }
+
+  // Repurpose a cohort animal as a breeder (status → "breeding"). Guarded by
+  // a confirm since it drops the animal out of active lists & scheduling.
+  async function handleMoveToBreeders(animal: Animal) {
+    if (animal.status === "breeding") {
+      toast.info("This animal is already a breeder.");
+      return;
+    }
+    const ok = window.confirm(
+      `Move ${animal.identifier} to breeders?\n\nIt will be marked as a breeder, drop out of active lists and experiment scheduling, and any remaining scheduled experiments will be skipped. Its historical results stay intact.`
+    );
+    if (!ok) return;
+    const result = await actions.moveAnimalToBreeders(animal.id);
+    if (result.error) toast.error(result.error);
+    else { toast.success(`${animal.identifier} moved to breeders`); await refetchAll(); }
   }
 
   async function handleUpdateExpStatus(expId: string, status: string) {
@@ -1286,6 +1307,17 @@ export function ColonyClient({
                 <SelectItem value="wt_female">WT Female</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger className="w-[150px]"><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="breeding">Breeding</SelectItem>
+                <SelectItem value="sacrificed">Sacrificed</SelectItem>
+                <SelectItem value="transferred">Transferred</SelectItem>
+                <SelectItem value="deceased">Deceased</SelectItem>
+              </SelectContent>
+            </Select>
             <div className="ml-auto">
               <Button
                 onClick={() => router.replace(buildColonyUrl("animals", filterCohort, "animal"), { scroll: false })}
@@ -1348,6 +1380,16 @@ export function ColonyClient({
                           )}
                         </div>
                       </div>
+                      {animal.status === "active" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs gap-1 text-blue-700 hover:bg-blue-50 flex-shrink-0"
+                          onClick={(e) => { e.stopPropagation(); handleMoveToBreeders(animal); }}
+                        >
+                          <Rabbit className="h-3.5 w-3.5" /> Breeder
+                        </Button>
+                      )}
                       <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                     </CardContent>
                   </Card>
@@ -1457,6 +1499,19 @@ export function ColonyClient({
                             }}
                           >
                             <Trash2 className="h-3 w-3" /> Delete Exps
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs gap-1 text-blue-700 border-blue-200 hover:bg-blue-50"
+                            onClick={() => {
+                              setFilterCohort(c.id);
+                              setFilterStatus("active");
+                              setActiveTab("animals");
+                              router.replace(buildColonyUrl("animals", c.id), { scroll: false });
+                            }}
+                          >
+                            <Rabbit className="h-3 w-3" /> Breeders
                           </Button>
                           <Button variant="ghost" size="sm" onClick={() => setEditingCohort(c)}>
                             <Edit className="h-3.5 w-3.5" />
@@ -3380,6 +3435,7 @@ export function ColonyClient({
               }}
               onEdit={() => { setEditingAnimal(selectedAnimal); setAnimalFormEarTag(parseEarTag(selectedAnimal.ear_tag)); setSelectedAnimal(null); }}
               onDelete={() => { act(actions.deleteAnimal(selectedAnimal.id)); setSelectedAnimal(null); }}
+              onMoveToBreeders={async () => { await handleMoveToBreeders(selectedAnimal); setSelectedAnimal(null); }}
               busy={busy}
             />
           )}
@@ -3407,6 +3463,7 @@ function AnimalDetail({
   onCreateExperiment,
   onEdit,
   onDelete,
+  onMoveToBreeders,
   busy,
 }: {
   animal: Animal;
@@ -3424,6 +3481,7 @@ function AnimalDetail({
   onCreateExperiment: (fd: FormData) => Promise<void>;
   onEdit: () => void;
   onDelete: () => void;
+  onMoveToBreeders: () => void;
   busy: boolean;
 }) {
   const age = daysOld(animal.birth_date);
@@ -3489,6 +3547,11 @@ function AnimalDetail({
       </DialogHeader>
 
       <div className="flex justify-end gap-1 -mt-2">
+        {animal.status === "active" && (
+          <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-blue-700 border-blue-200 hover:bg-blue-50" onClick={onMoveToBreeders}>
+            <Rabbit className="h-3 w-3" /> Move to Breeders
+          </Button>
+        )}
         <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onEdit}>
           <Edit className="h-3 w-3" /> Edit
         </Button>

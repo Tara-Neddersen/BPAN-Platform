@@ -2339,3 +2339,64 @@ export async function assignAnimalToCage(animalId: string, housingCageId: string
   await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
   return { success: true };
 }
+
+// ─── Repurpose a cohort animal as a breeder ─────────────────────────────
+// Sets the animal's status to "breeding" so it drops out of active /
+// experimental lists and batch scheduling, while its historical results
+// stay intact (analyses filter by run assignment, not current status).
+// Mirrors the active→non-active cascade in updateAnimal: remaining
+// scheduled/pending experiments are auto-skipped. Optionally re-tags the
+// animal's breeder cage assignment via cage_number.
+export async function moveAnimalToBreeders(animalId: string, breederCageId?: string | null) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { data: oldAnimal } = await supabase
+    .from("animals")
+    .select("status")
+    .eq("id", animalId)
+    .eq("user_id", user.id)
+    .single();
+
+  // Optionally resolve a breeder cage name to stamp onto cage_number so the
+  // animal is findable alongside that cage.
+  let cageNumberUpdate: { cage_number: string } | undefined;
+  if (breederCageId) {
+    const { data: cage } = await supabase
+      .from("breeder_cages")
+      .select("name")
+      .eq("id", breederCageId)
+      .eq("user_id", user.id)
+      .single();
+    if (cage?.name) cageNumberUpdate = { cage_number: cage.name };
+  }
+
+  const { error } = await supabase
+    .from("animals")
+    .update({ status: "breeding", ...(cageNumberUpdate ?? {}) })
+    .eq("id", animalId)
+    .eq("user_id", user.id);
+  if (error) return { error: error.message };
+
+  // CASCADE: auto-skip remaining scheduled/pending experiments so they stop
+  // appearing in the tracker (only when transitioning out of "active").
+  if (oldAnimal && oldAnimal.status === "active") {
+    const allExps = await fetchAllRows(supabase, "animal_experiments", user.id, { animal_id: animalId });
+    const scheduledExps = allExps.filter(
+      (e: { status: string }) => e.status === "scheduled" || e.status === "pending"
+    );
+    const expIds = scheduledExps.map((e: { id: string }) => e.id);
+    for (let i = 0; i < expIds.length; i += 100) {
+      const batch = expIds.slice(i, i + 100);
+      await supabase
+        .from("animal_experiments")
+        .update({ status: "skipped", notes: "Auto-skipped: animal moved to breeders" })
+        .in("id", batch);
+    }
+  }
+
+  revalidatePath("/colony");
+  await refreshWorkspaceBackstageIndexBestEffort(supabase, user.id);
+  return { success: true };
+}
