@@ -341,6 +341,10 @@ function isNumericColumnType(columnType: ColumnType) {
   return columnType === "number" || columnType === "integer";
 }
 
+function isAverageableColumnType(columnType: ColumnType) {
+  return isNumericColumnType(columnType) || columnType === "time";
+}
+
 function formatColumnTypeLabel(columnType: ColumnType) {
   switch (columnType) {
     case "long_text":
@@ -413,6 +417,7 @@ function buildPersistedColumns(columns: ResultColumnDraft[]) {
     columns
       .filter((column) => !HIDDEN_SYSTEM_COLUMN_KEYS.has(column.key))
       .map((column) => cloneColumn(column)),
+    HIDDEN_SYSTEM_COLUMN_KEYS,
   );
 
   return [...SYSTEM_LEADING_COLUMNS, ...researchColumns, ...SYSTEM_TRAILING_COLUMNS].map((column, index) => ({
@@ -488,12 +493,34 @@ function columnsFromRows(rows: Record<string, unknown>[]) {
   });
 }
 
-function normalizeColumns(columns: ResultColumnDraft[]) {
-  return columns.map((column, index) => ({
-    ...column,
-    sortOrder: index,
-    key: slugifyKey(column.key || column.label) || `field_${index + 1}`,
-  }));
+function normalizeColumns(
+  columns: ResultColumnDraft[],
+  reservedKeys: Iterable<string> = [],
+) {
+  // Guarantee every column key is unique within the schema. The database
+  // enforces `unique (schema_id, key)` (migration 039), so two columns that
+  // resolve to the same key — e.g. two "Average" columns both keyed
+  // "average_score", or two "Done?" checkboxes both keyed "completed" —
+  // would abort the entire battery save with a server error. The first
+  // occurrence keeps the base key; later duplicates get a numeric suffix.
+  // `reservedKeys` lets callers pre-claim keys (e.g. the built-in system
+  // columns) so research columns never collide with them either.
+  const seen = new Set<string>(reservedKeys);
+  return columns.map((column, index) => {
+    const baseKey = slugifyKey(column.key || column.label) || `field_${index + 1}`;
+    let key = baseKey;
+    let suffix = 2;
+    while (seen.has(key)) {
+      key = `${baseKey}_${suffix}`;
+      suffix += 1;
+    }
+    seen.add(key);
+    return {
+      ...column,
+      sortOrder: index,
+      key,
+    };
+  });
 }
 
 function parseBatteryTag(tags: string[], prefix: string) {
@@ -1127,7 +1154,11 @@ export function BatteryCreationWizard({
 
             const savedTemplate = await saveExperimentTemplate(templateForm);
             if (!savedTemplate?.templateId) {
-              throw new Error(`Could not create the "${experiment.name}" experiment definition.`);
+              const detail =
+                savedTemplate && "error" in savedTemplate && savedTemplate.error
+                  ? `: ${savedTemplate.error}`
+                  : "";
+              throw new Error(`Could not save "${experiment.name}"${detail}`);
             }
 
             return [
@@ -1171,7 +1202,11 @@ export function BatteryCreationWizard({
 
         const batteryTemplate = await saveExperimentTemplate(batteryTemplateForm);
         if (!batteryTemplate?.templateId) {
-          throw new Error("Could not create the battery record.");
+          const detail =
+            batteryTemplate && "error" in batteryTemplate && batteryTemplate.error
+              ? `: ${batteryTemplate.error}`
+              : "";
+          throw new Error(`Could not save the battery record${detail}`);
         }
 
         const groupedByDay = new Map<number, LayoutItemDraft[]>();
@@ -1321,7 +1356,13 @@ export function BatteryCreationWizard({
         toast.success(editingBattery ? "Battery updated." : "Battery created.");
         startNewBattery();
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Failed to save battery.");
+        console.error("[saveBattery] failed:", error);
+        const message = error instanceof Error ? error.message : "Failed to save battery.";
+        const digest =
+          error && typeof error === "object" && "digest" in error && typeof (error as { digest?: unknown }).digest === "string"
+            ? ` (digest: ${(error as { digest: string }).digest})`
+            : "";
+        toast.error(`${message}${digest}`);
       }
     });
   };
@@ -1717,7 +1758,7 @@ export function BatteryCreationWizard({
                                       {selectedExperiment.extractedColumns
                                         .filter((candidate) => candidate.selected)
                                         .map((candidate) => candidate.column)
-                                        .filter((candidate) => candidate.key !== entry.column.key && isNumericColumnType(candidate.columnType))
+                                        .filter((candidate) => candidate.key !== entry.column.key && isAverageableColumnType(candidate.columnType))
                                         .map((candidate) => {
                                           const selected = entry.column.averageSourceKeys.includes(candidate.key);
                                           return (
@@ -1840,7 +1881,7 @@ export function BatteryCreationWizard({
                                       ...selectedExperiment.extractedColumns.filter((candidate) => candidate.selected).map((candidate) => candidate.column),
                                       ...selectedExperiment.manualColumns,
                                     ]
-                                      .filter((candidate) => candidate.key !== column.key && isNumericColumnType(candidate.columnType))
+                                      .filter((candidate) => candidate.key !== column.key && isAverageableColumnType(candidate.columnType))
                                       .map((candidate) => {
                                         const selected = column.averageSourceKeys.includes(candidate.key);
                                         return (
