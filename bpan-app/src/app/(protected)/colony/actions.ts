@@ -505,7 +505,10 @@ export async function createCohort(formData: FormData) {
   if (error) return { error: error.message };
 
   // Auto-create litter follow-up reminders (default on) so you can enter minimal info now and fill details later.
-  const createFollowups = formData.get("create_followup_tasks") === "true";
+  // Last-wins: a hidden "false" input precedes the checkbox, so read the last
+  // entry (FormData.get() returns the first, which is always "false").
+  const followupVals = formData.getAll("create_followup_tasks");
+  const createFollowups = followupVals[followupVals.length - 1] === "true";
   if (createFollowups && cohort?.birth_date) {
     await createCohortFollowups(supabase, user.id, cohort);
   }

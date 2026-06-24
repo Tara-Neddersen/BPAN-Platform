@@ -717,7 +717,10 @@ export function ColonyClient({
     const fd = new FormData(e.currentTarget);
     const name = String(fd.get("name") || "").trim();
     const birthDate = String(fd.get("birth_date") || "").trim();
-    const wantBulk = fd.get("add_animals_now") === "true";
+    // Last-wins: a hidden "false" input precedes the checkbox so a value is
+    // always sent; FormData.get() returns the FIRST entry, so read the last.
+    const addAnimalsVals = fd.getAll("add_animals_now");
+    const wantBulk = addAnimalsVals[addAnimalsVals.length - 1] === "true";
     const result = await actions.createCohort(fd);
     setBusy(false);
     if (result.error) { toast.error(result.error); return; }
