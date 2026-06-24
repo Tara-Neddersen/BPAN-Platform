@@ -1388,16 +1388,12 @@ export function ScheduleBuilder({
       }
     }
 
-    // Map the visible (window-filtered) target back to an index into draft.days.
-    // When no window is active displayedDays === draft.days, so this is identity;
-    // otherwise we anchor on the day currently at targetVisibleIndex.
-    const anchorDay = displayedDays.filter((day) => day.id !== sourceDayId)[targetVisibleIndex];
-    if (anchorDay) {
-      moveDay(sourceDayId, anchorDay.id);
-    } else {
-      // Past the last day -> move to end of the list.
-      moveDayToPosition(sourceDayId, draft.days.length - 1);
-    }
+    // targetVisibleIndex is already the insertion index among the non-source
+    // days (post-removal semantics), which is exactly what moveDayToPosition
+    // expects — so move there directly. The previous anchor round-trip looked
+    // the anchor up in the PRE-removal draft.days, which overshot forward drags
+    // by one. moveDayToPosition clamps, so an index past the end lands at the end.
+    moveDayToPosition(sourceDayId, targetVisibleIndex);
 
     setDragging(null);
   };
@@ -2095,21 +2091,31 @@ export function ScheduleBuilder({
                             {/* Dedicated day drag handle. Draggable lives on the
                                 grip (not the card button) so click-to-edit and
                                 day-drag never conflict. */}
-                            <span
-                              role="button"
-                              tabIndex={-1}
-                              aria-label={`Drag Day ${day.day_index} to another weekday`}
-                              draggable
-                              onClick={(event) => event.stopPropagation()}
-                              onDragStart={(event) => {
-                                event.stopPropagation();
-                                setDragging({ kind: "day", dayId: day.id });
-                              }}
-                              onDragEnd={() => setDragging(null)}
-                              className="mt-0.5 cursor-grab rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 active:cursor-grabbing"
-                            >
-                              <GripVertical className="h-4 w-4" />
-                            </span>
+                            {(() => {
+                              // Only real days (present in draft.days) are draggable.
+                              // Synthetic filler cells from ensureDayRows (window mode)
+                              // have no draft entry and would silently no-op, so their
+                              // grip is shown disabled instead.
+                              const isRealDay = draft.days.some((d) => d.id === day.id);
+                              return (
+                                <span
+                                  role="button"
+                                  tabIndex={-1}
+                                  aria-label={isRealDay ? `Drag Day ${day.day_index} to another weekday` : undefined}
+                                  draggable={isRealDay}
+                                  onClick={(event) => event.stopPropagation()}
+                                  onDragStart={(event) => {
+                                    event.stopPropagation();
+                                    if (!isRealDay) return;
+                                    setDragging({ kind: "day", dayId: day.id });
+                                  }}
+                                  onDragEnd={() => setDragging(null)}
+                                  className={`mt-0.5 rounded p-0.5 ${isRealDay ? "cursor-grab text-slate-400 hover:bg-slate-100 hover:text-slate-600 active:cursor-grabbing" : "cursor-default text-slate-200"}`}
+                                >
+                                  <GripVertical className="h-4 w-4" />
+                                </span>
+                              );
+                            })()}
                             <div>
                               <p className="text-sm font-semibold text-slate-900">Day {day.day_index}</p>
                               <p className="text-xs text-slate-500">
