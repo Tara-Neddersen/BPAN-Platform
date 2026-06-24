@@ -47,6 +47,31 @@ async function fetchAllRows(supabase: any, table: string, userId: string, extraF
   return all;
 }
 
+// ─── Safe form parsing helpers ─────────────────────────────────────────
+
+/**
+ * Parse a FormData value into an integer.
+ * Returns `fallback` when the value is missing/empty/non-numeric (never NaN).
+ * Pass no fallback to get `null` for invalid input (use to detect required fields).
+ */
+function toInt(value: FormDataEntryValue | null, fallback: number | null = null): number | null {
+  if (value === null) return fallback;
+  const str = String(value).trim();
+  if (str === "") return fallback;
+  const n = Number(str);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+/**
+ * Read a REQUIRED string field from FormData.
+ * Returns a trimmed string, or null when missing/empty.
+ */
+function requiredStr(value: FormDataEntryValue | null): string | null {
+  if (value === null) return null;
+  const str = String(value).trim();
+  return str === "" ? null : str;
+}
+
 // ─── Breeder Cages ─────────────────────────────────────────────────────
 
 function addDaysIso(dateStr: string, days: number) {
@@ -464,16 +489,17 @@ export async function createCohort(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const birthDate = formData.get("birth_date") as string;
-  const cohortName = formData.get("name") as string;
-  const litterSizeRaw = formData.get("litter_size") as string | null;
+  const cohortName = requiredStr(formData.get("name"));
+  const birthDate = requiredStr(formData.get("birth_date"));
+  if (!cohortName) return { error: "Cohort name is required." };
+  if (!birthDate) return { error: "Birth date is required." };
 
   const { data: cohort, error } = await supabase.from("cohorts").insert({
     user_id: user.id,
     breeder_cage_id: (formData.get("breeder_cage_id") as string) || null,
     name: cohortName,
     birth_date: birthDate,
-    litter_size: litterSizeRaw ? parseInt(litterSizeRaw) : null,
+    litter_size: toInt(formData.get("litter_size")),
     notes: (formData.get("notes") as string) || null,
   }).select("id, name, birth_date").single();
   if (error) return { error: error.message };
@@ -493,7 +519,10 @@ export async function updateCohort(id: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const newBirthDate = formData.get("birth_date") as string;
+  const cohortName = requiredStr(formData.get("name"));
+  const newBirthDate = requiredStr(formData.get("birth_date"));
+  if (!cohortName) return { error: "Cohort name is required." };
+  if (!newBirthDate) return { error: "Birth date is required." };
 
   // Get old birth_date to detect change
   const { data: oldCohort } = await supabase
@@ -507,9 +536,9 @@ export async function updateCohort(id: string, formData: FormData) {
     .from("cohorts")
     .update({
       breeder_cage_id: (formData.get("breeder_cage_id") as string) || null,
-      name: formData.get("name") as string,
+      name: cohortName,
       birth_date: newBirthDate,
-      litter_size: formData.get("litter_size") ? parseInt(formData.get("litter_size") as string) : null,
+      litter_size: toInt(formData.get("litter_size")),
       notes: (formData.get("notes") as string) || null,
     })
     .eq("id", id)
@@ -531,10 +560,11 @@ export async function updateCohort(id: string, formData: FormData) {
       // Update birth_date on all animals
       for (let i = 0; i < animalIds.length; i += 100) {
         const batch = animalIds.slice(i, i + 100);
-        await supabase
+        const { error: batchErr } = await supabase
           .from("animals")
           .update({ birth_date: newBirthDate })
           .in("id", batch);
+        if (batchErr) return { error: `Failed to cascade birth date to animals: ${batchErr.message}` };
       }
 
       // Reschedule non-completed experiments for all animals in this cohort
@@ -547,10 +577,11 @@ export async function updateCohort(id: string, formData: FormData) {
           const d = new Date(newBirthDate);
           d.setDate(d.getDate() + exp.timepoint_age_days);
           const newScheduledDate = d.toISOString().split("T")[0];
-          await supabase
+          const { error: rescheduleErr } = await supabase
             .from("animal_experiments")
             .update({ scheduled_date: newScheduledDate })
             .eq("id", exp.id);
+          if (rescheduleErr) return { error: `Failed to reschedule experiment ${exp.id}: ${rescheduleErr.message}` };
         }
       }
     }
@@ -580,16 +611,27 @@ export async function createAnimal(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  const cohortId = requiredStr(formData.get("cohort_id"));
+  const identifier = requiredStr(formData.get("identifier"));
+  const sex = requiredStr(formData.get("sex"));
+  const genotype = requiredStr(formData.get("genotype"));
+  const birthDate = requiredStr(formData.get("birth_date"));
+  if (!cohortId) return { error: "Cohort is required." };
+  if (!identifier) return { error: "Animal identifier is required." };
+  if (!sex) return { error: "Sex is required." };
+  if (!genotype) return { error: "Genotype is required." };
+  if (!birthDate) return { error: "Birth date is required." };
+
   const { data, error } = await supabase
     .from("animals")
     .insert({
       user_id: user.id,
-      cohort_id: formData.get("cohort_id") as string,
-      identifier: formData.get("identifier") as string,
-      sex: formData.get("sex") as string,
-      genotype: formData.get("genotype") as string,
+      cohort_id: cohortId,
+      identifier,
+      sex,
+      genotype,
       ear_tag: (formData.get("ear_tag") as string) || null,
-      birth_date: formData.get("birth_date") as string,
+      birth_date: birthDate,
       cage_number: (formData.get("cage_number") as string) || null,
       notes: (formData.get("notes") as string) || null,
     })
@@ -607,8 +649,18 @@ export async function updateAnimal(id: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const newBirthDate = formData.get("birth_date") as string;
-  const newStatus = formData.get("status") as string;
+  const cohortId = requiredStr(formData.get("cohort_id"));
+  const identifier = requiredStr(formData.get("identifier"));
+  const sex = requiredStr(formData.get("sex"));
+  const genotype = requiredStr(formData.get("genotype"));
+  const newBirthDate = requiredStr(formData.get("birth_date"));
+  const newStatus = requiredStr(formData.get("status"));
+  if (!cohortId) return { error: "Cohort is required." };
+  if (!identifier) return { error: "Animal identifier is required." };
+  if (!sex) return { error: "Sex is required." };
+  if (!genotype) return { error: "Genotype is required." };
+  if (!newBirthDate) return { error: "Birth date is required." };
+  if (!newStatus) return { error: "Status is required." };
 
   // Get old values to detect changes
   const { data: oldAnimal } = await supabase
@@ -621,10 +673,10 @@ export async function updateAnimal(id: string, formData: FormData) {
   const { error } = await supabase
     .from("animals")
     .update({
-      cohort_id: formData.get("cohort_id") as string,
-      identifier: formData.get("identifier") as string,
-      sex: formData.get("sex") as string,
-      genotype: formData.get("genotype") as string,
+      cohort_id: cohortId,
+      identifier,
+      sex,
+      genotype,
       ear_tag: (formData.get("ear_tag") as string) || null,
       birth_date: newBirthDate,
       cage_number: (formData.get("cage_number") as string) || null,
@@ -648,10 +700,11 @@ export async function updateAnimal(id: string, formData: FormData) {
         const d = new Date(newBirthDate);
         d.setDate(d.getDate() + exp.timepoint_age_days);
         const newScheduledDate = d.toISOString().split("T")[0];
-        await supabase
+        const { error: rescheduleErr } = await supabase
           .from("animal_experiments")
           .update({ scheduled_date: newScheduledDate })
           .eq("id", exp.id);
+        if (rescheduleErr) return { error: `Failed to reschedule experiment ${exp.id}: ${rescheduleErr.message}` };
       }
     }
   }
@@ -674,10 +727,11 @@ export async function updateAnimal(id: string, formData: FormData) {
     const expIds = scheduledExps.map((e: { id: string }) => e.id);
     for (let i = 0; i < expIds.length; i += 100) {
       const batch = expIds.slice(i, i + 100);
-      await supabase
+      const { error: skipErr } = await supabase
         .from("animal_experiments")
         .update({ status: "skipped", notes: `Auto-skipped: animal marked as ${newStatus}` })
         .in("id", batch);
+      if (skipErr) return { error: `Failed to auto-skip experiments: ${skipErr.message}` };
     }
   }
 
@@ -707,19 +761,26 @@ export async function createColonyTimepoint(formData: FormData) {
 
   const experiments = formData.getAll("experiments") as string[];
 
+  const tpName = requiredStr(formData.get("name"));
+  const ageDays = toInt(formData.get("age_days"));
+  if (!tpName) return { error: "Timepoint name is required." };
+  if (ageDays === null) return { error: "Age (days) is required and must be a number." };
+
   const { error } = await supabase.from("colony_timepoints").insert({
     user_id: user.id,
-    name: formData.get("name") as string,
-    age_days: parseInt(formData.get("age_days") as string),
+    name: tpName,
+    age_days: ageDays,
     experiments,
-    handling_days_before: parseInt(formData.get("handling_days_before") as string) || 3,
-    duration_days: parseInt(formData.get("duration_days") as string) || 21,
+    // Optional ints preserve the original `parseInt(...) || N` semantics
+    // (falls back to default for missing/empty/garbage *and* an explicit 0).
+    handling_days_before: toInt(formData.get("handling_days_before")) || 3,
+    duration_days: toInt(formData.get("duration_days")) || 21,
     includes_eeg_implant: formData.get("includes_eeg_implant") === "true",
     eeg_implant_timing: ((formData.get("eeg_implant_timing") as string) || "after"),
-    eeg_recovery_days: parseInt(formData.get("eeg_recovery_days") as string) || 7,
-    eeg_recording_days: parseInt(formData.get("eeg_recording_days") as string) || 3,
-    grace_period_days: parseInt(formData.get("grace_period_days") as string) || 30,
-    sort_order: parseInt(formData.get("sort_order") as string) || 0,
+    eeg_recovery_days: toInt(formData.get("eeg_recovery_days")) || 7,
+    eeg_recording_days: toInt(formData.get("eeg_recording_days")) || 3,
+    grace_period_days: toInt(formData.get("grace_period_days")) || 30,
+    sort_order: toInt(formData.get("sort_order")) || 0,
     notes: (formData.get("notes") as string) || null,
   });
   if (error) return { error: error.message };
@@ -733,8 +794,12 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const newAgeDays = parseInt(formData.get("age_days") as string);
   const experiments = formData.getAll("experiments") as string[];
+
+  const tpName = requiredStr(formData.get("name"));
+  const newAgeDays = toInt(formData.get("age_days"));
+  if (!tpName) return { error: "Timepoint name is required." };
+  if (newAgeDays === null) return { error: "Age (days) is required and must be a number." };
 
   // Get old timepoint to detect age_days change
   const { data: oldTP } = await supabase
@@ -749,17 +814,18 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
   const { error } = await supabase
     .from("colony_timepoints")
     .update({
-      name: formData.get("name") as string,
+      name: tpName,
       age_days: newAgeDays,
       experiments,
-      handling_days_before: parseInt(formData.get("handling_days_before") as string) || 3,
-      duration_days: parseInt(formData.get("duration_days") as string) || 21,
+      // Optional ints preserve the original `parseInt(...) || N` semantics.
+      handling_days_before: toInt(formData.get("handling_days_before")) || 3,
+      duration_days: toInt(formData.get("duration_days")) || 21,
       includes_eeg_implant: formData.get("includes_eeg_implant") === "true",
       eeg_implant_timing: ((formData.get("eeg_implant_timing") as string) || "after"),
-      eeg_recovery_days: parseInt(formData.get("eeg_recovery_days") as string) || 7,
-      eeg_recording_days: parseInt(formData.get("eeg_recording_days") as string) || 3,
-      grace_period_days: parseInt(formData.get("grace_period_days") as string) || 30,
-      sort_order: parseInt(formData.get("sort_order") as string) || 0,
+      eeg_recovery_days: toInt(formData.get("eeg_recovery_days")) || 7,
+      eeg_recording_days: toInt(formData.get("eeg_recording_days")) || 3,
+      grace_period_days: toInt(formData.get("grace_period_days")) || 30,
+      sort_order: toInt(formData.get("sort_order")) || 0,
       notes: (formData.get("notes") as string) || null,
     })
     .eq("id", id)
@@ -792,22 +858,24 @@ export async function updateColonyTimepoint(id: string, formData: FormData) {
           d.setDate(d.getDate() + newAgeDays);
           newScheduledDate = d.toISOString().split("T")[0];
         }
-        await supabase
+        const { error: expErr } = await supabase
           .from("animal_experiments")
           .update({
             timepoint_age_days: newAgeDays,
             ...(newScheduledDate ? { scheduled_date: newScheduledDate } : {}),
           })
           .eq("id", exp.id);
+        if (expErr) return { error: `Failed to cascade timepoint age to experiment ${exp.id}: ${expErr.message}` };
       }
     }
 
     // Update colony_results timepoint_age_days
-    await supabase
+    const { error: resultsErr } = await supabase
       .from("colony_results")
       .update({ timepoint_age_days: newAgeDays })
       .eq("user_id", user.id)
       .eq("timepoint_age_days", oldAgeDays);
+    if (resultsErr) return { error: `Failed to cascade timepoint age to results: ${resultsErr.message}` };
   }
 
   revalidatePath("/colony");
@@ -838,7 +906,8 @@ export async function deleteColonyTimepoint(id: string) {
     const expIds = allExps.map((e: { id: string }) => e.id);
     for (let i = 0; i < expIds.length; i += 100) {
       const batch = expIds.slice(i, i + 100);
-      await supabase.from("animal_experiments").delete().in("id", batch);
+      const { error: expDelErr } = await supabase.from("animal_experiments").delete().in("id", batch);
+      if (expDelErr) return { error: `Failed to delete cascaded experiments: ${expDelErr.message}` };
     }
 
     // Delete results in batches
@@ -846,7 +915,8 @@ export async function deleteColonyTimepoint(id: string) {
     const resultIds = allResults.map((r: { id: string }) => r.id);
     for (let i = 0; i < resultIds.length; i += 100) {
       const batch = resultIds.slice(i, i + 100);
-      await supabase.from("colony_results").delete().in("id", batch);
+      const { error: resultDelErr } = await supabase.from("colony_results").delete().in("id", batch);
+      if (resultDelErr) return { error: `Failed to delete cascaded results: ${resultDelErr.message}` };
     }
   }
 
@@ -862,11 +932,16 @@ export async function createAnimalExperiment(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  const animalId = requiredStr(formData.get("animal_id"));
+  const experimentType = requiredStr(formData.get("experiment_type"));
+  if (!animalId) return { error: "Animal is required." };
+  if (!experimentType) return { error: "Experiment type is required." };
+
   const { error } = await supabase.from("animal_experiments").insert({
     user_id: user.id,
-    animal_id: formData.get("animal_id") as string,
-    experiment_type: formData.get("experiment_type") as string,
-    timepoint_age_days: formData.get("timepoint_age_days") ? parseInt(formData.get("timepoint_age_days") as string) : null,
+    animal_id: animalId,
+    experiment_type: experimentType,
+    timepoint_age_days: toInt(formData.get("timepoint_age_days")),
     scheduled_date: (formData.get("scheduled_date") as string) || null,
     status: (formData.get("status") as string) || "scheduled",
     notes: (formData.get("notes") as string) || null,
@@ -1901,11 +1976,12 @@ export async function rescheduleTimepointExperiments(
 
   // Apply all updates
   for (const u of updates) {
-    await supabase
+    const { error: updateErr } = await supabase
       .from("animal_experiments")
       .update({ scheduled_date: u.scheduled_date, status: "scheduled" })
       .eq("id", u.id)
       .eq("user_id", user.id);
+    if (updateErr) return { error: `Failed to reschedule experiment ${u.id}: ${updateErr.message}` };
   }
 
   revalidatePath("/colony");
@@ -2020,7 +2096,7 @@ export async function rescheduleExperimentsAfterTimepointEdit(
 
   for (let i = 0; i < updates.length; i += 100) {
     for (const u of updates.slice(i, i + 100)) {
-      await supabase
+      const { error: updateErr } = await supabase
         .from("animal_experiments")
         .update({
           scheduled_date: u.scheduled_date,
@@ -2029,6 +2105,7 @@ export async function rescheduleExperimentsAfterTimepointEdit(
         })
         .eq("id", u.id)
         .eq("user_id", user.id);
+      if (updateErr) return { error: `Failed to reschedule experiment ${u.id}: ${updateErr.message}` };
     }
   }
 
@@ -2389,10 +2466,11 @@ export async function moveAnimalToBreeders(animalId: string, breederCageId?: str
     const expIds = scheduledExps.map((e: { id: string }) => e.id);
     for (let i = 0; i < expIds.length; i += 100) {
       const batch = expIds.slice(i, i + 100);
-      await supabase
+      const { error: skipErr } = await supabase
         .from("animal_experiments")
         .update({ status: "skipped", notes: "Auto-skipped: animal moved to breeders" })
         .in("id", batch);
+      if (skipErr) return { error: `Failed to auto-skip experiments: ${skipErr.message}` };
     }
   }
 
