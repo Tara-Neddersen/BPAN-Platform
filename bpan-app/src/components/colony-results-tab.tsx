@@ -875,7 +875,7 @@ export function ColonyResultsTab({
     const cohortIds = Array.from(new Set(activeAnimals.map((animal) => animal.cohort_id)));
     return cohorts
       .filter((cohort) => cohortIds.includes(cohort.id))
-      .sort((left, right) => left.name.localeCompare(right.name));
+      .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }));
   }, [activeAnimals, cohorts]);
 
   const bulkDeleteAnimalOptions = useMemo(() => {

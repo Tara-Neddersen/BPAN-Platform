@@ -381,6 +381,11 @@ export function ColonyClient({
   // Local state — updated via refetch after each action
   const [cages, setCages] = useState(initCages);
   const [cohorts, setCohorts] = useState(initCohorts);
+  // Natural/numeric ordering so "Cohort 3" sorts before "Cohort 10" (not after).
+  const sortedCohorts = useMemo(
+    () => [...cohorts].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+    [cohorts],
+  );
   const [animals, setAnimals] = useState(initAnimals);
   const [experiments, setExperiments] = useState(initExps);
   const [timepoints, setTimepoints] = useState(initTPs);
@@ -695,7 +700,7 @@ export function ColonyClient({
     return filtered.sort((a, b) => {
       const cohA = cohorts.find((c) => c.id === a.cohort_id);
       const cohB = cohorts.find((c) => c.id === b.cohort_id);
-      const cohComp = (cohA?.name || "").localeCompare(cohB?.name || "");
+      const cohComp = (cohA?.name || "").localeCompare(cohB?.name || "", undefined, { numeric: true });
       if (cohComp !== 0) return cohComp;
       const sexComp = SEX_SORT[a.sex] - SEX_SORT[b.sex];
       if (sexComp !== 0) return sexComp;
@@ -1256,7 +1261,7 @@ export function ColonyClient({
               <SelectTrigger className="w-[160px]"><SelectValue placeholder="Cohort" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Cohorts</SelectItem>
-                {cohorts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                {sortedCohorts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={filterGenotype} onValueChange={setFilterGenotype}>
@@ -1389,7 +1394,7 @@ export function ColonyClient({
             <div className="text-center py-12 text-muted-foreground">No cohorts yet.</div>
           ) : (
             <div className="space-y-2">
-              {cohorts.map((c) => {
+              {sortedCohorts.map((c) => {
                 const cage = cages.find((b) => b.id === c.breeder_cage_id);
                 const cohortAnimals = animals.filter((a) => a.cohort_id === c.id && a.status === "active");
                 const age = daysOld(c.birth_date);
@@ -2244,7 +2249,7 @@ export function ColonyClient({
                 >
                   <SelectTrigger><SelectValue placeholder="Select cohort" /></SelectTrigger>
                   <SelectContent>
-                    {cohorts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}{c.birth_date ? ` (${c.birth_date})` : ""}</SelectItem>)}
+                    {sortedCohorts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}{c.birth_date ? ` (${c.birth_date})` : ""}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -3161,7 +3166,7 @@ export function ColonyClient({
                 </div>
               </div>
               <div className="border rounded-md max-h-[240px] overflow-y-auto divide-y">
-                {cohorts.map(cohort => {
+                {sortedCohorts.map(cohort => {
                   const cohortAnimals = animals.filter(a => a.cohort_id === cohort.id && a.status === "active");
                   if (cohortAnimals.length === 0) return null;
                   const allSelected = cohortAnimals.every(a => batchSelectedAnimalIds.has(a.id));

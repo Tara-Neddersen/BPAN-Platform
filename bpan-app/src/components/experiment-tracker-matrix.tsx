@@ -152,7 +152,7 @@ export function ExperimentTrackerMatrix({
   const visibleRuns = useMemo(() => {
     return experimentRuns
       .filter((run) => run.status !== "cancelled")
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   }, [experimentRuns]);
 
   const resolvedRunId =
@@ -233,7 +233,7 @@ export function ExperimentTrackerMatrix({
     return list.sort((a, b) => {
       const cohortA = cohorts.find((c) => c.id === a.cohort_id)?.name || "";
       const cohortB = cohorts.find((c) => c.id === b.cohort_id)?.name || "";
-      if (cohortA !== cohortB) return cohortA.localeCompare(cohortB);
+      if (cohortA !== cohortB) return cohortA.localeCompare(cohortB, undefined, { numeric: true });
       return a.identifier.localeCompare(b.identifier, undefined, { numeric: true });
     });
   }, [animals, filterCohort, cohorts, selectedRun, selectedRunAssignments]);
