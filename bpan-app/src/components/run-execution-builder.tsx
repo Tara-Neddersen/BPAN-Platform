@@ -25,6 +25,7 @@ import type { ExperimentTemplateRecord } from "@/components/experiment-template-
 import {
   cloneExperimentRun,
   createExperimentRunFromTemplate,
+  deleteExperimentRun,
   generateCohortScheduleFromRun,
   resetRunToTemplateSchedule,
   saveRunAssignment,
@@ -35,6 +36,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -53,6 +62,7 @@ import {
   RefreshCcw,
   Save,
   Shuffle,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -374,8 +384,10 @@ export function RunExecutionBuilder({
     | "clone"
     | "save_notes"
     | "generate_schedule"
+    | "delete"
     | null
   >(null);
+  const [deleteDialogRunId, setDeleteDialogRunId] = useState<string | null>(null);
 
   const [createDraft, setCreateDraft] = useState({
     template_id: initialCreateSelection.templateId,
@@ -1015,6 +1027,62 @@ export function RunExecutionBuilder({
     });
   };
 
+  // Counts of what a delete will remove, computed from props already passed in.
+  // Run timepoints and colonyResults are not props, so recorded results /
+  // timepoints are warned about generically rather than counted.
+  const deleteImpactForRun = (runId: string | null) => {
+    if (!runId) {
+      return { name: "", assignments: 0, scheduleBlocks: 0 };
+    }
+    const run = visibleRuns.find((entry) => entry.id === runId);
+    return {
+      name: run?.name || "this run",
+      assignments: runAssignments.filter((item) => item.experiment_run_id === runId).length,
+      scheduleBlocks: runScheduleBlocks.filter((item) => item.experiment_run_id === runId).length,
+    };
+  };
+
+  const deleteRun = (runId: string) => {
+    if (!runId) return;
+    setPendingAction("delete");
+    startTransition(async () => {
+      try {
+        const result = await deleteExperimentRun(runId);
+        if (result?.error) {
+          throw new Error(result.error);
+        }
+        setDeleteDialogRunId(null);
+        // Drop any unsaved drafts for the deleted run.
+        setRunBlocksDraftByRunId((current) => {
+          const next = { ...current };
+          delete next[runId];
+          return next;
+        });
+        setAssignmentDraftsByRunId((current) => {
+          const next = { ...current };
+          delete next[runId];
+          return next;
+        });
+        setNotesDraftByRunId((current) => {
+          const next = { ...current };
+          delete next[runId];
+          return next;
+        });
+        setOptimisticRuns((current) => current.filter((run) => run.id !== runId));
+        if (selectedRunId === runId) {
+          const fallback = visibleRuns.find((run) => run.id !== runId);
+          setSelectedRunId(fallback?.id || "");
+        }
+        router.refresh();
+        toast.success("Run deleted.");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to delete run.");
+      } finally {
+        setPendingAction(null);
+      }
+    });
+  };
+
   const shiftAllBlocksByOffset = () => {
     const offset = Number(dayShiftOffset);
     if (!Number.isFinite(offset) || offset === 0) {
@@ -1139,8 +1207,64 @@ export function RunExecutionBuilder({
 
   const hasDraftEdits = timelineDirty || assignmentDirty;
 
+  const deleteImpact = deleteImpactForRun(deleteDialogRunId);
+
   return (
     <div className="space-y-6">
+      <Dialog
+        open={Boolean(deleteDialogRunId)}
+        onOpenChange={(open) => {
+          if (!open && pendingAction !== "delete") {
+            setDeleteDialogRunId(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Delete &ldquo;{deleteImpact.name}&rdquo;?
+            </DialogTitle>
+            <DialogDescription>
+              This permanently deletes the run and its recorded results. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="text-muted-foreground">The following will be removed for this run:</p>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>
+                <span className="font-medium text-foreground">{deleteImpact.scheduleBlocks}</span> schedule block
+                {deleteImpact.scheduleBlocks === 1 ? "" : "s"}
+              </li>
+              <li>
+                <span className="font-medium text-foreground">{deleteImpact.assignments}</span> cohort/animal assignment
+                {deleteImpact.assignments === 1 ? "" : "s"}
+              </li>
+              <li>All run timepoints and per-timepoint experiment layout</li>
+              <li>All recorded results, datasets, linked Google Sheets, and equipment bookings tied to this run</li>
+            </ul>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteDialogRunId(null)}
+              disabled={pendingAction === "delete"}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteDialogRunId && deleteRun(deleteDialogRunId)}
+              disabled={pendingAction === "delete"}
+              className="gap-2"
+            >
+              <Trash2 className="h-4 w-4" />
+              {pendingAction === "delete" ? "Deleting..." : "Delete Run Permanently"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <details className="group rounded-lg border bg-card/50">
         <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium">
           <span>Multi-Run Comparison</span>
@@ -1481,10 +1605,21 @@ export function RunExecutionBuilder({
                       </span>
                     </div>
                   </button>
-                  <div className="mt-2">
-                    <Button size="sm" variant="outline" onClick={() => cloneRun(run.id)} disabled={isPending} className="w-full gap-1">
+                  <div className="mt-2 flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => cloneRun(run.id)} disabled={isPending} className="flex-1 gap-1">
                       <Layers2 className="h-3.5 w-3.5" />
                       {pendingAction === "clone" ? "Cloning..." : "Clone Run"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setDeleteDialogRunId(run.id)}
+                      disabled={isPending}
+                      className="gap-1 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      aria-label={`Delete run ${run.name}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
                     </Button>
                   </div>
                 </div>
@@ -1542,6 +1677,16 @@ export function RunExecutionBuilder({
                 </Button>
                 <Button size="sm" variant="outline" onClick={saveRunNotes} disabled={!selectedRunId || isPending} className="w-full sm:w-auto">
                   {pendingAction === "save_notes" ? "Saving Notes..." : "Save Notes"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => selectedRunId && setDeleteDialogRunId(selectedRunId)}
+                  disabled={!selectedRunId || isPending}
+                  className="w-full gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete Run
                 </Button>
               </div>
             </div>

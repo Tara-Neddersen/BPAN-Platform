@@ -1246,6 +1246,131 @@ export async function saveRunAssignment(formData: FormData) {
   revalidatePath("/experiments");
 }
 
+export async function deleteExperimentRun(runId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error("Unauthorized");
+  }
+
+  const trimmedRunId = typeof runId === "string" ? runId.trim() : "";
+  if (!trimmedRunId) {
+    throw new Error("Run id is required.");
+  }
+
+  // Ownership check: the run must belong to the signed-in user.
+  const { data: run, error: runError } = await supabase
+    .from("experiment_runs")
+    .select("id,owner_user_id")
+    .eq("id", trimmedRunId)
+    .eq("owner_user_id", user.id)
+    .maybeSingle();
+
+  if (runError) {
+    return { error: withRunSchemaGuidance(runError.message) };
+  }
+  if (!run?.id) {
+    return { error: "Run not found or you do not have permission to delete it." };
+  }
+
+  try {
+    // 1) Run results layout chain (steps → timepoint experiments → timepoints).
+    const { data: timepoints, error: timepointsError } = await supabase
+      .from("run_timepoints")
+      .select("id")
+      .eq("experiment_run_id", trimmedRunId);
+
+    if (timepointsError) {
+      throw new Error(timepointsError.message);
+    }
+
+    const timepointIds = (timepoints || []).map((row: { id: string }) => String(row.id));
+    if (timepointIds.length > 0) {
+      const { data: timepointExperiments, error: timepointExperimentsError } = await supabase
+        .from("run_timepoint_experiments")
+        .select("id")
+        .in("run_timepoint_id", timepointIds);
+
+      if (timepointExperimentsError) {
+        throw new Error(timepointExperimentsError.message);
+      }
+
+      const timepointExperimentIds = (timepointExperiments || []).map((row: { id: string }) => String(row.id));
+      if (timepointExperimentIds.length > 0) {
+        const { error: deleteStepsError } = await supabase
+          .from("run_experiment_schedule_steps")
+          .delete()
+          .in("run_timepoint_experiment_id", timepointExperimentIds);
+
+        if (deleteStepsError) {
+          throw new Error(deleteStepsError.message);
+        }
+
+        const { error: deleteTimepointExperimentsError } = await supabase
+          .from("run_timepoint_experiments")
+          .delete()
+          .in("run_timepoint_id", timepointIds);
+
+        if (deleteTimepointExperimentsError) {
+          throw new Error(deleteTimepointExperimentsError.message);
+        }
+      }
+
+      const { error: deleteTimepointsError } = await supabase
+        .from("run_timepoints")
+        .delete()
+        .eq("experiment_run_id", trimmedRunId);
+
+      if (deleteTimepointsError) {
+        throw new Error(deleteTimepointsError.message);
+      }
+    }
+
+    // 2) Remaining direct children scoped by experiment_run_id.
+    const childTables = [
+      "run_schedule_blocks",
+      "run_assignments",
+      "colony_results",
+      "datasets",
+      "google_sheet_links",
+      "lab_equipment_bookings",
+    ];
+
+    for (const table of childTables) {
+      const { error: childError } = await supabase
+        .from(table)
+        .delete()
+        .eq("experiment_run_id", trimmedRunId);
+
+      if (childError) {
+        throw new Error(`${table}: ${childError.message}`);
+      }
+    }
+
+    // 3) Finally delete the run itself (re-checking ownership).
+    const { error: deleteRunError } = await supabase
+      .from("experiment_runs")
+      .delete()
+      .eq("id", trimmedRunId)
+      .eq("owner_user_id", user.id);
+
+    if (deleteRunError) {
+      throw new Error(deleteRunError.message);
+    }
+  } catch (error) {
+    const message = error instanceof Error && error.message ? error.message : "Failed to delete run.";
+    return { error: withRunSchemaGuidance(message) };
+  }
+
+  revalidatePath("/experiments");
+  revalidatePath("/colony");
+
+  return { success: true as const };
+}
+
 export async function generateCohortScheduleFromRun(runId: string) {
   const supabase = await createClient();
   const {
