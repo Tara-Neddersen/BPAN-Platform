@@ -246,11 +246,21 @@ export async function batchUpsertColonyResults(
       .eq("animal_id", entry.animalId);
 
     if (options?.experimentRunId && options?.runTimepointExperimentId) {
+      // Materialized run: precise link to the run timepoint/experiment row.
       existingQuery = existingQuery
         .eq("experiment_run_id", options.experimentRunId)
         .eq("run_timepoint_experiment_id", options.runTimepointExperimentId);
-    } else {
+    } else if (options?.experimentRunId) {
+      // Unmaterialized run: scope strictly to THIS run so we never match (and
+      // overwrite) another run's row or a Legacy (run_id IS NULL) row.
       existingQuery = existingQuery
+        .eq("experiment_run_id", options.experimentRunId)
+        .eq("timepoint_age_days", timepointAgeDays)
+        .eq("experiment_type", experimentType);
+    } else {
+      // Legacy (no run): only ever match other Legacy rows, never run-scoped ones.
+      existingQuery = existingQuery
+        .is("experiment_run_id", null)
         .eq("timepoint_age_days", timepointAgeDays)
         .eq("experiment_type", experimentType);
     }

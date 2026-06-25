@@ -1025,9 +1025,23 @@ export function ColonyResultsTab({
         }
       }
 
+      // Scope strictly: a run shows ONLY its own results; Legacy shows ONLY
+      // non-run (run_id IS NULL) results. Without this, an unmaterialized run
+      // matched any animal+age+experiment row and surfaced other runs'/Legacy data.
+      if (selectedRun) {
+        return colonyResults.find(
+          (r) =>
+            r.animal_id === animalId &&
+            r.experiment_run_id === selectedRun.id &&
+            r.timepoint_age_days === tp &&
+            r.experiment_type === exp
+        );
+      }
+
       return colonyResults.find(
         (r) =>
           r.animal_id === animalId &&
+          !r.experiment_run_id &&
           r.timepoint_age_days === tp &&
           r.experiment_type === exp
       );
@@ -2079,13 +2093,17 @@ export function ColonyResultsTab({
                       : Number(age);
                     if (selectedRun) {
                       const runExperimentRow = getRunExperimentRowForTab(String(age), exp);
-                      if (!runExperimentRow) return false;
-                      const existing = colonyResults.find(
-                        (result) =>
-                          result.animal_id === a.id &&
-                          result.experiment_run_id === selectedRun.id &&
-                          result.run_timepoint_experiment_id === runExperimentRow.id
-                      );
+                      // Materialized → match the precise run-timepoint row; otherwise
+                      // use the (now run-scoped) getExistingResult so the count
+                      // reflects THIS run's data and never bleeds from other runs/Legacy.
+                      const existing = runExperimentRow
+                        ? colonyResults.find(
+                            (result) =>
+                              result.animal_id === a.id &&
+                              result.experiment_run_id === selectedRun.id &&
+                              result.run_timepoint_experiment_id === runExperimentRow.id
+                          )
+                        : getExistingResult(a.id, currentTimepointAge, exp);
                       if (existing && Object.values(existing.measures as Record<string, unknown>).some((v) => v !== null && v !== "")) {
                         return true;
                       }
