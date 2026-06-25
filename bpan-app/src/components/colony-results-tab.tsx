@@ -1085,13 +1085,23 @@ export function ColonyResultsTab({
                 experiment.experiment_key === exp
             ) || null
           : null;
-      const scopedResults = selectedRun && scopedRunExperimentRow
-        ? colonyResults.filter(
-            (result) =>
-              result.experiment_run_id === selectedRun.id &&
-              result.run_timepoint_experiment_id === scopedRunExperimentRow.id
-          )
-        : colonyResults.filter((result) => result.experiment_type === exp);
+      // Scope the column-header source the same way as cell reads, so an
+      // unmaterialized run doesn't surface columns from other runs / Legacy.
+      const scopedResults = selectedRun
+        ? scopedRunExperimentRow
+          ? colonyResults.filter(
+              (result) =>
+                result.experiment_run_id === selectedRun.id &&
+                result.run_timepoint_experiment_id === scopedRunExperimentRow.id
+            )
+          : colonyResults.filter(
+              (result) =>
+                result.experiment_run_id === selectedRun.id &&
+                result.experiment_type === exp
+            )
+        : colonyResults.filter(
+            (result) => !result.experiment_run_id && result.experiment_type === exp
+          );
       const custom = customFields[exp] || [];
       const customKeys = new Set(custom.map((field) => field.key));
       const defaultKeys = new Set(defaults.map((field) => field.key));

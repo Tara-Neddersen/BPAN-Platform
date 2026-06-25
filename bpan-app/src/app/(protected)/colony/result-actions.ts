@@ -455,11 +455,21 @@ export async function deleteColonyResultMeasureColumn(
     .eq("user_id", user.id);
 
   if (options?.experimentRunId && options?.runTimepointExperimentId) {
+    // Materialized run: precise link.
     query = query
       .eq("experiment_run_id", options.experimentRunId)
       .eq("run_timepoint_experiment_id", options.runTimepointExperimentId);
-  } else {
+  } else if (options?.experimentRunId) {
+    // Unmaterialized run: scope to THIS run so we never strip column values from
+    // another run's rows or Legacy rows.
     query = query
+      .eq("experiment_run_id", options.experimentRunId)
+      .eq("timepoint_age_days", timepointAgeDays)
+      .eq("experiment_type", experimentType);
+  } else {
+    // Legacy (no run): only ever touch Legacy rows.
+    query = query
+      .is("experiment_run_id", null)
       .eq("timepoint_age_days", timepointAgeDays)
       .eq("experiment_type", experimentType);
   }
