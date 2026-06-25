@@ -1164,11 +1164,22 @@ export function RunExecutionBuilder({
   };
 
   const assignmentLabel = (runId: string) => {
-    const assignment = runAssignments.find((item) => item.experiment_run_id === runId);
-    if (!assignment) return "No assignment";
-    if (assignment.scope_type === "study") return `Study ${assignment.study_id}`;
-    if (assignment.scope_type === "cohort") return `Cohort ${assignment.cohort_id}`;
-    return `Animal ${assignment.animal_id}`;
+    const rows = runAssignments.filter((item) => item.experiment_run_id === runId);
+    if (rows.length === 0) return "No assignment";
+    const cohortName = (id: string | null | undefined) => cohorts.find((c) => c.id === id)?.name || "cohort";
+    const strainName = (id: string | null | undefined) => strains.find((s) => s.id === id)?.name || "strain";
+    const animalLabel = (id: string | null | undefined) => {
+      const a = animals.find((animal) => animal.id === id);
+      return a ? a.ear_tag || a.id : "animal";
+    };
+    const parts = rows.map((a) => {
+      if (a.scope_type === "study") return "Whole study";
+      if (a.scope_type === "strain") return `${strainName(a.strain_id)} (whole strain)`;
+      if (a.scope_type === "cohort") return cohortName(a.cohort_id);
+      if (a.scope_type === "animal") return animalLabel(a.animal_id);
+      return "—";
+    });
+    return parts.join(", ");
   };
 
   const goToCreateDatasetFromRun = () => {
