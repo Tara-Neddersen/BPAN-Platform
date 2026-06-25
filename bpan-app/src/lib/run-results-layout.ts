@@ -225,119 +225,264 @@ export async function syncRunResultsLayoutFromScheduleBlocks(supabase: SupabaseC
   const singleExperimentSnapshot =
     experiments.length === 1 && Array.isArray(run.schema_snapshot) ? run.schema_snapshot : [];
 
+  // ── ID-stable re-materialization ────────────────────────────────────────────
+  // Re-syncing a run must NOT recreate run_timepoints / run_timepoint_experiments
+  // with fresh UUIDs: colony_results links to them via ON DELETE SET NULL FKs
+  // (migration 068), so delete+recreate would NULL recorded-data links and cause
+  // duplicate inserts on the next save. Instead we upsert in place — update rows
+  // matched by their natural key, insert only genuinely-new keys, and delete only
+  // keys no longer desired (re-pointing any surviving colony_results first).
   const { data: existingTimepoints, error: existingTimepointsError } = await supabase
     .from("run_timepoints")
-    .select("id")
+    .select("id,key")
     .eq("experiment_run_id", runId);
 
   if (existingTimepointsError) {
     throw new Error(withRunSchemaGuidance(existingTimepointsError.message));
   }
 
-  const existingTimepointIds = (existingTimepoints || []).map((row: { id: string }) => String(row.id));
+  const existingTimepointRows = (existingTimepoints || []) as Array<{ id: string; key: string }>;
+  const existingTimepointIdByKey = new Map(
+    existingTimepointRows.map((row) => [String(row.key), String(row.id)]),
+  );
+  const existingTimepointKeyById = new Map(
+    existingTimepointRows.map((row) => [String(row.id), String(row.key)]),
+  );
+  const existingTimepointIds = existingTimepointRows.map((row) => String(row.id));
+
+  let existingExperimentRows: Array<{ id: string; run_timepoint_id: string; experiment_key: string }> = [];
   if (existingTimepointIds.length > 0) {
     const { data: existingExperiments, error: existingExperimentsError } = await supabase
       .from("run_timepoint_experiments")
-      .select("id")
+      .select("id,run_timepoint_id,experiment_key")
       .in("run_timepoint_id", existingTimepointIds);
 
     if (existingExperimentsError) {
       throw new Error(withRunSchemaGuidance(existingExperimentsError.message));
     }
-
-    const existingExperimentIds = (existingExperiments || []).map((row: { id: string }) => String(row.id));
-    if (existingExperimentIds.length > 0) {
-      const { error: deleteStepsError } = await supabase
-        .from("run_experiment_schedule_steps")
-        .delete()
-        .in("run_timepoint_experiment_id", existingExperimentIds);
-
-      if (deleteStepsError) {
-        throw new Error(withRunSchemaGuidance(deleteStepsError.message));
-      }
-    }
-
-    const { error: deleteExperimentsError } = await supabase
-      .from("run_timepoint_experiments")
-      .delete()
-      .in("run_timepoint_id", existingTimepointIds);
-
-    if (deleteExperimentsError) {
-      throw new Error(withRunSchemaGuidance(deleteExperimentsError.message));
-    }
-  }
-
-  const { error: deleteTimepointsError } = await supabase
-    .from("run_timepoints")
-    .delete()
-    .eq("experiment_run_id", runId);
-
-  if (deleteTimepointsError) {
-    throw new Error(withRunSchemaGuidance(deleteTimepointsError.message));
-  }
-
-  let insertedTimepoints: Array<{ id: string; key: string }> = [];
-  if (timepoints.length > 0) {
-    const { data, error } = await supabase
-      .from("run_timepoints")
-      .insert(
-        timepoints.map((timepoint, index) => ({
-          experiment_run_id: runId,
-          key: timepoint.key,
-          label: timepoint.label,
-          target_age_days: timepoint.target_age_days,
-          sort_order: index,
-          notes: null,
-        })),
-      )
-      .select("id,key");
-
-    if (error) {
-      throw new Error(withRunSchemaGuidance(error.message));
-    }
-    insertedTimepoints = (data || []) as Array<{ id: string; key: string }>;
-  }
-
-  const timepointIdByKey = new Map(insertedTimepoints.map((row) => [row.key, row.id]));
-
-  let insertedExperiments: Array<{ id: string; run_timepoint_id: string; experiment_key: string }> = [];
-  if (experiments.length > 0) {
-    const { data, error } = await supabase
-      .from("run_timepoint_experiments")
-      .insert(
-        experiments.map((experiment) => ({
-          run_timepoint_id: timepointIdByKey.get(experiment.timepointKey),
-          experiment_key: experiment.experiment_key,
-          label: experiment.label,
-          sort_order: experiment.sort_order,
-          result_schema_id:
-            (experiment.experiment_template_id && schemaByTemplateId.get(experiment.experiment_template_id)?.id) ||
-            (experiments.length === 1 ? run.result_schema_id : null),
-          schema_snapshot:
-            (experiment.experiment_template_id && schemaByTemplateId.get(experiment.experiment_template_id)?.snapshot) ||
-            (experiments.length === 1 ? singleExperimentSnapshot : []),
-          notes: null,
-        })),
-      )
-      .select("id,run_timepoint_id,experiment_key");
-
-    if (error) {
-      throw new Error(withRunSchemaGuidance(error.message));
-    }
-    insertedExperiments = (data || []) as Array<{
+    existingExperimentRows = (existingExperiments || []) as Array<{
       id: string;
       run_timepoint_id: string;
       experiment_key: string;
     }>;
   }
 
-  const timepointKeyById = new Map(insertedTimepoints.map((row) => [row.id, row.key]));
-  const experimentIdByCompositeKey = new Map(
-    insertedExperiments.map((experiment) => [
-      `${timepointKeyById.get(experiment.run_timepoint_id)}::${experiment.experiment_key}`,
-      experiment.id,
-    ]),
+  // Map existing experiments by composite (timepointKey::experimentKey) so we can
+  // match them to the desired set regardless of their stored UUID.
+  const existingExperimentIdByCompositeKey = new Map<string, string>();
+  for (const row of existingExperimentRows) {
+    const tpKey = existingTimepointKeyById.get(String(row.run_timepoint_id));
+    if (!tpKey) continue;
+    existingExperimentIdByCompositeKey.set(`${tpKey}::${row.experiment_key}`, String(row.id));
+  }
+
+  // ── run_timepoints: update matched-by-key in place, insert new, delete removed ──
+  const desiredTimepointKeys = new Set(timepoints.map((timepoint) => timepoint.key));
+  const timepointIdByKey = new Map<string, string>();
+
+  // Update rows whose key still exists in the desired set (keep their id).
+  for (let index = 0; index < timepoints.length; index += 1) {
+    const timepoint = timepoints[index];
+    const existingId = existingTimepointIdByKey.get(timepoint.key);
+    if (!existingId) continue;
+    timepointIdByKey.set(timepoint.key, existingId);
+    const { error } = await supabase
+      .from("run_timepoints")
+      .update({
+        label: timepoint.label,
+        target_age_days: timepoint.target_age_days,
+        sort_order: index,
+      })
+      .eq("id", existingId);
+    if (error) {
+      throw new Error(withRunSchemaGuidance(error.message));
+    }
+  }
+
+  // Insert genuinely-new timepoint keys.
+  const newTimepointInserts = timepoints
+    .map((timepoint, index) => ({ timepoint, index }))
+    .filter(({ timepoint }) => !existingTimepointIdByKey.has(timepoint.key))
+    .map(({ timepoint, index }) => ({
+      experiment_run_id: runId,
+      key: timepoint.key,
+      label: timepoint.label,
+      target_age_days: timepoint.target_age_days,
+      sort_order: index,
+      notes: null,
+    }));
+
+  if (newTimepointInserts.length > 0) {
+    const { data, error } = await supabase
+      .from("run_timepoints")
+      .insert(newTimepointInserts)
+      .select("id,key");
+    if (error) {
+      throw new Error(withRunSchemaGuidance(error.message));
+    }
+    for (const row of (data || []) as Array<{ id: string; key: string }>) {
+      timepointIdByKey.set(String(row.key), String(row.id));
+    }
+  }
+
+  // ── run_timepoint_experiments: update matched in place, insert new, delete removed ──
+  const desiredExperimentCompositeKeys = new Set(
+    experiments.map((experiment) => `${experiment.timepointKey}::${experiment.experiment_key}`),
   );
+  const experimentIdByCompositeKey = new Map<string, string>();
+
+  const experimentInserts: Array<Record<string, unknown>> = [];
+  for (const experiment of experiments) {
+    const compositeKey = `${experiment.timepointKey}::${experiment.experiment_key}`;
+    const runTimepointId = timepointIdByKey.get(experiment.timepointKey);
+    if (!runTimepointId) continue;
+    const resultSchemaId =
+      (experiment.experiment_template_id && schemaByTemplateId.get(experiment.experiment_template_id)?.id) ||
+      (experiments.length === 1 ? run.result_schema_id : null);
+    const schemaSnapshot =
+      (experiment.experiment_template_id && schemaByTemplateId.get(experiment.experiment_template_id)?.snapshot) ||
+      (experiments.length === 1 ? singleExperimentSnapshot : []);
+
+    const existingId = existingExperimentIdByCompositeKey.get(compositeKey);
+    if (existingId) {
+      // Update in place so colony_results links (run_timepoint_experiment_id) survive.
+      experimentIdByCompositeKey.set(compositeKey, existingId);
+      const { error } = await supabase
+        .from("run_timepoint_experiments")
+        .update({
+          run_timepoint_id: runTimepointId,
+          label: experiment.label,
+          sort_order: experiment.sort_order,
+          result_schema_id: resultSchemaId,
+          schema_snapshot: schemaSnapshot,
+        })
+        .eq("id", existingId);
+      if (error) {
+        throw new Error(withRunSchemaGuidance(error.message));
+      }
+    } else {
+      experimentInserts.push({
+        __compositeKey: compositeKey,
+        run_timepoint_id: runTimepointId,
+        experiment_key: experiment.experiment_key,
+        label: experiment.label,
+        sort_order: experiment.sort_order,
+        result_schema_id: resultSchemaId,
+        schema_snapshot: schemaSnapshot,
+        notes: null,
+      });
+    }
+  }
+
+  if (experimentInserts.length > 0) {
+    const insertPayload = experimentInserts.map(({ __compositeKey, ...rest }) => {
+      void __compositeKey;
+      return rest;
+    });
+    const { data, error } = await supabase
+      .from("run_timepoint_experiments")
+      .insert(insertPayload)
+      .select("id,run_timepoint_id,experiment_key");
+    if (error) {
+      throw new Error(withRunSchemaGuidance(error.message));
+    }
+    // Re-derive composite keys for inserted rows via their timepoint id.
+    const insertedRows = (data || []) as Array<{
+      id: string;
+      run_timepoint_id: string;
+      experiment_key: string;
+    }>;
+    const timepointKeyByIdAll = new Map<string, string>();
+    for (const [key, id] of timepointIdByKey.entries()) timepointKeyByIdAll.set(id, key);
+    for (const row of insertedRows) {
+      const tpKey = timepointKeyByIdAll.get(String(row.run_timepoint_id));
+      if (!tpKey) continue;
+      experimentIdByCompositeKey.set(`${tpKey}::${row.experiment_key}`, String(row.id));
+    }
+  }
+
+  // ── Delete genuinely-removed run_timepoint_experiments (re-point survivors first) ──
+  // A removed experiment has no surviving same-key replacement, so re-pointing only
+  // applies when a colony_results row could move to an existing survivor. We attempt
+  // the re-point defensively; otherwise the ON DELETE SET NULL FK handles cleanup for
+  // experiments truly dropped from the battery. CASCADE removes their schedule steps.
+  const experimentIdsToDelete = existingExperimentRows
+    .map((row) => {
+      const tpKey = existingTimepointKeyById.get(String(row.run_timepoint_id));
+      const compositeKey = tpKey ? `${tpKey}::${row.experiment_key}` : null;
+      return { id: String(row.id), compositeKey };
+    })
+    .filter(({ compositeKey }) => !compositeKey || !desiredExperimentCompositeKeys.has(compositeKey));
+
+  for (const { id, compositeKey } of experimentIdsToDelete) {
+    const survivorId = compositeKey ? experimentIdByCompositeKey.get(compositeKey) : undefined;
+    if (survivorId && survivorId !== id) {
+      // The (timepoint, experiment_key) still exists under a different id — move any
+      // recorded colony_results onto the survivor so links are preserved.
+      const { error: repointError } = await supabase
+        .from("colony_results")
+        .update({ run_timepoint_experiment_id: survivorId })
+        .eq("run_timepoint_experiment_id", id);
+      if (repointError) {
+        throw new Error(withRunSchemaGuidance(repointError.message));
+      }
+    }
+  }
+
+  const experimentIdsToDeleteList = experimentIdsToDelete.map(({ id }) => id);
+  if (experimentIdsToDeleteList.length > 0) {
+    const { error: deleteExperimentsError } = await supabase
+      .from("run_timepoint_experiments")
+      .delete()
+      .in("id", experimentIdsToDeleteList);
+    if (deleteExperimentsError) {
+      throw new Error(withRunSchemaGuidance(deleteExperimentsError.message));
+    }
+  }
+
+  // ── Delete genuinely-removed run_timepoints (re-point survivors first) ──
+  const timepointIdsToDelete = existingTimepointRows
+    .map((row) => ({ id: String(row.id), key: String(row.key) }))
+    .filter(({ key }) => !desiredTimepointKeys.has(key));
+
+  for (const { id, key } of timepointIdsToDelete) {
+    const survivorId = timepointIdByKey.get(key);
+    if (survivorId && survivorId !== id) {
+      const { error: repointTimepointError } = await supabase
+        .from("colony_results")
+        .update({ run_timepoint_id: survivorId })
+        .eq("run_timepoint_id", id);
+      if (repointTimepointError) {
+        throw new Error(withRunSchemaGuidance(repointTimepointError.message));
+      }
+    }
+  }
+
+  const timepointIdsToDeleteList = timepointIdsToDelete.map(({ id }) => id);
+  if (timepointIdsToDeleteList.length > 0) {
+    const { error: deleteTimepointsError } = await supabase
+      .from("run_timepoints")
+      .delete()
+      .in("id", timepointIdsToDeleteList);
+    if (deleteTimepointsError) {
+      throw new Error(withRunSchemaGuidance(deleteTimepointsError.message));
+    }
+  }
+
+  // ── run_experiment_schedule_steps: rebuild for surviving experiments ──
+  // Steps carry no colony data, so a delete+reinsert here is safe. We scope the
+  // delete to the surviving experiment ids (steps for deleted experiments were
+  // already removed via CASCADE), then re-insert from the current schedule blocks.
+  const survivingExperimentIds = Array.from(new Set(experimentIdByCompositeKey.values()));
+  if (survivingExperimentIds.length > 0) {
+    const { error: deleteStepsError } = await supabase
+      .from("run_experiment_schedule_steps")
+      .delete()
+      .in("run_timepoint_experiment_id", survivingExperimentIds);
+    if (deleteStepsError) {
+      throw new Error(withRunSchemaGuidance(deleteStepsError.message));
+    }
+  }
 
   const scheduleSteps = resultBlocks
     .map((block) => ({
