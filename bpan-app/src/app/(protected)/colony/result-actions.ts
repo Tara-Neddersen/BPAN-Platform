@@ -529,11 +529,21 @@ export async function bulkDeleteColonyResults(args: {
     .eq("user_id", user.id);
 
   if (args.options?.experimentRunId && args.options?.runTimepointExperimentId) {
+    // Materialized run: precise link.
     query = query
       .eq("experiment_run_id", args.options.experimentRunId)
       .eq("run_timepoint_experiment_id", args.options.runTimepointExperimentId);
-  } else {
+  } else if (args.options?.experimentRunId) {
+    // Unmaterialized run: scope to THIS run so a bulk-clear can't delete another
+    // run's rows or Legacy rows for the same animal/age/experiment.
     query = query
+      .eq("experiment_run_id", args.options.experimentRunId)
+      .eq("timepoint_age_days", args.timepointAgeDays)
+      .eq("experiment_type", args.experimentType);
+  } else {
+    // Legacy (no run): only ever delete Legacy rows.
+    query = query
+      .is("experiment_run_id", null)
       .eq("timepoint_age_days", args.timepointAgeDays)
       .eq("experiment_type", args.experimentType);
   }
