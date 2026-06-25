@@ -29,6 +29,7 @@ import { MiniEarTag } from "@/components/ear-tag-selector";
 import { BehaviorImportDialog } from "@/components/behavior-import-dialog";
 import { exportColonyResultsMigrationWorkbook, exportColonyResultsWorkbook } from "@/lib/results-export";
 import { applyDerivedMeasures, applyAverageColumns, getAverageColumnKeys } from "@/lib/derived-measures";
+import { deriveRunBlockExperimentKey, deriveRunWindowAge } from "@/lib/run-timepoint-derivation";
 
 // ─── Default experiment measures per type ─────────────────────────────
 
@@ -707,8 +708,9 @@ export function ColonyResultsTab({
       // the experiment identity — no "recognized type" gatekeeping and no
       // title-based merging (e.g. "Room Habituation" stays separate from
       // "Rotarod Hab", and "DeepLabCut" / "RR S" are no longer dropped).
+      // Shared with the import destination builder so the two can't drift.
       const metadataType = getRunMetadataString(metadata, "experimentType");
-      const experimentType = metadataType || (block.title || "").trim();
+      const experimentType = deriveRunBlockExperimentKey(metadataType, block.title);
 
       // Only skip blocks with no name at all, or explicit non-recording
       // scheduling steps (handling/acclimation/etc.) identified by their type.
@@ -729,13 +731,9 @@ export function ColonyResultsTab({
             // Ranges like "30-60" aren't a plain number; use the leading value
             // (30) as the representative age so each window gets a DISTINCT age.
             // Without this every named window collapsed to age 0 and their
-            // results collided / the chips sorted wrong.
-            const leadingAge = Number.parseInt(windowName, 10);
-            const resolvedAge = Number.isFinite(numericAge)
-              ? numericAge
-              : Number.isFinite(leadingAge)
-                ? leadingAge
-                : (targetAgeDays ?? 0);
+            // results collided / the chips sorted wrong. Derivation is shared
+            // with the import destination builder so the two can't drift.
+            const resolvedAge = deriveRunWindowAge(windowName, targetAgeDays);
             return {
               key: windowName,
               age: resolvedAge,

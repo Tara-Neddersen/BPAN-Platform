@@ -316,11 +316,25 @@ export async function syncImportedDatasetToRunCapture(payload: {
       .eq("experiment_run_id", payload.experiment_run_id),
   ]);
 
-  const primaryAssignment = (assignmentRows || [])[0] as {
+  // Mirror the recording grid's activeAnimals scope (colony-results-tab.tsx):
+  // an animal is in scope if it matches ANY run assignment row across ALL four
+  // scope types (animal->id, cohort->cohort_id, strain->cohort.strain_id,
+  // study->all). With no assignments, include all active animals so an
+  // unassigned run isn't empty. Previously only the FIRST assignment row was
+  // honored and strain scope was ignored, so multi-cohort / strain runs imported
+  // rows for only the first cohort.
+  const assignments = (assignmentRows || []) as Array<{
     scope_type?: string | null;
     cohort_id?: string | null;
+    strain_id?: string | null;
     animal_id?: string | null;
-  } | undefined;
+  }>;
+
+  const cohortStrainById = new Map(
+    ((cohortRows || []) as Array<{ id: string; strain_id?: string | null }>).map(
+      (cohort) => [cohort.id, cohort.strain_id ?? null] as const
+    )
+  );
 
   const assignedAnimals = ((animalRows || []) as Array<{
     id: string;
@@ -330,14 +344,23 @@ export async function syncImportedDatasetToRunCapture(payload: {
     genotype: string | null;
     ear_tag: string | null;
   }>).filter((animal) => {
-    if (!primaryAssignment) return true;
-    if (primaryAssignment.scope_type === "animal" && primaryAssignment.animal_id) {
-      return animal.id === primaryAssignment.animal_id;
-    }
-    if (primaryAssignment.scope_type === "cohort" && primaryAssignment.cohort_id) {
-      return animal.cohort_id === primaryAssignment.cohort_id;
-    }
-    return true;
+    if (assignments.length === 0) return true;
+    return assignments.some((assignment) => {
+      if (assignment.scope_type === "study") return true;
+      if (assignment.scope_type === "cohort" && assignment.cohort_id) {
+        return animal.cohort_id === assignment.cohort_id;
+      }
+      if (assignment.scope_type === "strain" && assignment.strain_id) {
+        const animalStrainId = animal.cohort_id
+          ? cohortStrainById.get(animal.cohort_id) ?? null
+          : null;
+        return animalStrainId === assignment.strain_id;
+      }
+      if (assignment.scope_type === "animal" && assignment.animal_id) {
+        return animal.id === assignment.animal_id;
+      }
+      return false;
+    });
   });
 
   const cohortsById = new Map(

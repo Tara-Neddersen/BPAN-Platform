@@ -77,6 +77,7 @@ import {
 } from "@/lib/results-run-adapters";
 import { maybeDecodeRtf, parseMetricReportPreview } from "@/lib/results-import";
 import { compareCohortName } from "@/lib/cohort-sort";
+import { deriveRunBlockExperimentKey, deriveRunWindowAge } from "@/lib/run-timepoint-derivation";
 
 // Dynamically import Plotly (it's heavy and client-only)
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -364,10 +365,16 @@ function getRunBlockMetadata(block: RunScheduleBlock) {
       ? (block.metadata as Record<string, unknown>)
       : {};
 
-  const experimentTypeRaw =
+  // Mirror the recording grid (colony-results-tab.tsx fallbackRunTimepoints):
+  // an untyped block keeps its OWN title as the experiment key (no recognized-
+  // type gatekeeping), so title-keyed experiments like DeepLabCut / RR S are
+  // valid import destinations instead of being silently dropped. Shared via
+  // deriveRunBlockExperimentKey so the two paths can't drift.
+  const metadataExperimentType =
     typeof metadata.experimentType === "string" && metadata.experimentType.trim()
       ? metadata.experimentType.trim()
       : null;
+  const experimentTypeRaw = deriveRunBlockExperimentKey(metadataExperimentType, block.title) || null;
   const timepointWindowName =
     typeof metadata.timepointWindowName === "string" && metadata.timepointWindowName.trim()
       ? metadata.timepointWindowName.trim()
@@ -382,8 +389,13 @@ function getRunBlockMetadata(block: RunScheduleBlock) {
           : typeof metadata.minAgeDays === "string" && metadata.minAgeDays.trim()
             ? Number(metadata.minAgeDays)
             : null;
+  const targetAgeDays = Number.isFinite(targetAgeDaysRaw) ? Number(targetAgeDaysRaw) : null;
 
-  const timepointAgeDays = Number.isFinite(targetAgeDaysRaw) ? Number(targetAgeDaysRaw) : 0;
+  // Derive the representative age the SAME way the grid does: Number(windowName)
+  // if finite, else the leading integer of a range ("120-150" -> 120), else
+  // targetAgeDays ?? 0. This makes the destination's timepoint_age_days MATCH the
+  // grid's timepoint age (30/120/210, not 0) so imported rows render in the grid.
+  const timepointAgeDays = deriveRunWindowAge(timepointWindowName, targetAgeDays);
 
   return {
     experimentType: experimentTypeRaw,
