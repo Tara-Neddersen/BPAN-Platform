@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ExperimentType, PlatformSlotKind } from "@/types";
+import { deriveRunBlockExperimentKey, deriveRunWindowAge } from "@/lib/run-timepoint-derivation";
 
 const RESULT_EXPERIMENT_LABELS: Partial<Record<ExperimentType, string>> = {
   y_maze: "Y-Maze",
@@ -17,7 +18,7 @@ const RESULT_EXPERIMENT_LABELS: Partial<Record<ExperimentType, string>> = {
   eeg_recording: "EEG Recording",
 };
 
-const SCHEDULE_ONLY_EXPERIMENTS = new Set<ExperimentType>([
+const SCHEDULE_ONLY_EXPERIMENTS = new Set<string>([
   "handling",
   "data_collection",
   "core_acclimation",
@@ -38,30 +39,6 @@ function getMetadataNumber(metadata: Record<string, unknown>, key: string) {
   if (!raw) return null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function normalizeExperimentType(value: string) {
-  const normalized = value.trim();
-  const valid = [
-    "y_maze",
-    "ldb",
-    "marble",
-    "nesting",
-    "social_interaction",
-    "catwalk",
-    "rotarod_hab",
-    "rotarod_test1",
-    "rotarod_test2",
-    "rotarod",
-    "stamina",
-    "blood_draw",
-    "data_collection",
-    "core_acclimation",
-    "eeg_implant",
-    "eeg_recording",
-    "handling",
-  ];
-  return valid.includes(normalized) ? (normalized as ExperimentType) : null;
 }
 
 async function loadSchemaByTemplateId(supabase: SupabaseClient, templateIds: string[]) {
@@ -158,10 +135,15 @@ export async function syncRunResultsLayoutFromScheduleBlocks(supabase: SupabaseC
       block.metadata && typeof block.metadata === "object" && !Array.isArray(block.metadata)
         ? (block.metadata as Record<string, unknown>)
         : {};
-    const experimentKey = normalizeExperimentType(getMetadataString(metadata, "experimentType"));
+    const experimentKey = deriveRunBlockExperimentKey(
+      getMetadataString(metadata, "experimentType"),
+      typeof block.title === "string" ? block.title : "",
+    );
     const timepointKey = getMetadataString(metadata, "timepointWindowName");
-    const age =
-      Number(timepointKey || getMetadataNumber(metadata, "targetAgeDays") || getMetadataNumber(metadata, "minAgeDays") || 0);
+    const age = deriveRunWindowAge(
+      timepointKey,
+      getMetadataNumber(metadata, "targetAgeDays") ?? getMetadataNumber(metadata, "minAgeDays") ?? null,
+    );
 
     if (!experimentKey || !timepointKey || !Number.isFinite(age) || age <= 0) return [];
     if (SCHEDULE_ONLY_EXPERIMENTS.has(experimentKey)) return [];
@@ -203,7 +185,7 @@ export async function syncRunResultsLayoutFromScheduleBlocks(supabase: SupabaseC
     string,
     {
       timepointKey: string;
-      experiment_key: ExperimentType;
+      experiment_key: string;
       experiment_template_id: string | null;
       label: string;
       sort_order: number;
@@ -221,7 +203,10 @@ export async function syncRunResultsLayoutFromScheduleBlocks(supabase: SupabaseC
         timepointKey: timepoint.key,
         experiment_key: block.experimentKey,
         experiment_template_id: block.experimentTemplateId,
-        label: RESULT_EXPERIMENT_LABELS[block.experimentKey] || block.title || block.experimentKey,
+        label:
+          RESULT_EXPERIMENT_LABELS[block.experimentKey as ExperimentType] ||
+          block.title ||
+          block.experimentKey,
         sort_order: experimentSort,
       });
       experimentSort += 1;
@@ -315,7 +300,7 @@ export async function syncRunResultsLayoutFromScheduleBlocks(supabase: SupabaseC
 
   const timepointIdByKey = new Map(insertedTimepoints.map((row) => [row.key, row.id]));
 
-  let insertedExperiments: Array<{ id: string; run_timepoint_id: string; experiment_key: ExperimentType }> = [];
+  let insertedExperiments: Array<{ id: string; run_timepoint_id: string; experiment_key: string }> = [];
   if (experiments.length > 0) {
     const { data, error } = await supabase
       .from("run_timepoint_experiments")
@@ -342,7 +327,7 @@ export async function syncRunResultsLayoutFromScheduleBlocks(supabase: SupabaseC
     insertedExperiments = (data || []) as Array<{
       id: string;
       run_timepoint_id: string;
-      experiment_key: ExperimentType;
+      experiment_key: string;
     }>;
   }
 
