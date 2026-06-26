@@ -30,6 +30,7 @@ import {
   resetRunToTemplateSchedule,
   saveRunAssignment,
   saveRunScheduleBlocks,
+  updateExperimentRunName,
   updateExperimentRunNotes,
   updateExperimentRunStatus,
 } from "@/app/(protected)/experiments/run-actions";
@@ -57,6 +58,7 @@ import {
   ExternalLink,
   GripVertical,
   Layers2,
+  Pencil,
   Play,
   Plus,
   RefreshCcw,
@@ -385,9 +387,11 @@ export function RunExecutionBuilder({
     | "save_notes"
     | "generate_schedule"
     | "delete"
+    | "rename"
     | null
   >(null);
   const [deleteDialogRunId, setDeleteDialogRunId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState<string | null>(null);
 
   const [createDraft, setCreateDraft] = useState({
     template_id: initialCreateSelection.templateId,
@@ -985,6 +989,28 @@ export function RunExecutionBuilder({
         toast.success("Run assignment saved.");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to save run assignment.");
+      } finally {
+        setPendingAction(null);
+      }
+    });
+  };
+
+  const renameRun = () => {
+    if (!selectedRunId || renameDraft === null) return;
+    const next = renameDraft.trim();
+    if (!next) {
+      toast.error("Run name can't be empty.");
+      return;
+    }
+    setPendingAction("rename");
+    startTransition(async () => {
+      try {
+        await updateExperimentRunName(selectedRunId, next);
+        setRenameDraft(null);
+        router.refresh();
+        toast.success("Run renamed.");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to rename run.");
       } finally {
         setPendingAction(null);
       }
@@ -1645,9 +1671,44 @@ export function RunExecutionBuilder({
             <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">{dataWarning}</p>
           ) : null}
               <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-              <CardTitle className="text-base">
-                {selectedRun ? `${selectedRun.name} Execution Timeline` : "Select a run"}
-              </CardTitle>
+              {selectedRun ? (
+                renameDraft !== null ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      value={renameDraft}
+                      onChange={(event) => setRenameDraft(event.target.value)}
+                      autoFocus
+                      className="h-8 w-64"
+                      placeholder="Run name"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") renameRun();
+                        if (event.key === "Escape") setRenameDraft(null);
+                      }}
+                    />
+                    <Button size="sm" onClick={renameRun} disabled={isPending}>
+                      {pendingAction === "rename" ? "Saving..." : "Save name"}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setRenameDraft(null)} disabled={isPending}>
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <CardTitle className="text-base flex items-center gap-2">
+                    {selectedRun.name} Execution Timeline
+                    <button
+                      type="button"
+                      onClick={() => setRenameDraft(selectedRun.name)}
+                      className="text-muted-foreground transition-colors hover:text-foreground"
+                      title="Rename run"
+                      aria-label="Rename run"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </CardTitle>
+                )
+              ) : (
+                <CardTitle className="text-base">Select a run</CardTitle>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   size="sm"

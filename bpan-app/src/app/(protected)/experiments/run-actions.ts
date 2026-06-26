@@ -1199,6 +1199,34 @@ export async function updateExperimentRunNotes(runId: string, notes: string) {
   revalidatePath("/experiments");
 }
 
+export async function updateExperimentRunName(runId: string, name: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error("Unauthorized");
+  }
+
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error("Run name is required.");
+  }
+
+  const { error } = await supabase
+    .from("experiment_runs")
+    .update({ name: trimmed })
+    .eq("id", runId)
+    .eq("owner_user_id", user.id);
+
+  if (error) {
+    throw new Error(withRunSchemaGuidance(error.message));
+  }
+
+  revalidatePath("/experiments");
+}
+
 export async function saveRunAssignment(formData: FormData) {
   const supabase = await createClient();
   const {
