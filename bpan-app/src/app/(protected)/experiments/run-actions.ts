@@ -1073,17 +1073,21 @@ export async function cloneExperimentRun(runId: string) {
     throw new Error(withRunSchemaGuidance(sourceRunError?.message || "Source run not found."));
   }
 
-  const {
-    data: newRun,
-    error: newRunError,
-  } = await supabase
+  // Mirror createExperimentRunFromTemplate exactly: use an explicit id and do
+  // NOT chain .select(). A trailing .select() forces a post-insert read through
+  // the row-level SELECT policy on the brand-new run; if that returns no row the
+  // whole insert rolls back — which is what was crashing clone. A clone is
+  // always the cloner's own private run, so force owner/visibility too.
+  const newRunId = crypto.randomUUID();
+  const { error: newRunError } = await supabase
     .from("experiment_runs")
     .insert({
+      id: newRunId,
       template_id: sourceRun.template_id,
       legacy_experiment_id: sourceRun.legacy_experiment_id,
-      owner_user_id: sourceRun.owner_user_id,
-      owner_lab_id: sourceRun.owner_lab_id,
-      visibility: sourceRun.visibility,
+      owner_user_id: user.id,
+      owner_lab_id: null,
+      visibility: "private",
       name: `${sourceRun.name} (Clone)`,
       description: sourceRun.description,
       status: "draft",
@@ -1094,15 +1098,11 @@ export async function cloneExperimentRun(runId: string) {
       start_anchor_date: sourceRun.start_anchor_date,
       notes: sourceRun.notes,
       created_by: user.id,
-    })
-    .select("id")
-    .single();
+    });
 
-  if (newRunError || !newRun?.id) {
-    throw new Error(withRunSchemaGuidance(newRunError?.message || "Failed to clone run."));
+  if (newRunError) {
+    throw new Error(withRunSchemaGuidance(newRunError.message || "Failed to clone run."));
   }
-
-  const newRunId = String(newRun.id);
 
   const [{ data: sourceBlocks, error: sourceBlocksError }, { data: sourceAssignments, error: sourceAssignmentsError }] =
     await Promise.all([
