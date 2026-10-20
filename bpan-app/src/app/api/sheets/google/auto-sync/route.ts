@@ -17,6 +17,7 @@ import {
   type GoogleSheetImportConfig,
 } from "@/lib/google-sheet-import-config";
 import { pullManagedGoogleSheetMirrorLinkWithClient } from "@/lib/google-sheet-mirror";
+import { isWideMasterSheet, syncWideMasterSheetIntoColony } from "@/lib/master-sheet-sync";
 
 type TokenRow = {
   user_id: string;
@@ -70,7 +71,7 @@ async function updateLinkStatus(
     ? {
         last_synced_at: new Date().toISOString(),
         last_sync_status: "ok",
-        last_sync_error: null,
+        last_sync_error: status.error || null,
         last_row_count: status.rowCount ?? 0,
       }
     : {
@@ -285,6 +286,19 @@ async function syncOneLink(
   const preview = parseRowsToTabularPreview(fetched.rows);
   const config = sanitizedConfig;
   const filtered = applyImportConfig(preview.columns, preview.data, config);
+
+  // One-row-per-mouse "master sheet" layout (columns like "RR1 (s) T1 - P120",
+  // "P30 - %SA - YMaze"): unpivot into colony results.
+  if (link.target !== "dataset" && isWideMasterSheet(filtered.columns)) {
+    const wide = await syncWideMasterSheetIntoColony(admin, token.user_id, link.id, filtered.columns, filtered.data);
+    await updateLinkStatus(admin, token.user_id, link.id, {
+      ok: true,
+      rowCount: wide.rowCount,
+      error: wide.unmatched.length ? `Unmatched animals: ${wide.unmatched.slice(0, 20).join(", ")}` : undefined,
+    });
+    return { target: "colony_results", rowCount: wide.rowCount, skipped: wide.skipped };
+  }
+
   const target = detectImportTarget(filtered.columns, link.target);
 
   if (target === "colony_results") {
