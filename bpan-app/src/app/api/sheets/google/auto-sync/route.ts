@@ -290,11 +290,19 @@ async function syncOneLink(
   // One-row-per-mouse "master sheet" layout (columns like "RR1 (s) T1 - P120",
   // "P30 - %SA - YMaze"): unpivot into colony results.
   if (link.target !== "dataset" && isWideMasterSheet(filtered.columns)) {
-    const wide = await syncWideMasterSheetIntoColony(admin, token.user_id, link.id, filtered.columns, filtered.data);
+    const wide = await syncWideMasterSheetIntoColony(admin, token.user_id, link.id, filtered.columns, filtered.data, {
+      experimentRunId: link.experiment_run_id || null,
+    });
     await updateLinkStatus(admin, token.user_id, link.id, {
       ok: true,
       rowCount: wide.rowCount,
-      error: wide.unmatched.length ? `Unmatched animals: ${wide.unmatched.slice(0, 20).join(", ")}` : undefined,
+      error:
+        [
+          wide.unmatched.length ? `Unmatched animals: ${wide.unmatched.slice(0, 20).join(", ")}` : "",
+          wide.legacyFallback.length ? `Not in this run (saved to Legacy): ${wide.legacyFallback.join(", ")}` : "",
+        ]
+          .filter(Boolean)
+          .join(" | ") || undefined,
     });
     return { target: "colony_results", rowCount: wide.rowCount, skipped: wide.skipped };
   }
