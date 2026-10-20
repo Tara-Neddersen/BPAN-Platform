@@ -17,6 +17,7 @@ import {
   type GoogleSheetImportConfig,
 } from "@/lib/google-sheet-import-config";
 import { syncManagedGoogleSheetMirrorLinkForUser } from "@/lib/google-sheet-mirror";
+import { isWideMasterSheet, syncWideMasterSheetIntoColony } from "@/lib/master-sheet-sync";
 
 type LinkRow = {
   id: string;
@@ -293,6 +294,37 @@ async function syncOneLink(
   const preview = parseRowsToTabularPreview(fetched.rows);
   const config = sanitizedConfig;
   const filtered = applyImportConfig(preview.columns, preview.data, config);
+
+  // One-row-per-mouse "master sheet" layout (columns like "RR1 (s) T1 - P120",
+  // "P30 - %SA - YMaze"): unpivot into colony results.
+  if (link.target !== "dataset" && isWideMasterSheet(filtered.columns)) {
+    const wide = await syncWideMasterSheetIntoColony(supabase, userId, link.id, filtered.columns, filtered.data, {
+      experimentRunId: link.experiment_run_id || null,
+    });
+    await updateLinkStatus(supabase, userId, link.id, {
+      ok: true,
+      rowCount: wide.rowCount,
+      error:
+        [
+          wide.unmatched.length ? `Unmatched animals: ${wide.unmatched.slice(0, 20).join(", ")}` : "",
+          wide.legacyFallback.length ? `Not in this run (saved to Legacy): ${wide.legacyFallback.join(", ")}` : "",
+        ]
+          .filter(Boolean)
+          .join(" | ") || undefined,
+    });
+    return {
+      linkId: link.id,
+      linkName: link.name,
+      target: "colony_results",
+      rowCount: wide.rowCount,
+      skipped: wide.skipped,
+      unmatched: wide.unmatched,
+      ignoredHeaders: wide.ignoredHeaders,
+      legacyFallback: wide.legacyFallback,
+      syncedMode: "master_sheet",
+    };
+  }
+
   const target = detectImportTarget(filtered.columns, link.target);
 
   if (target === "colony_results") {
