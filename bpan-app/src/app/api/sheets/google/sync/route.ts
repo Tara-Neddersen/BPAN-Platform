@@ -74,7 +74,7 @@ async function updateLinkStatus(
     ? {
         last_synced_at: new Date().toISOString(),
         last_sync_status: "ok",
-        last_sync_error: null,
+        last_sync_error: status.error || null,
         last_row_count: status.rowCount ?? 0,
       }
     : {
