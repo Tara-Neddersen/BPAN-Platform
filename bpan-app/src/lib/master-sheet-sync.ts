@@ -281,6 +281,94 @@ export async function resolveMasterSheetAnimals(client: SupabaseClient, userId: 
   return { resolved, unmatched };
 }
 
+// ─── Experiment-run targeting ───────────────────────────────────────────
+
+const EXPERIMENT_LABEL_ALIASES: Record<string, string> = {
+  ymaze: "y_maze",
+  lightdarkbox: "ldb",
+  ldb: "ldb",
+  socialinteraction: "social_interaction",
+  threechamber: "social_interaction",
+  openfield: "open_field",
+  rotarodtest1: "rotarod_test1",
+  rotarodtest2: "rotarod_test2",
+  rotarod1: "rotarod_test1",
+  rotarod2: "rotarod_test2",
+  rr1: "rotarod_test1",
+  rr2: "rotarod_test2",
+  rrs: "stamina",
+  rrstamina: "stamina",
+  stamina: "stamina",
+  staminatest: "stamina",
+  catwalk: "catwalk",
+  bodyweight: "body_weight",
+  weight: "body_weight",
+};
+
+function canonicalExperiment(key: string, label?: string | null) {
+  const k = key.trim().toLowerCase();
+  const direct = EXPERIMENT_LABEL_ALIASES[k.replace(/[^a-z0-9]/g, "")];
+  if (direct) return direct;
+  if (/^[a-z0-9_]+$/.test(k) && k.includes("_")) return k;
+  if (label) {
+    const l = EXPERIMENT_LABEL_ALIASES[label.trim().toLowerCase().replace(/[^a-z0-9]/g, "")];
+    if (l) return l;
+  }
+  return k;
+}
+
+export type RunSlot = {
+  runTimepointId: string;
+  runTimepointExperimentId: string;
+  targetAgeDays: number;
+  experimentKey: string;
+};
+
+/** (timepoint age, canonical experiment) -> the run's materialized slot. */
+export async function loadRunSlots(client: SupabaseClient, userId: string, runId: string) {
+  const { data: run, error: runError } = await client
+    .from("experiment_runs")
+    .select("id")
+    .eq("id", runId)
+    .eq("owner_user_id", userId)
+    .maybeSingle();
+  if (runError) throw new Error(runError.message);
+  if (!run) throw new Error("Linked experiment run not found.");
+
+  const { data: timepoints, error: tpError } = await client
+    .from("run_timepoints")
+    .select("id,key,target_age_days")
+    .eq("experiment_run_id", runId);
+  if (tpError) throw new Error(tpError.message);
+  const tpRows = (timepoints || []) as Array<{ id: string; key: string; target_age_days: number }>;
+  const tpIds = tpRows.map((t) => t.id);
+
+  const { data: experiments, error: expError } = tpIds.length
+    ? await client
+        .from("run_timepoint_experiments")
+        .select("id,run_timepoint_id,experiment_key,label")
+        .in("run_timepoint_id", tpIds)
+    : { data: [], error: null };
+  if (expError) throw new Error(expError.message);
+
+  const slots = new Map<string, RunSlot>();
+  for (const exp of (experiments || []) as Array<{ id: string; run_timepoint_id: string; experiment_key: string; label: string | null }>) {
+    const tp = tpRows.find((t) => t.id === exp.run_timepoint_id);
+    if (!tp) continue;
+    const age = Number(tp.target_age_days);
+    const canonical = canonicalExperiment(exp.experiment_key, exp.label);
+    const slot: RunSlot = {
+      runTimepointId: tp.id,
+      runTimepointExperimentId: exp.id,
+      targetAgeDays: age,
+      experimentKey: exp.experiment_key,
+    };
+    slots.set(`${age}|${canonical}`, slot);
+    slots.set(`${age}|${exp.experiment_key}`, slot);
+  }
+  return slots;
+}
+
 // ─── Sync ───────────────────────────────────────────────────────────────
 
 async function ensureTimepoints(client: SupabaseClient, userId: string, timepoints: number[]) {
@@ -310,9 +398,28 @@ export async function syncWideMasterSheetIntoColony(
   userId: string,
   linkId: string,
   columns: DatasetColumn[],
-  data: Record<string, unknown>[]
+  data: Record<string, unknown>[],
+  options?: { experimentRunId?: string | null }
 ) {
   const { rows, ignoredHeaders } = unpivotWideMasterSheet(columns, data);
+  const runId = options?.experimentRunId || null;
+  const runSlots = runId ? await loadRunSlots(client, userId, runId) : null;
+
+  // Rows already recorded against the run, keyed by animal + run slot.
+  const runExistingId = new Map<string, string>();
+  if (runId) {
+    const { data: runRows, error: runRowsError } = await client
+      .from("colony_results")
+      .select("id,animal_id,run_timepoint_experiment_id")
+      .eq("user_id", userId)
+      .eq("experiment_run_id", runId)
+      .limit(20000);
+    if (runRowsError) throw new Error(runRowsError.message);
+    for (const r of (runRows || []) as Array<{ id: string; animal_id: string; run_timepoint_experiment_id: string | null }>) {
+      if (r.run_timepoint_experiment_id) runExistingId.set(`${r.animal_id}|${r.run_timepoint_experiment_id}`, r.id);
+    }
+  }
+  const legacyFallback = new Set<string>();
   const refs = Array.from(new Map(rows.map((r) => [`${r.strain}|${r.animalRaw}`, { strain: r.strain, animalRaw: r.animalRaw }])).values());
   const { resolved, unmatched } = await resolveMasterSheetAnimals(client, userId, refs);
 
@@ -345,17 +452,36 @@ export async function syncWideMasterSheetIntoColony(
       skipped++;
       continue;
     }
-    const key = `${animalId}|${row.timepoint}|${row.experiment}`;
-    const payload = {
-      user_id: userId,
-      animal_id: animalId,
-      timepoint_age_days: row.timepoint,
-      experiment_type: row.experiment,
-      measures: row.measures,
-      source_sheet_link_id: linkId,
-      recorded_at: recordedAt,
-    };
-    const id = existingId.get(key);
+    const slot = runSlots ? runSlots.get(`${row.timepoint}|${row.experiment}`) || null : null;
+    if (runSlots && !slot) legacyFallback.add(`${row.experiment} @ P${row.timepoint}`);
+
+    const payload = slot
+      ? {
+          user_id: userId,
+          animal_id: animalId,
+          experiment_run_id: runId,
+          run_timepoint_id: slot.runTimepointId,
+          run_timepoint_experiment_id: slot.runTimepointExperimentId,
+          timepoint_age_days: slot.targetAgeDays,
+          experiment_type: slot.experimentKey,
+          measures: row.measures,
+          source_sheet_link_id: linkId,
+          recorded_at: recordedAt,
+        }
+      : {
+          user_id: userId,
+          animal_id: animalId,
+          timepoint_age_days: row.timepoint,
+          experiment_type: row.experiment,
+          measures: row.measures,
+          source_sheet_link_id: linkId,
+          recorded_at: recordedAt,
+        };
+    const key = slot
+      ? `${animalId}|${slot.runTimepointExperimentId}`
+      : `${animalId}|${row.timepoint}|${row.experiment}`;
+    const index = slot ? runExistingId : existingId;
+    const id = index.get(key);
     if (id) {
       const { error } = await client.from("colony_results").update(payload).eq("id", id).eq("user_id", userId);
       if (error) throw new Error(error.message);
@@ -364,7 +490,7 @@ export async function syncWideMasterSheetIntoColony(
       const newId = crypto.randomUUID();
       const { error } = await client.from("colony_results").insert({ id: newId, ...payload });
       if (error) throw new Error(error.message);
-      existingId.set(key, newId);
+      index.set(key, newId);
     }
 
     await client
@@ -379,5 +505,5 @@ export async function syncWideMasterSheetIntoColony(
     synced++;
   }
 
-  return { rowCount: synced, skipped, unmatched, ignoredHeaders };
+  return { rowCount: synced, skipped, unmatched, ignoredHeaders, legacyFallback: Array.from(legacyFallback).sort() };
 }
