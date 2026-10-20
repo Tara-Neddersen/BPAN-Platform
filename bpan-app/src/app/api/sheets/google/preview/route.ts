@@ -6,6 +6,7 @@ import {
   parseGoogleSheetUrl,
 } from "@/lib/google-sheets";
 import { detectImportTarget, parseRowsToTabularPreview } from "@/lib/google-sheet-sync";
+import { isWideMasterSheet } from "@/lib/master-sheet-sync";
 
 async function getAccessToken() {
   const supabase = await createClient();
@@ -44,7 +45,7 @@ export async function POST(req: Request) {
     });
 
     const preview = parseRowsToTabularPreview(fetched.rows);
-    const target = detectImportTarget(preview.columns, "auto");
+    const target = isWideMasterSheet(preview.columns) ? "colony_results" : detectImportTarget(preview.columns, "auto");
 
     return NextResponse.json({
       sheetId: parsed.sheetId,
